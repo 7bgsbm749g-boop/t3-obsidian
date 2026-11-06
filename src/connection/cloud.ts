@@ -5,13 +5,13 @@ import {T3_RESPONSE_MAX_BYTES} from './t3-response-limits';
 import {Buffer} from 'buffer/';
 import {endpoint,descriptor,type PairedSession,type Fetcher} from './direct';
 import {proofKey,proof,thumbprint} from './dpop';
-import {PLUGIN_SCOPE,hasPluginPermissions} from './environment-permissions';
+import {PLUGIN_PERMISSIONS,hasPluginPermissions} from './environment-permissions';
 // Public client configuration shipped by T3 Code; these are not secrets.
 export const CLOUD={issuer:'https://clerk.t3.codes',relay:'https://relay.t3.codes',clientId:'hzxSgY2cH10sDU2r'};
 export interface CloudAccount {accessToken:string;refreshToken?:string;expiresAt:number;identity:string}
 export interface DeviceLogin {deviceCode:string;userCode:string;verificationUrl:string;expiresAt:number;interval:number;nextPollAt:number}
 export interface CloudMachine {environmentId:string;name:string;url:string}
-export class CloudError extends Error {constructor(public code:string,public status=0){super(code==='environment_note_access_required'?'This T3 connection does not permit note access. Reconnect this machine with filesystem read and write access.':code==='access_denied'?'T3 sign-in was denied.':code==='expired_token'?'T3 sign-in expired. Start again.':code==='invalid_grant'?'T3 sign-in expired or was revoked. Sign in again.':`T3 Connect request failed (${code}).`);}}
+export class CloudError extends Error {constructor(public code:string,public status=0){super(code==='environment_setup_access_required'?'This T3 connection does not permit MCP setup. Reconnect this computer with agent configuration access.':code==='environment_note_access_required'?'This T3 connection does not permit note access. Reconnect this machine with filesystem read and write access.':code==='access_denied'?'T3 sign-in was denied.':code==='expired_token'?'T3 sign-in expired. Start again.':code==='invalid_grant'?'T3 sign-in expired or was revoked. Sign in again.':`T3 Connect request failed (${code}).`);}}
 async function request(url:string,options:RequestInit={},fetcher:Fetcher=browserFetch):Promise<Record<string,unknown>>{
  const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),30000);
  try{
@@ -53,7 +53,7 @@ export async function discoverMachines(a:CloudAccount,fetcher?:Fetcher):Promise<
  const ids=new Set<string>();return result.environments.map((e:unknown)=>{if(!isRecord(e)||!isRecord(e.endpoint)||typeof e.endpoint.httpBaseUrl!=='string'||typeof e.environmentId!=='string'||!e.environmentId||ids.has(e.environmentId)||typeof e.label!=='string')throw new CloudError('invalid_environment_list');ids.add(e.environmentId);return {environmentId:e.environmentId,name:e.label,url:endpoint(e.endpoint.httpBaseUrl)};});
 }
 
-export async function connectMachine(a:CloudAccount,m:CloudMachine,keyId:string,fetcher?:Fetcher):Promise<PairedSession>{
+export async function connectMachine(a:CloudAccount,m:CloudMachine,keyId:string,fetcher?:Fetcher,permissions:readonly string[]=PLUGIN_PERMISSIONS):Promise<PairedSession>{
  const key=await proofKey(keyId);const exchange=CLOUD.relay+'/v1/client/dpop-token';
  const opts=form({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',subject_token:a.accessToken,subject_token_type:'urn:ietf:params:oauth:token-type:jwt',requested_token_type:'urn:ietf:params:oauth:token-type:access_token',resource:CLOUD.relay,scope:'environment:connect',client_id:'t3-web'});
  const t=await request(exchange,{...opts,headers:{...opts.headers,DPoP:await proof(key,'POST',exchange)}},fetcher);
@@ -62,10 +62,11 @@ export async function connectMachine(a:CloudAccount,m:CloudMachine,keyId:string,
  const connected=await request(url,{method:'POST',headers:{Authorization:'DPoP '+t.access_token,DPoP:await proof(key,'POST',url,t.access_token),'Content-Type':'application/json'},body:JSON.stringify({clientProofKeyThumbprint:await thumbprint(key)})},fetcher);
  if(!isRecord(connected.endpoint)||typeof connected.endpoint.httpBaseUrl!=='string'||connected.environmentId!==m.environmentId||endpoint(connected.endpoint.httpBaseUrl)!==m.url||typeof connected.credential!=='string')throw new CloudError('environment_changed');
  const d=await descriptor(m.url,fetcher);if(d.environmentId!==m.environmentId)throw new CloudError('environment_changed');
- const tokenUrl=m.url+'/oauth/token';const tokenOpts=form({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',subject_token:connected.credential,subject_token_type:'urn:t3:params:oauth:token-type:environment-bootstrap',requested_token_type:'urn:ietf:params:oauth:token-type:access_token',scope:PLUGIN_SCOPE,client_label:'T3 Code (Obsidian)'});
+ const tokenUrl=m.url+'/oauth/token';const tokenOpts=form({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',subject_token:connected.credential,subject_token_type:'urn:t3:params:oauth:token-type:environment-bootstrap',requested_token_type:'urn:ietf:params:oauth:token-type:access_token',scope:permissions.join(' '),client_label:'T3 Code (Obsidian)'});
  const session=await request(tokenUrl,{...tokenOpts,headers:{...tokenOpts.headers,DPoP:await proof(key,'POST',tokenUrl)}},fetcher);
  if(session.token_type!=='DPoP'||typeof session.access_token!=='string'||typeof session.expires_in!=='number'||!Number.isFinite(session.expires_in)||session.expires_in<=0)throw new CloudError('invalid_environment_token');
- const permissions=String(session.scope).split(/\s+/);
- if(!hasPluginPermissions({permissions}))throw new CloudError('environment_note_access_required');
- return {token:session.access_token,expiresAt:Date.now()+session.expires_in*1000,url:m.url,environmentId:m.environmentId,dpopKeyId:keyId,permissions};
+ const granted=String(session.scope).split(/\s+/);
+ if(!hasPluginPermissions({permissions:granted}))throw new CloudError('environment_note_access_required');
+ if(!permissions.every(scope=>granted.includes(scope)))throw new CloudError('environment_setup_access_required');
+ return {token:session.access_token,expiresAt:Date.now()+session.expires_in*1000,url:m.url,environmentId:m.environmentId,dpopKeyId:keyId,permissions:granted};
 }

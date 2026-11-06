@@ -5,7 +5,7 @@ import {webcrypto,createHash} from 'node:crypto';
 import {proofKey,proof,thumbprint} from '../src/connection/dpop';
 import {connectMachine} from '../src/connection/cloud';
 import {readDirect} from '../src/connection/direct';
-import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../src/connection/environment-permissions';
+import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE,AGENT_SETUP_PERMISSIONS} from '../src/connection/environment-permissions';
 globalThis.indexedDB=indexedDB;
 Object.defineProperty(globalThis,'crypto',{value:webcrypto,configurable:true});
 const response=(d:any)=>new Response(JSON.stringify(d));
@@ -47,4 +47,20 @@ for(const missing of ['filesystem:read','filesystem:write'])test(`account connec
   return response({token_type:'DPoP',access_token:'partial-grant',expires_in:600,scope:PLUGIN_PERMISSIONS.filter(p=>p!==missing).join(' ')});
  };
  await assert.rejects(connectMachine({accessToken:'account',expiresAt:Date.now()+60000,identity:'Account'},{environmentId:'env',name:'Computer',url:'https://t3.example'},'connect',mock as any),(error:any)=>error.code==='environment_note_access_required');
+});
+
+test('MCP setup requests agent configuration access explicitly and rejects a partial grant',async()=>{
+ const requested=AGENT_SETUP_PERMISSIONS;
+ let grant=requested.join(' '),seenScope='';
+ const mock=async(url:any,o:any)=>{
+  if(url.endsWith('/dpop-token'))return response({token_type:'DPoP',access_token:'relay',scope:'environment:connect'});
+  if(url.endsWith('/connect'))return response({environmentId:'env',endpoint:{httpBaseUrl:'https://t3.example'},credential:'bootstrap'});
+  if(url.endsWith('/environment'))return response({environmentId:'env',label:'Computer',orchestrationProtocolVersion:2});
+  seenScope=new URLSearchParams(o.body).get('scope')!;
+  return response({token_type:'DPoP',access_token:'scoped',expires_in:600,scope:grant});
+ };
+ const account={accessToken:'account',expiresAt:Date.now()+60000,identity:'Account'},machine={environmentId:'env',name:'Computer',url:'https://t3.example'};
+ const session=await connectMachine(account,machine,'agent-setup-scope',mock as any,requested);
+ assert.equal(seenScope,requested.join(' '));assert.ok(session.permissions?.includes('providers:manage'));
+ for(const missing of ['settings:write','providers:manage']){grant=requested.filter(permission=>permission!==missing).join(' ');await assert.rejects(connectMachine(account,machine,'agent-setup-scope',mock as any,requested),(error:any)=>error.code==='environment_setup_access_required');}
 });

@@ -1,0 +1,24 @@
+import {build} from 'esbuild';
+import {mkdir,readFile,writeFile,copyFile,access,realpath,readdir} from 'node:fs/promises';
+import {resolve,join,relative,isAbsolute} from 'node:path';
+import {execFileSync} from 'node:child_process';
+import {createHash,randomBytes} from 'node:crypto';
+import {editorExternals} from '../esbuild.config.mjs';
+const [destination,asar]=process.argv.slice(2);if(!destination||!asar)throw Error('Use a new canonical evidence directory and supported Obsidian ASAR.');
+const config=JSON.parse(execFileSync('python3',['scripts/maintainer_config.py'],{encoding:'utf8',timeout:10000})),root=resolve(destination),evidence=resolve(config.canonicalRoot,'evidence');
+const inside=(parent,child)=>{const part=relative(parent,child);return !part||!isAbsolute(part)&&part!=='..'&&!part.startsWith('../');};
+if(!inside(evidence,root)||root===evidence)throw Error('Keep the lab in canonical ignored evidence.');
+for(const plugins of [config.developmentPlugins,config.productionPlugins].filter(Boolean))if(inside(await realpath(resolve(plugins,'../..')),root))throw Error('Refuse a synced vault.');
+try{await access(root);throw Error('Use a fresh lab directory.');}catch(error){if(error.code!=='ENOENT')throw error;}
+const vault=join(root,'vault'),profile=join(root,'profile'),product=join(vault,'.obsidian/plugins/t-three-code'),controller=join(vault,'.obsidian/plugins/agent-mcp-lab');
+await mkdir(product,{recursive:true});await mkdir(controller);await mkdir(profile);
+await writeFile(join(root,'ISOLATED-NATIVE-LAB'),'Synthetic MCP settings lab. No Sync. No notes.\n');
+for(const [source,target] of [['dist/main.js','main.js'],['manifest.json','manifest.json'],['styles.css','styles.css']])await copyFile(source,join(product,target));
+const appAsarName=asar.split('/').at(-1);if(!/^obsidian-1\.(?:13|14)\.[0-9]+\.asar$/.test(appAsarName))throw Error('Use a pinned supported native runtime.');await copyFile(asar,join(profile,appAsarName));
+await writeFile(join(profile,'obsidian.json'),JSON.stringify({vaults:{[randomBytes(8).toString('hex')]:{path:vault,ts:Date.now(),open:true}}}));
+await writeFile(join(vault,'.obsidian/community-plugins.json'),JSON.stringify(['agent-mcp-lab']));await writeFile(join(vault,'.obsidian/core-plugins.json'),JSON.stringify(['command-palette']));await writeFile(join(vault,'.obsidian/app.json'),JSON.stringify({safeMode:false}));
+await writeFile(join(controller,'manifest.json'),JSON.stringify({id:'agent-mcp-lab',name:'MCP settings lab',version:'0.0.1',minAppVersion:'1.13.0',author:'Local validation',description:'Isolated native checks.',isDesktopOnly:true}));
+await build({entryPoints:['tests/native/agent-mcp-fleet-lab.ts'],bundle:true,platform:'browser',format:'cjs',external:['obsidian','electron','@electron/remote',...editorExternals,'node:*'],target:'es2022',outfile:join(controller,'main.js')});
+const files={};for(const file of ['manifest.json','package.json','agent/mcp_server.py','skills/obsidian-t3/SKILL.md','scripts/connect_commands.py','tests/native/agent-mcp-fleet-lab.ts',...(await readdir('src',{recursive:true})).filter(name=>name.endsWith('.ts')).map(name=>'src/'+name),'styles.css'])files[file]=createHash('sha256').update(await readFile(file)).digest('hex');
+const sourceBundleSha256=createHash('sha256').update(await readFile('dist/main.js')).digest('hex');await writeFile(join(root,'BUILD-SOURCE.json'),JSON.stringify({sourceRoot:process.cwd(),sourceBundleSha256,files,appAsarSha256:createHash('sha256').update(await readFile(asar)).digest('hex')},null,2));
+console.log(JSON.stringify({root,vault,profile,product,sourceBundleSha256,launchArguments:[`--user-data-dir=${profile}`,'--no-sandbox','--force-renderer-accessibility']}));

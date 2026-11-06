@@ -12,7 +12,7 @@ The plugin connects to an existing T3 Code environment on this computer or anoth
 
 You need Obsidian **1.13.0 or later** and a running T3 Code installation with Orchestrator v2.
 
-1. Download `main.js`, `manifest.json`, and `styles.css` from the [newest alpha release](https://github.com/7bgsbm749g-boop/t3-obsidian/releases). Put them in your vault’s `.obsidian/plugins/t-three-code/` folder, then enable **T3 Code** under **Settings → Community plugins**.
+1. Install **T3 Code** from **Settings → Community plugins → Browse**, then enable it. Manual installs are available from [GitHub releases](https://github.com/7bgsbm749g-boop/t3-obsidian/releases).
 2. In T3 Code, sign in and enable **T3 Connect** on the computer you want to use.
 3. Open **Settings → T3 Code → Connection** in Obsidian. Enter your T3 account email, choose **Send sign-in code**, then enter the code and choose **Verify and connect**. Your computers and projects appear automatically. Sign in on each device you use.
 
@@ -33,11 +33,13 @@ For a local, HTTPS/Tailscale, or existing SSH tunnel connection, choose that met
 - **Import a response.** Use **Import T3 run into this note…** from the editor menu or command palette. Choose an existing response without sending a new message. Hover on a run for half a second to preview its response, including HTML, or use the arrow keys. Status icons keep the list compact, and unavailable runs are hidden.
 - **Browse project files.** Run **Open Codebase view** from the command palette to work with code, Markdown, images, and supported documents.
 
-Use **Settings → T3 Code → Replies** to adjust reply behaviour, and **Projects** to manage folder links. **Advanced** includes manual pairing and connection diagnostics.
+Use **Settings → T3 Code → Replies** to adjust reply behaviour, and **Projects** to manage folder links. **Advanced** includes troubleshooting.
 
 ## Let agents edit notes
 
-In **Settings → T3 Code → Connection → Agent tools**, choose the T3 computer and a Codex or Claude Code agent, then choose **Set up agent**. Python 3.10 or later must be available on that computer. Start a new agent session to load the tools and skill. The setup is included in the plugin; no repository checkout or Python packages are needed.
+Open **Settings → T3 Code → Agent tools** and choose **Connect MCP**. It sets up enabled, installed Codex, Claude Code, Cursor and OpenCode agents across your connected T3 computers, skipping existing setups. The status shows anything that still needs attention. **Disconnect MCP** removes this plugin’s setup without stopping current sessions or disconnecting T3.
+
+Python 3.10 or later must be available on each T3 computer. Start a new agent session after setup. The tools and editing skill are included; no repository checkout or Python packages are needed. For another MCP client or a custom configuration, open **Advanced → Manual setup** in the same section.
 
 Agents can prepare and submit checked note edits through the running plugin. Compatible changes merge, conflicts are kept for review, and active replies use the same safe final save. Keep Obsidian open and connected while editing.
 

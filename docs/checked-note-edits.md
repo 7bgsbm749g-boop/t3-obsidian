@@ -1,13 +1,21 @@
 # Checked agent note edits
 
 Community-library installations include the optional agent setup under
-Settings → Connection → Agent tools. It uploads the reviewed stdlib-only Python
+Settings → T3 Code → Agent tools, the first settings page. Connect MCP uploads the reviewed stdlib-only Python
 MCP server, checked transport and skill through T3's existing file APIs. It
-requires Python 3.10 or later on the selected T3 machine. No repository clone, package
+requires Python 3.10 or later on each connected T3 machine. No repository clone, package
 download, incoming endpoint, or plugin-side program execution is involved.
 
-The selected Codex or Claude Code instance receives an additional MCP launch
-configuration through T3's settings API. Existing options, other instances and
+Connect MCP checks every connected machine and enabled, installed agent. It
+skips current setups and configures missing or outdated ones, with at most two
+machines active at once. One failure does not block the other machines.
+Codex uses a per-instance MCP override; Claude Code uses an extra MCP config;
+Cursor loads a plugin directory; OpenCode uses an additional OPENCODE_CONFIG
+layer. All share the same stdio server and skill. T3 receives a narrow
+provider-instance mutation, without replacing the provider map. Explicit setup
+requests settings:write and providers:manage in addition to the normal scopes.
+Managed account sessions renew those permissions when needed; a restricted
+manual pairing must be renewed. Background detection never changes settings. Existing options, other instances and
 credential-redaction markers are preserved. Conflicting custom MCP launch
 options and changed setup receipts stop installation rather than overwrite user
 configuration. Source files are checked after upload and kept under immutable
@@ -20,8 +28,11 @@ the maintained skill in its initialize instructions, resource, prompt and
 `instructions` tool, so no separate skill installation is needed. Setup reports
 configuration separately from a verified MCP initialize handshake. Existing
 agent sessions need a new session to load the tools. There is no claim of a
-working runtime merely because configuration was written. Other provider kinds
-remain explicit unsupported choices for automatic setup.
+working runtime merely because configuration was written. Other harnesses remain visible in the status details. The collapsed
+Advanced → Manual setup section provides a standard server definition for each
+machine, prepared by Connect MCP. Disconnect MCP removes only owned integration
+settings; it keeps immutable tool files for existing sessions and does not
+disconnect T3 accounts. Neither action uses ACP.
 
 Agents exchange data with the running Obsidian plugin through the existing T3
 Connect file APIs. The plugin makes outbound authenticated connections; it

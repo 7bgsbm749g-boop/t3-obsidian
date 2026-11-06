@@ -60,3 +60,10 @@ test('a valid concurrent reply proves health without a Pong and a late reply can
   h.reply('1','alive');assert.equal(await pending,'alive');assert.equal(rpc.closed,false);
   await h.advance(8000);assert.equal(rpc.closed,true);h.reply('1','late');assert.equal(rpc.closed,true);assert.equal(h.closes(),1);
 });
+
+test('MCP provider permission failures remain actionable without closing the connection',async()=>{
+ const h=fixture(),rpc=await h.open(),pending=rpc.call('server.updateSettings',{});
+ const rejected=assert.rejects(pending,(error:any)=>error.requiredPermission==='providers:manage'&&error.message.includes('MCP setup'));
+ h.emit({_tag:'Exit',requestId:'1',exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:'EnvironmentAuthorizationError',requiredPermission:'providers:manage'}}]}});
+ await rejected;assert.equal(rpc.closed,false);rpc.close();
+});

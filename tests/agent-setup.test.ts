@@ -11,6 +11,7 @@ function lab(selected=provider){
     if(method==='server.getConfig')return structuredClone(config);
     assert.equal(method,'server.updateSettings');patches.push(structuredClone(payload));
     if(payload.patch.providerInstances)config.settings.providerInstances=structuredClone(payload.patch.providerInstances);
+    if(payload.providerInstanceMutation){const change=payload.providerInstanceMutation;if(change.operation==='remove')delete config.settings.providerInstances[change.instanceId];else config.settings.providerInstances[change.instanceId]=structuredClone(change.instance);}
     return structuredClone(config.settings);
   }};
   const io={read:async(path:string)=>files.get(path),write:async(path:string,text:string)=>{files.set(path,text);},list:async()=>[]};
@@ -24,7 +25,7 @@ test('one setup installs verified source and preserves unrelated instances, cred
   assert.equal(after[provider.id].config.homePath,'/custom/home');assert.ok(after[provider.id].config.launchArgs.startsWith('--strict-config -c '));
   assert.equal(h.files.get(result.bundle+'/SKILL.md'),'# skill');assert.equal((await h.setup.status(provider)).lastConnected,undefined);
   await h.setup.install(provider,'python3');assert.equal((await h.setup.status(provider)).installed,true);
-  await h.setup.remove(provider);assert.equal(after[provider.id].config.launchArgs.includes('t3-obsidian'),true);
+  await h.setup.remove(provider);
   assert.deepEqual(h.config.settings.providerInstances,before);assert.equal((await h.setup.status(provider)).installed,false);
   assert.ok(h.files.has(result.bundle+'/mcp_server.py'),'live sessions retain immutable assets');
 });
@@ -75,4 +76,56 @@ test('real file adapters isolate setup assets from command requests and permit a
   await assert.rejects(agent.read('.t3-obsidian/clients/secret'),/transport path/);
   await assert.rejects(commands.read('.t3-obsidian/agent-tools/bundle'),/transport path/);
   await assert.rejects(agent.write('.t3-obsidian/agent-tools/../../outside','bad'),/transport path/);
+});
+
+test('default instances without the removed legacy providers map can be configured',async()=>{
+  const selected:AgentProvider={id:'codex',driver:'codex',name:'Codex'},h=lab(selected);
+  h.config.settings.providerInstances={};
+  await h.setup.install(selected,'python3');
+  assert.equal(h.config.settings.providerInstances.codex.driver,'codex');
+  assert.ok(h.config.settings.providerInstances.codex.config.launchArgs.includes('mcp_servers.t3-obsidian'));
+  await h.setup.remove(selected);assert.deepEqual(h.config.settings.providerInstances,{});
+});
+test('numeric UUID instance identities and all supported adapters are detected without enabling other agents',async()=>{
+  const h=lab();h.config.providers=[...['codex','claudeAgent','cursor','opencode','grok'].map((driver,index)=>({driver,instanceId:'1abc-'+index,enabled:true,installed:true,displayName:driver})),{driver:'cursor',instanceId:'disabled',enabled:false,installed:true}];
+  const state=await h.setup.inspect();assert.equal(state.providers.length,4);assert.deepEqual(state.unsupported.map(value=>value.driver),['grok']);assert.equal(h.patches.length,0);
+});
+test('Cursor gets its own MCP plugin while OpenCode merges an additional config layer',async()=>{
+  for(const driver of ['cursor','opencode'] as const){
+    const selected:AgentProvider={id:driver,driver,name:driver},h=lab(selected),before=structuredClone(h.config.settings.providerInstances);
+    const result=await h.setup.install(selected,'python3');
+    if(driver==='cursor'){
+      assert.ok(h.config.settings.providerInstances.cursor.config.launchArgs.includes('--plugin-dir'));
+      const config=[...h.files].find(([path])=>path.endsWith('/mcp.json'))!;assert.equal(JSON.parse(config[1]).mcpServers['t3-obsidian'].type,'stdio');
+    }else{
+      const environment=h.config.settings.providerInstances.opencode.environment,setting=environment.find((entry:any)=>entry.name==='OPENCODE_CONFIG');assert.ok(setting.value.endsWith('.json'));
+      const source=[...h.files].find(([path])=>setting.value.endsWith(path))!;assert.equal(JSON.parse(source[1]).mcp['t3-obsidian'].type,'local');
+    }
+    assert.equal((await h.setup.status(selected)).owned,true);await h.setup.remove(selected);assert.deepEqual(h.config.settings.providerInstances,before);assert.ok(h.files.has(result.bundle+'/mcp_server.py'));
+  }
+});
+test('a changed OpenCode custom config is kept and forged receipts cannot change unrelated environment variables',async()=>{
+  const selected:AgentProvider={id:'opencode',driver:'opencode',name:'OpenCode'},h=lab(selected);
+  h.config.settings.providerInstances.opencode.environment.push({name:'OPENCODE_CONFIG',value:'/my/custom.json'});
+  await assert.rejects(h.setup.install(selected,'python3'),/Custom OpenCode/);assert.equal(h.patches.length,0);
+  const own=lab(selected);await own.setup.install(selected,'python3');const path='.t3-obsidian/agent-tools/installations/opencode.json',receipt=JSON.parse(own.files.get(path)!);receipt.environment.name='OTHER_VARIABLE';own.files.set(path,JSON.stringify(receipt));
+  await assert.rejects(own.setup.remove(selected),/environment receipt/);assert.equal(own.patches.length,1);
+});
+test('manual setup prepares the shared server and skill without changing any harness settings',async()=>{
+  const h=lab();assert.equal(await h.setup.manual('python3'),undefined);
+  const result=await h.setup.prepare('python3');assert.equal(JSON.parse(result.config).mcpServers['t3-obsidian'].command,'python3');assert.ok(result.path.startsWith('/t3/scratch/.t3-obsidian/agent-tools/'));
+  assert.deepEqual(await h.setup.manual('python3'),result);assert.equal(h.patches.length,0);
+  h.files.set(result.path.replace('/t3/scratch/',''),'changed');await assert.rejects(h.setup.prepare('python3'),/tool changed/);assert.equal(h.patches.length,0);
+});
+test('background detection finds a deleted server asset and a retry repairs it before reusing settings',async()=>{
+  const h=lab(),result=await h.setup.install(provider,'python3');assert.equal((await h.setup.status(provider)).installed,true);
+  h.files.delete(result.bundle+'/mcp_server.py');assert.equal((await h.setup.status(provider)).installed,false);
+  await h.setup.install(provider,'python3');assert.equal((await h.setup.status(provider)).installed,true);
+});
+
+test('disconnect restores owned options after an agent is disabled without enabling it',async()=>{
+ const h=lab();await h.setup.install(provider,'python3');h.config.providers[0].enabled=false;h.config.settings.providerInstances[provider.id].enabled=false;
+ const state=await h.setup.inspect();assert.equal(state.providers.length,0);assert.equal(state.inactive?.[0].id,provider.id);
+ await assert.rejects(h.setup.install(provider,'python3'),/unavailable/);
+ await h.setup.remove(provider);assert.equal(h.config.settings.providerInstances[provider.id].config.launchArgs,'--strict-config');assert.equal(h.config.settings.providerInstances[provider.id].enabled,false);assert.equal((await h.setup.status(provider)).owned,false);
 });

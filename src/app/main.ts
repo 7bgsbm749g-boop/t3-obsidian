@@ -41,7 +41,7 @@ import {markdownCodeCacheStatus,escapeReplyHtml} from '../responses/reply-html';
 import pluginManifest from '../../manifest.json';
 import {appendSendFailure,sendFailureLog,type SendFailure} from '../responses/send-failures';
 import {ConnectionRecovery} from '../connection/connection-recovery';
-import {hasPluginPermissions} from '../connection/environment-permissions';
+import {PLUGIN_PERMISSIONS,AGENT_SETUP_PERMISSIONS,hasPluginPermissions} from '../connection/environment-permissions';
 import {REAUTHENTICATE_MESSAGE,SignInRequiredError,signInRequired} from '../connection/sign-in-state';
 import {T3HttpError} from '../conversations/thread-access-cache';
 import {mergeSharedSettings} from '../storage/shared-settings';
@@ -1685,17 +1685,27 @@ export default class SendToT3 extends Plugin {
     const access=await this.inlineThreadAccess(environmentId);try{const project=await ensureNoProject(access.api);this.commandProjects.set(environmentId,project);return project;}finally{await access.close?.();}
   }
   agentToolMachines(){return [...new Map(this.settings.paired.map(connection=>[connection.environmentId,{id:connection.environmentId,name:connection.name}])).values()];}
-  private async withAgentTools<T>(environmentId:string,action:(setup:AgentSetup)=>Promise<T>):Promise<T>{
+  private async withAgentTools<T>(environmentId:string,action:(setup:AgentSetup)=>Promise<T>,configure=false):Promise<T>{
     if(!this.settings.paired.some(connection=>connection.environmentId===environmentId))throw Error('Connect the selected T3 machine first.');
-    const access=await this.inlineThreadAccess(environmentId);let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined;
+    const candidates=orderedRoutes(this.settings.paired,this.routeOrder,c=>this.connectionScore(c)).filter(connection=>connection.environmentId===environmentId);
+    let access:ThreadAccess|undefined,failure:unknown;
+    for(const paired of candidates){
+      try{
+        if(configure)await this.sessionFor(paired.id,false,AGENT_SETUP_PERMISSIONS);
+        access=await this.pairedThreadAccess(paired);this.routeFailures.delete(paired.id);break;
+      }catch(error){failure=error;this.routeFailures.set(paired.id,message(error));}
+    }
+    if(!access)throw failure instanceof Error?failure:Error('No connected route could reach this T3 machine.');
+    let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined;
     try{
       const project=await this.commandProject(environmentId);rpc=await connectT3Rpc(access.api,access.origin);
       return await action(new AgentSetup(rpc,connectAgentFiles(rpc,project.workspaceRoot),environmentId,project.workspaceRoot,{files:agentAssets,hash:agentBundleHash}));
     }finally{rpc?.close();await access.close?.();}
   }
+  agentToolsPrepare(environmentId:string,runtime:string){return this.withAgentTools(environmentId,setup=>setup.prepare(runtime));}
   agentToolsInspect(environmentId:string){return this.withAgentTools(environmentId,setup=>setup.inspect());}
-  agentToolsInstall(environmentId:string,provider:AgentProvider,runtime:string){return this.serializeCommand(()=>this.withAgentTools(environmentId,setup=>setup.install(provider,runtime)));}
-  agentToolsRemove(environmentId:string,provider:AgentProvider){return this.serializeCommand(()=>this.withAgentTools(environmentId,setup=>setup.remove(provider)));}
+  agentToolsInstall(environmentId:string,provider:AgentProvider,runtime:string){return this.serializeCommand(()=>this.withAgentTools(environmentId,setup=>setup.install(provider,runtime),true));}
+  agentToolsRemove(environmentId:string,provider:AgentProvider){return this.serializeCommand(()=>this.withAgentTools(environmentId,setup=>setup.remove(provider),true));}
   agentToolsStatus(environmentId:string,provider:AgentProvider){return this.withAgentTools(environmentId,setup=>setup.status(provider));}
   private async commandFiles(route:CommandRoute):Promise<CommandFiles>{
     const project=await this.commandProject(route.environmentId);
@@ -2098,7 +2108,7 @@ export default class SendToT3 extends Plugin {
   }
   async pairConnection(name:string,address:string,code:string,expectedEnvironmentId?:string,method?:ConnectionMethod){
     const input=method?routePairing(method,address,code):undefined;
-    const result=await pair(input?.url??address,input?.code??code,undefined,expectedEnvironmentId);
+    const result=await pair(input?.url??address,input?.code??code,undefined,expectedEnvironmentId,AGENT_SETUP_PERMISSIONS);
     const existing=this.settings.paired.find(c=>c.environmentId===result.descriptor.environmentId&&c.url===result.session.url);
     const c:PairedConnection=existing??{id:randomId(),name:name.trim()||result.descriptor.label,url:result.session.url,environmentId:result.descriptor.environmentId};
     if(!existing)this.settings.paired.push(c);
@@ -2148,24 +2158,24 @@ export default class SendToT3 extends Plugin {
     const work=(async()=>{try{const token=await nativeRelayAccount(account,async()=>{if(!active())throw Error('Sign-in cancelled.');await this.save();},nativeAccountFetch);if(!active())throw Error('Sign-in cancelled.');this.nativeToken=token;return token;}catch(error){if(active()&&signInRequired(error))await this.clearAccount(true);throw error;}})();
     this.nativeRefreshing=work;try{return await work;}finally{if(this.nativeRefreshing===work)this.nativeRefreshing=undefined;}
   }
-  async sessionFor(id:string,forceRefresh=false):Promise<PairedSession|undefined>{
+  async sessionFor(id:string,forceRefresh=false,permissions:readonly string[]=PLUGIN_PERMISSIONS):Promise<PairedSession|undefined>{
     const session=this.pairedSessions[id];const c=this.settings.paired.find(c=>c.id===id);
     // Managed is shared discovery metadata. A manual credential belongs to
     // this device and remains usable without an account session.
-    if(session&&!session.accountId&&session.url===c?.url&&session.environmentId===c.environmentId&&session.expiresAt>Date.now()+5000)return session;
+    if(session&&!session.accountId&&session.url===c?.url&&session.environmentId===c.environmentId&&session.expiresAt>Date.now()+5000){if(permissions.some(scope=>!PLUGIN_PERMISSIONS.some(required=>required===scope))&&!permissions.every(scope=>session.permissions?.includes(scope)))throw Error('This pairing does not permit MCP setup. Pair this machine again with agent configuration access, or use your T3 account connection.');return session;}
     if(c?.managed&&!this.nativeAccount)throw new SignInRequiredError(this.signInExpired?REAUTHENTICATE_MESSAGE:'Sign in to T3 on this device to resume replies.');
     if(session?.accountId&&session.accountId!==this.nativeAccount?.userId)throw Error('Sign in to the T3 account that owns this connection.');
     // Pre-v2 account sessions requested only the two orchestration scopes.
     // Refresh them before any remote vault check; token expiry is not enough.
-    if(session&&session.expiresAt>Date.now()+60000&&!forceRefresh&&(!c?.managed||hasPluginPermissions(session)))return session;
+    if(session&&session.expiresAt>Date.now()+60000&&!forceRefresh&&(!c?.managed||hasPluginPermissions(session))&&permissions.every(scope=>session.permissions?.includes(scope)))return session;
     if(!c?.managed||!this.nativeAccount)return session;
-    const existing=this.sessionRefreshing.get(id);if(existing)return existing;
+    const existing=this.sessionRefreshing.get(id);if(existing){const value=await existing;if(permissions.every(scope=>value.permissions?.includes(scope)))return value;return this.sessionFor(id,true,permissions);}
     const account=this.nativeAccount;const generation=this.cloudGeneration;
     const work=(async()=>{
       const credential=await this.nativeCredential();const machines=await discoverMachines(credential);
       const m=machines.find(m=>m.environmentId===c.environmentId&&m.url===c.url);
       if(!m)throw Error('This T3 connection is no longer available to your account. Reconnect its machine.');
-      const next=await connectMachine(await this.nativeCredential(),m,this.deviceId+':'+account.userId);
+      const next=await connectMachine(await this.nativeCredential(),m,this.deviceId+':'+account.userId,undefined,permissions);
       if(this.stopped||this.nativeAccount!==account||generation!==this.cloudGeneration||!this.settings.paired.includes(c))throw Error('Connection cancelled.');
       next.accountId=account.userId;this.pairedSessions[id]=next;await this.save();return next;
     })();this.sessionRefreshing.set(id,work);try{return await work;}finally{if(this.sessionRefreshing.get(id)===work)this.sessionRefreshing.delete(id);}
@@ -2858,6 +2868,7 @@ export class T3Settings extends PluginSettingTab {
     const block=(name:string,aliases:string[],render:(el:HTMLElement)=>void):SettingDefinition=>({name,aliases,render:setting=>{setting.settingEl.empty();setting.settingEl.removeClass('setting-item');setting.settingEl.addClass('t3-settings-section');render(setting.settingEl);}});
     this.plugin.cloudChanged=()=>this.refresh();
     return [
+      {type:'page',name:'Agent tools',items:this.agentDefinitions()},
       {type:'page',name:'Connection',items:this.connectionDefinitions()},
       {type:'page',name:'Replies',items:this.replyPageDefinitions()},
       {type:'page',name:'Projects',items:[block('Linked folders and project files',['Vault connection','Connect vault','Change machine','Unlink','Codebase view','Open project files'],el=>this.projectsUI(el))]},
@@ -2865,14 +2876,15 @@ export class T3Settings extends PluginSettingTab {
     ];
   }
   refresh(){this.update();}
-  private connectionDefinitions():Array<SettingsRow>{return [
-    {name:'Connections',aliases:['Sign in','T3 account email','Email verification code','Refresh connections','Sign out'],render:setting=>{setting.settingEl.empty();setting.settingEl.removeClass('setting-item');this.connectionUI(setting.settingEl);}},
+  private agentDefinitions():Array<SettingsRow>{return [
     {name:'Agent tools',aliases:['MCP','Skill','Set up agent','Safe note editing'],render:setting=>{
-      setting.settingEl.empty();setting.settingEl.removeClass('setting-item');
-      this.agentTools??=new AgentToolsSettings({machines:()=>this.plugin.agentToolMachines(),inspect:id=>this.plugin.agentToolsInspect(id),install:(id,provider,runtime)=>this.plugin.agentToolsInstall(id,provider,runtime),remove:(id,provider)=>this.plugin.agentToolsRemove(id,provider),status:(id,provider)=>this.plugin.agentToolsStatus(id,provider)});
+      setting.settingEl.empty();setting.settingEl.removeClass('setting-item');setting.settingEl.addClass('t3-settings-section');
+      this.agentTools??=new AgentToolsSettings({prepare:(id,runtime)=>this.plugin.agentToolsPrepare(id,runtime),machines:()=>this.plugin.agentToolMachines(),inspect:id=>this.plugin.agentToolsInspect(id),install:(id,provider,runtime)=>this.plugin.agentToolsInstall(id,provider,runtime),remove:(id,provider)=>this.plugin.agentToolsRemove(id,provider),status:(id,provider)=>this.plugin.agentToolsStatus(id,provider)});
       this.agentTools.render(setting.settingEl);
     }},
   ];}
+  hide(){this.agentTools?.dispose();}
+  private connectionDefinitions():Array<SettingsRow>{return [{name:'Connections',aliases:['Sign in','T3 account email','Email verification code','Refresh connections','Sign out'],render:setting=>{setting.settingEl.empty();setting.settingEl.removeClass('setting-item');setting.settingEl.addClass('t3-settings-section');this.connectionUI(setting.settingEl);}}];}
   private selectedMachine:CloudMachine|null=null;
   private readonly expanded=new Set<string>();
   showConnection(){}

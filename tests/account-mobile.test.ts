@@ -5,7 +5,7 @@ import {runInNewContext} from './obsidian-context';
 import {settingsSocket} from './rpc-fixture';
 import {webcrypto} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
-import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../src/connection/environment-permissions';
+import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE,AGENT_SETUP_PERMISSIONS} from '../src/connection/environment-permissions';
 
 test('mobile account sign-in connects all machines, preserves selections, survives restart, renews, and signs out without replay',async()=>{
  let local:any={deviceId:'account-mobile-device',mode:'direct',pairedSessions:{manual:{url:'https://manual.example',environmentId:'manual',token:'manual-private',expiresAt:Date.now()+600000}}};
@@ -38,7 +38,7 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
   if(url.startsWith('https://manual.example')){if(url.endsWith('/environment'))return response({environmentId:'manual',label:'Manual',orchestrationProtocolVersion:2});assert.equal(o.headers.Authorization,'Bearer manual-private');return response({projects:[],threads:[]});}
   const id=new URL(url).hostname[0];
   if(url.endsWith('/environment'))return response({environmentId:id,label:id,orchestrationProtocolVersion:2});
-  if(url.endsWith('/oauth/token')){const form=new URLSearchParams(o.body);assert.equal(form.get('scope'),PLUGIN_SCOPE);const manual=form.get('subject_token')==='synthetic-code';return response({token_type:manual?'Bearer':'DPoP',access_token:manual?'manual-private-'+id:'environment-private-'+id,expires_in:600,scope:PLUGIN_SCOPE});}
+  if(url.endsWith('/oauth/token')){const form=new URLSearchParams(o.body);const manual=form.get('subject_token')==='synthetic-code';assert.equal(form.get('scope'),manual?AGENT_SETUP_PERMISSIONS.join(' '):PLUGIN_SCOPE);return response({token_type:manual?'Bearer':'DPoP',access_token:manual?'manual-private-'+id:'environment-private-'+id,expires_in:600,scope:form.get('scope')});}
   if(o.headers.Authorization!=='Bearer manual-private-'+id){assert.equal(o.headers.Authorization,'DPoP environment-private-'+id);assert.ok(o.headers.DPoP);}
   if(url.endsWith('/websocket-ticket'))return response({ticket:'ephemeral'});
   if(url.endsWith('/shell'))return response({projects:[{id:'p-'+id,title:'Project '+id,workspaceRoot:'/',defaultModelSelection:{instanceId:'codex',model:'default'}}],threads:[]});
@@ -71,7 +71,7 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
   assert.equal(connects,before+1,'Legacy permission upgrade is coalesced');assert.equal(first,second);assert.deepEqual(Array.from(first.permissions),Array.from(PLUGIN_PERMISSIONS));
   assert.equal(await p.sessionFor(c.id),first);assert.equal(connects,before+1,'Complete grants reuse the same valid session');
  }
- assert.equal((await p.sessionFor('manual')).token,'manual-private','An unmanaged pairing must not use account credentials');assert.equal(dispatches.length,0,'Permission migration must not replay sends');
+ await assert.rejects(p.sessionFor('manual',false,AGENT_SETUP_PERMISSIONS),/MCP setup/);assert.equal((await p.sessionFor('manual')).token,'manual-private','An unmanaged pairing must not use account credentials');assert.equal(dispatches.length,0,'Permission migration must not replay sends');
  const previousConnects=connects;p.pairedSessions[c.id].expiresAt=0;await Promise.all([p.sessionFor(c.id),p.sessionFor(c.id)]);assert.equal(connects,previousConnects+1,'Renewal is coalesced');
  // A transport failure must not erase a valid device account.
  p.nativeToken=undefined;nativeOffline=true;await assert.rejects(p.nativeCredential(),/Cannot reach T3 sign-in/);assert.equal(p.nativeAccount.userId,'user-native');nativeOffline=false;

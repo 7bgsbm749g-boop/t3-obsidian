@@ -631,3 +631,13 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 .send-to-t3-html-expanded.send-to-t3-html-expanded-loading{height:auto;min-height:64px;}
 .send-to-t3-html-expanded>.send-to-t3-html-result{height:100%;margin:0;}
 @media(pointer:coarse){.send-to-t3-html-controls{opacity:1;}}
+
+/* Agent setup uses theme colours and text, so colour is not the only signal. */
+.t3-agent-status { padding: var(--size-4-3); margin-block: var(--size-4-3); border: var(--border-width) solid var(--background-modifier-border); border-radius: var(--radius-m); }
+.t3-agent-status[data-state="needed"], .t3-agent-warning { color: var(--text-warning); }
+.t3-agent-status[data-state="needed"] { border-color: var(--text-warning); }
+.t3-agent-status[data-state="ready"] { color: var(--text-success); }
+.t3-agent-status p { margin-bottom: 0; }
+.t3-agent-progress { color: var(--text-muted); }
+
+.t3-agent-config { width: 100%; min-height: 12em; font-family: var(--font-monospace); resize: vertical; }

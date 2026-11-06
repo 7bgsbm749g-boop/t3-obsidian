@@ -127,6 +127,11 @@
     "tests/checked-note-edits.test.ts": [
       "tests/native/connect-note-edits-lab.ts",
       "scripts/build-connect-command-lab.mjs"
+    ],
+    "tests/agent-fleet.test.ts": [
+      "tests/native/agent-mcp-fleet-lab.ts",
+      "scripts/build-agent-mcp-lab.mjs",
+      "styles.css"
     ]
   }
 }

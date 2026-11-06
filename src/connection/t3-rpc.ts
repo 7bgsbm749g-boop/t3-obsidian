@@ -21,7 +21,7 @@ export class T3RequestTimeoutError extends Error {
 }
 let connections=0;
 export class T3RpcError extends Error {
-  constructor(public kind:string,public requiredPermission?:string,public rpcMethod?:string){super(kind==='EnvironmentAuthorizationError'&&['filesystem:read','filesystem:write'].includes(requiredPermission??'')?'The T3 connection does not permit note access. Reconnect this machine in T3 Code settings with filesystem read and write access.':kind==='ProjectReadFileError'?'Cannot read the synced vault settings in this folder.':kind==='FilesystemBrowseError'?'Cannot open this folder on the selected machine.':'The selected machine could not complete the T3 request.');}
+  constructor(public kind:string,public requiredPermission?:string,public rpcMethod?:string){super(kind==='EnvironmentAuthorizationError'&&['settings:write','providers:manage'].includes(requiredPermission??'')?'This T3 connection does not permit MCP setup. Reconnect it with agent configuration access or use your T3 account.':kind==='EnvironmentAuthorizationError'&&['filesystem:read','filesystem:write'].includes(requiredPermission??'')?'The T3 connection does not permit note access. Reconnect this machine in T3 Code settings with filesystem read and write access.':kind==='ProjectReadFileError'?'Cannot read the synced vault settings in this folder.':kind==='FilesystemBrowseError'?'Cannot open this folder on the selected machine.':'The selected machine could not complete the T3 request.');}
 }
 
 /** Unary requests over T3's authenticated Effect RPC protocol. */
@@ -75,7 +75,7 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
         const id=String(frame.requestId),task=pending.get(id);if(!task||frame._tag!=='Exit')continue;
         received();pending.delete(id);time.clear(task.timer);
         if(isRecord(frame.exit)&&frame.exit._tag==='Success')task.resolve(frame.exit.value);
-        else {const causes=isRecord(frame.exit)?frame.exit.cause:undefined;const cause=records(causes).find(x=>x._tag==='Fail')?.error,failure=isRecord(cause)?cause:undefined;const required=failure?.requiredPermission;const permission=typeof required==='string'&&['filesystem:read','filesystem:write','orchestration:read','orchestration:operate'].includes(required)?required:undefined;task.reject(new T3RpcError(typeof failure?._tag==='string'?failure._tag:'RpcError',permission,task.method));}
+        else {const causes=isRecord(frame.exit)?frame.exit.cause:undefined;const cause=records(causes).find(x=>x._tag==='Fail')?.error,failure=isRecord(cause)?cause:undefined;const required=failure?.requiredPermission;const permission=typeof required==='string'&&['filesystem:read','filesystem:write','orchestration:read','orchestration:operate','settings:write','providers:manage'].includes(required)?required:undefined;task.reject(new T3RpcError(typeof failure?._tag==='string'?failure._tag:'RpcError',permission,task.method));}
       }
     }catch(error){fail(error instanceof T3ResponseTooLargeError?error:Error('T3 returned an incompatible response.'));}
   };

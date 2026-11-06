@@ -17,7 +17,7 @@ import {t3Api,abortableRead,requestAborted,type AbortableT3Api,type T3RequestOpt
 import {T3_PROTOCOL_VERSION,T3_PROTOCOL_HEADER} from './orchestration-v2';
 import type {ThreadAccess} from '../conversations/thread-stream';
 import type {SocketFactory} from './t3-rpc';
-import {PLUGIN_SCOPE,hasPluginPermissions} from './environment-permissions';
+import {PLUGIN_PERMISSIONS,hasPluginPermissions} from './environment-permissions';
 import {ensureNoProject} from '../projects/no-project';
 import {AUTO_THREAD_TITLE} from '../conversations/thread-title';
 export interface RemoteEnvironmentDescriptor extends Record<string,unknown>{environmentId:string;label:string;orchestrationProtocolVersion:2}
@@ -65,15 +65,16 @@ export async function descriptor(url:string,fetcher?:Fetcher,signal?:AbortSignal
  if(d.orchestrationProtocolVersion!==T3_PROTOCOL_VERSION)throw Error('Update this T3 machine to Orchestrator v2 before connecting.');
  return d as unknown as RemoteEnvironmentDescriptor;
 }
-export async function pair(address:string,code:string,fetcher?:Fetcher,expectedEnvironmentId?:string):Promise<{descriptor:RemoteEnvironmentDescriptor;session:PairedSession}>{
+export async function pair(address:string,code:string,fetcher?:Fetcher,expectedEnvironmentId?:string,permissions:readonly string[]=PLUGIN_PERMISSIONS):Promise<{descriptor:RemoteEnvironmentDescriptor;session:PairedSession}>{
  const input=pairingInput(address,code);if(!input.code)throw Error('Paste a fresh one-time pairing link or pairing code from T3 Settings → Connections.');
  const d=await descriptor(input.url,fetcher);if(expectedEnvironmentId&&d.environmentId!==expectedEnvironmentId)throw Error("The address no longer matches the selected T3 machine. Discover machines again; no pairing code was sent.");
- const body=new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',subject_token:input.code,subject_token_type:'urn:t3:params:oauth:token-type:environment-bootstrap',requested_token_type:'urn:ietf:params:oauth:token-type:access_token',scope:PLUGIN_SCOPE,client_label:'T3 Code (Obsidian)'}).toString();
+ const body=new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',subject_token:input.code,subject_token_type:'urn:t3:params:oauth:token-type:environment-bootstrap',requested_token_type:'urn:ietf:params:oauth:token-type:access_token',scope:permissions.join(' '),client_label:'T3 Code (Obsidian)'}).toString();
  const token=await jsonHttp(input.url+'/oauth/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body},fetcher);
  if(!isRecord(token)||token.token_type!=='Bearer'||typeof token.access_token!=='string'||typeof token.expires_in!=='number'||!Number.isFinite(token.expires_in)||token.expires_in<=0)throw Error('T3 returned an unsupported pairing session.');
- const permissions=typeof token.scope==='string'?token.scope.split(/\s+/):[];
- if(!hasPluginPermissions({permissions}))throw Error('This pairing link does not permit thread and note access. Create a new T3 pairing link with filesystem read and write access, then reconnect this machine.');
- return {descriptor:d,session:{token:token.access_token,expiresAt:Date.now()+token.expires_in*1000,environmentId:d.environmentId,url:input.url,permissions}};
+ const granted=typeof token.scope==='string'?token.scope.split(/\s+/):[];
+ if(!hasPluginPermissions({permissions:granted}))throw Error('This pairing link does not permit thread and note access. Create a new T3 pairing link with filesystem read and write access, then reconnect this machine.');
+ if(!permissions.every(scope=>granted.includes(scope)))throw Error('This pairing link does not permit MCP setup. Create a fresh T3 pairing link with agent configuration access, then reconnect this computer.');
+ return {descriptor:d,session:{token:token.access_token,expiresAt:Date.now()+token.expires_in*1000,environmentId:d.environmentId,url:input.url,permissions:granted}};
 }
 export async function environmentApi(c:Connection,s:PairedSession|undefined,fetcher?:Fetcher,makeSocket?:SocketFactory,signal?:AbortSignal){
  const url=endpoint(c.url||'');

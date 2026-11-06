@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {pair, pairingInput,sendDirect,readDirect,commandId,jsonHttp} from '../src/connection/direct';
 import type {Request} from '../src/app/bridge';
 import {modelConfig,settingsSocket} from './rpc-fixture';
-import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE} from '../src/connection/environment-permissions';
+import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE,AGENT_SETUP_PERMISSIONS} from '../src/connection/environment-permissions';
 import {noteThreadTitle} from '../src/conversations/thread-title';
 const eid='environment';const url='https://t3.example';const now=Date.now();
 const session={url,environmentId:eid,token:'device-token',expiresAt:now+600000};
@@ -207,4 +207,10 @@ test('named direct sends prepare worktrees before starting and replay the saved 
  config.settings.defaultThreadEnvMode='local';
  await sendDirect(saved,session,async()=>{},fetcher);
  assert.deepEqual(launches[1],launches[0]);
+});
+test('a new MCP-enabled pairing requests agent configuration access and refuses a restricted bootstrap grant',async()=>{
+ const scopes=AGENT_SETUP_PERMISSIONS;let grant=scopes.join(' '),requested='';
+ const fetcher=async(u:any,o:any)=>{if(u.endsWith('/environment'))return response(descriptor);requested=new URLSearchParams(o.body).get('scope')!;return response({token_type:'Bearer',access_token:'scoped',expires_in:600,scope:grant});};
+ const result=await pair(url+'/pair#token=code','',fetcher as any,undefined,scopes);assert.equal(requested,scopes.join(' '));assert.ok(result.session.permissions?.includes('providers:manage'));
+ for(const missing of ['settings:write','providers:manage']){grant=scopes.filter(permission=>permission!==missing).join(' ');await assert.rejects(pair(url+'/pair#token=code','',fetcher as any,undefined,scopes),/does not permit MCP setup/);}
 });
