@@ -49,7 +49,7 @@ export async function readInlineEvents(access:ThreadAccess,threadId:string,after
     const abort=()=>finish(Error('T3 binding recovery canceled.'));
     const finish=(error?:Error)=>{if(finished)return;finished=true;signal.removeEventListener('abort',abort);try{socket.send(JSON.stringify({_tag:'Interrupt',requestId:'1'}));}catch{/* The closed socket needs no replay interruption. */}socket.close();error?reject(error):resolve(items);};
     signal.addEventListener('abort',abort,{once:true});
-    socket.onopen=()=>{if(signal.aborted){abort();return;}socket.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,afterSequence,requestCompletionMarker:true,acceptBoundedSnapshot:true,acceptCompactTurnItems:true},headers:[]}));};
+    socket.onopen=()=>{if(signal.aborted){abort();return;}access.api.trackConnection?.({get closed(){return finished;}});socket.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,afterSequence,requestCompletionMarker:true,acceptBoundedSnapshot:true,acceptCompactTurnItems:true},headers:[]}));};
     socket.onmessage=message=>{try{
       if(typeof message.data!=='string'||Buffer.byteLength(message.data)>16_000_000)throw Error('T3 stream frame is too large.');
       const decoded=parseJson(message.data);
@@ -138,6 +138,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       const opening=setTimeout(()=>fail(Error('T3 thread stream did not connect.')),15_000);
       openedSocket.onopen=()=>{
         clearTimeout(opening);if(stopped){openedSocket.close();return;}
+        ready.api.trackConnection?.({get closed(){return ended||stopped;}});
         socketOpen=true;
         logEvent('stream.connected',{threadId});attempt=0;
         rotation=setTimeout(()=>fail(Error('Refreshing the T3 stream session.')),4*60_000);

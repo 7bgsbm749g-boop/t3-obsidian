@@ -3,6 +3,30 @@ import assert from 'node:assert/strict';
 import {watchThread,readInlineEvents} from '../src/conversations/thread-stream';
 import {T3ResponseTooLargeError} from '../src/connection/t3-response-limits';
 import {completedSetup,preparationItem} from './fixtures/worktree-setup';
+import {RouteStatus} from '../src/connection/route-status';
+
+test('stream-only routes stay active until failure or stop, and reconnect with a fresh live lease',async t=>{
+ t.mock.timers.enable({apis:['setTimeout','Date']});const status=new RouteStatus(),sockets:any[]=[];
+ const api=Object.assign(async()=>({ticket:'synthetic'}),{trackConnection:(connection:any)=>status.track('stream-route',connection)});
+ const watcher=watchThread('thread',async()=>({origin:'https://fixture',api}),{item:()=>{},reconnecting:()=>{}},()=>{const socket:any={send(){},close(){socket.onclose?.();}};sockets.push(socket);return socket;},undefined,{afterSequence:()=>0,pollSnapshots:false});
+ const settle=async()=>{for(let n=0;n<12;n++)await Promise.resolve();};
+ try{
+  await settle();assert.equal(status.active('stream-route'),false);sockets[0].onopen();assert.equal(status.active('stream-route'),true);
+  sockets[0].onerror();assert.equal(status.active('stream-route'),false);
+  t.mock.timers.tick(1200);await settle();sockets[1].onopen();assert.equal(status.active('stream-route'),true);
+  watcher.stop();assert.equal(status.active('stream-route'),false);
+ }finally{watcher.stop();t.mock.timers.reset();}
+});
+
+test('bounded replay connections stop contributing activity after synchronization',async()=>{
+ const status=new RouteStatus();let socket:any;
+ const api=Object.assign(async()=>({ticket:'synthetic'}),{trackConnection:(connection:any)=>status.track('replay-route',connection)});
+ const work=readInlineEvents({origin:'https://fixture',api},'thread',0,new AbortController().signal,()=>(socket={send(){},close(){socket.onclose?.();}}) as unknown as WebSocket);
+ for(let n=0;n<12;n++)await Promise.resolve();
+ assert.equal(status.active('replay-route'),false);socket.onopen();assert.equal(status.active('replay-route'),true);
+ socket.onmessage({data:JSON.stringify({_tag:'Chunk',requestId:'1',values:[{kind:'synchronized'}]})});
+ assert.deepEqual(await work,[]);assert.equal(status.active('replay-route'),false);
+});
 
 test('setup uses the native optional subscription, its own cursor, bounded payloads and reconnect',async()=>{
  const sockets:Socket[]=[],sent:any[]=[],items:any[]=[];
