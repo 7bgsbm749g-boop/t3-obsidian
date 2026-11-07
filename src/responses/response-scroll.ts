@@ -17,8 +17,6 @@ export class ResponseScroll {
   private get positions(){return this.state.positions;}
   private file:MarkdownView['file'];
   private disposed=false;
-  private expectedScroll?:{element:HTMLElement;top:number;left:number};
-  private revealScroll?:HTMLElement;
   private frame?:number;
   private stopListeners?:()=>void;
   private observer?:MutationObserver;
@@ -30,27 +28,46 @@ export class ResponseScroll {
     this.height=new ResponseHeightGuard(view,()=>this.updated());
     const window=view.contentEl?.ownerDocument.defaultView;if(!window)return;
     const inside=(event:Event)=>view.contentEl.contains(event.target as Node);
-    const manual=(event:Event)=>{if(event.isTrusted&&view.file===this.file&&inside(event))this.stop();};
+    const manual=(event:Event)=>{if(this.state.following&&event.isTrusted&&view.file===this.file&&this.scroller()?.contains(event.target as Node))this.stop();};
+    const wheel=(event:WheelEvent)=>{if(event.deltaY&&!event.ctrlKey)manual(event);};
     const click=(event:MouseEvent)=>{if(event.isTrusted&&(event.target as Element)?.closest?.('.callout-title, summary'))this.height.clear();};
-    const key=(event:KeyboardEvent)=>{if(['Enter',' '].includes(event.key)&&(event.target as Element)?.closest?.('.callout-title, summary'))this.height.clear();};
+    const key=(event:KeyboardEvent)=>{
+      const target=event.target as Element|null;
+      if(['Enter',' '].includes(event.key)&&target?.closest?.('.callout-title, summary'))this.height.clear();
+      if(!['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key))return;
+      // Space activates the focused Follow button or disclosure, or types text.
+      // Input fields and editor caret navigation are not pane scroll commands.
+      if(target?.closest?.('input, textarea, select')||event.key===' '&&target?.closest?.('button, [role="button"], summary, .callout-title, [contenteditable="true"]'))return;
+      if(!['PageUp','PageDown'].includes(event.key)&&target?.closest?.('[contenteditable="true"]'))return;
+      manual(event);
+    };
+    const pointer=(event:PointerEvent)=>{
+      if(!this.state.following||!event.isTrusted||view.file!==this.file)return;
+      const scroller=this.scroller();
+      if(!scroller||event.target!==scroller||event.button!==0||event.pointerType==='touch')return;
+      const box=scroller.getBoundingClientRect(),left=box.left+scroller.clientLeft;
+      // A vertical scrollbar lies outside the scroller's client content box.
+      if(event.clientX<left||event.clientX>=left+scroller.clientWidth)manual(event);
+    };
     const input=(event:Event)=>{if(event.isTrusted&&inside(event))this.height.clear();};
     const scroll=(event:Event)=>{
       const scroller=this.scroller();
       if(!event.isTrusted||view.file!==this.file||!this.following||event.target!==scroller||!scroller)return;
-      if(this.revealScroll===scroller){this.revealScroll=undefined;this.expectedScroll={element:scroller,top:scroller.scrollTop,left:scroller.scrollLeft};return;}
-      if(this.expectedScroll?.element===scroller&&Math.abs(this.expectedScroll.top-scroller.scrollTop)<1&&Math.abs(this.expectedScroll.left-scroller.scrollLeft)<1)return;
-      this.stop();
+      // Trusted scroll events also come from native anchoring and viewport
+      // changes. Only explicit scroll input above cancels the user's choice.
+      this.updated();
     };
     window.addEventListener('click',click,true);
     window.addEventListener('scroll',scroll,true);
-    window.addEventListener('wheel',manual,{capture:true,passive:true});
+    window.addEventListener('wheel',wheel,{capture:true,passive:true});
     window.addEventListener('touchmove',manual,{capture:true,passive:true});
     window.addEventListener('keydown',key,true);
+    window.addEventListener('pointerdown',pointer,true);
     window.addEventListener('beforeinput',input,true);
     window.addEventListener('resize',this.updated);
     window.visualViewport?.addEventListener('resize',this.updated);
     window.visualViewport?.addEventListener('scroll',this.updated);
-    this.stopListeners=()=>{window.removeEventListener('click',click,true);window.removeEventListener('scroll',scroll,true);window.removeEventListener('wheel',manual,true);window.removeEventListener('touchmove',manual,true);window.removeEventListener('keydown',key,true);window.removeEventListener('beforeinput',input,true);window.removeEventListener('resize',this.updated);window.visualViewport?.removeEventListener('resize',this.updated);window.visualViewport?.removeEventListener('scroll',this.updated);};
+    this.stopListeners=()=>{window.removeEventListener('click',click,true);window.removeEventListener('scroll',scroll,true);window.removeEventListener('wheel',wheel,true);window.removeEventListener('touchmove',manual,true);window.removeEventListener('keydown',key,true);window.removeEventListener('pointerdown',pointer,true);window.removeEventListener('beforeinput',input,true);window.removeEventListener('resize',this.updated);window.visualViewport?.removeEventListener('resize',this.updated);window.visualViewport?.removeEventListener('scroll',this.updated);};
     if(window.MutationObserver){
       this.observer=new window.MutationObserver(records=>{
         const content=records.some(record=>record.type==='childList');
@@ -70,7 +87,7 @@ export class ResponseScroll {
   }
   control(key:string):ScrollControl|undefined {
     const range=this.range(key);if(!range)return;
-    return {active:this.state.following?.key===key&&this.state.following.id===range.id,position:this.positions.get(key)??'top',moving:this.following?.key===key&&this.following.progress!==1};
+    return {active:this.state.following?.key===key&&this.state.following.id===range.id,position:'bottom',moving:this.following?.key===key&&this.following.progress!==1};
   }
   /** Called only by the running block's explicit button, including keyboard
    * activation. Rendering, cursor placement and text clicks never enable it. */
@@ -78,15 +95,14 @@ export class ResponseScroll {
     if(this.state.following?.key===key){this.stop();return;}
     const range=this.range(key);if(!range)return;
     this.stop();this.positions.set(key,'bottom');
-    while(this.positions.size>64)this.positions.delete(this.positions.keys().next().value!);
     this.state.following={id:range.id,key};this.following={...this.state.following,mode:this.mode()};this.notify();this.updated();
   }
   private notify(){const window=this.view.contentEl?.ownerDocument.defaultView;if(window)this.view.contentEl.dispatchEvent(new window.Event(responseScrollChanged,{bubbles:true}));}
   private stop(){
-    const changed=!!this.state.following;this.state.following=undefined;this.pause();if(changed)this.notify();
+    const changed=!!this.state.following;this.state.following=undefined;this.positions.clear();this.pause();if(changed)this.notify();
   }
   private pause(){
-    this.following=undefined;this.expectedScroll=undefined;this.revealScroll=undefined;
+    this.following=undefined;
     const window=this.view.contentEl?.ownerDocument.defaultView;
     if(this.frame!==undefined){window?.cancelAnimationFrame(this.frame);this.frame=undefined;}
     this.resize?.disconnect();this.watched.clear();
@@ -105,14 +121,6 @@ export class ResponseScroll {
     // Native note switches replace the adapter. Keep intent in its pane/note
     // state, while detached or hidden editors must not run scroll jobs.
     if(this.view.file!==this.file||this.view.contentEl?.getClientRects?.().length===0){this.pause();return;}
-    let reset=false,stop=false;
-    for(const fold of Array.from(this.scroller()?.querySelectorAll<HTMLElement>('.callout[data-callout="t3-progress"].is-collapsed')??[])){
-      const key=fold.querySelector<HTMLElement>(':scope > .callout-title .send-to-t3-fold-key')?.dataset.t3Fold;
-      if(!key)continue;
-      reset=this.positions.delete(key)||reset;
-      if(this.state.following?.key===key)stop=true;
-    }
-    if(stop)this.stop();else if(reset)this.notify();
     this.height.updated();
     const retained=this.state.following;
     if(!this.following&&retained&&this.range(retained.key)?.id===retained.id)this.following={...retained,mode:this.mode()};
@@ -130,14 +138,20 @@ export class ResponseScroll {
       const fold=Array.from(scroller.querySelectorAll<HTMLElement>('.callout[data-callout="t3-progress"]')).find(fold=>fold.querySelector<HTMLElement>(':scope > .callout-title .send-to-t3-fold-key')?.dataset.t3Fold===following.key);
       if(!fold){
         // CodeMirror can virtualize a block which was replaced during a stream
-        // update. Reveal its source end, then measure the rendered widget.
+        // update. Reveal its source end only if its estimated bottom overflows.
         if(cm&&this.view.getMode()!=='preview'){
-          const {EditorView}=cmView;
-          this.revealScroll=scroller;
-          cm.dispatch({effects:EditorView.scrollIntoView(Math.max(range.displayFrom,range.displayTo-1),{y:'end',yMargin:inset})});
+          const end=Math.max(range.displayFrom,range.displayTo-1),box=scroller.getBoundingClientRect(),viewport=window.visualViewport;
+          const bottom=Math.min(box.top+scroller.clientTop+scroller.clientHeight,this.view.contentEl.getBoundingClientRect().bottom,viewport?viewport.offsetTop+viewport.height:Infinity);
+          if(cm.documentTop+cm.lineBlockAt(end).bottom*cm.scaleY>bottom-inset){
+            const {EditorView}=cmView;
+            cm.dispatch({effects:EditorView.scrollIntoView(end,{y:'nearest',yMargin:inset})});
+          }
         }
         return;
       }
+      // A new native widget can start collapsed. Presentation restores the
+      // user's choice in a microtask, before this frame checks its final state.
+      if(fold.classList.contains('is-collapsed')){this.stop();return;}
       for(const element of [fold,scroller])if(!this.watched.has(element)){this.resize?.observe(element);this.watched.add(element);}
       for(const element of this.watched)if(element!==fold&&element!==scroller){this.resize?.unobserve(element);this.watched.delete(element);}
       const box=scroller.getBoundingClientRect(),pane=this.view.contentEl.getBoundingClientRect(),viewport=window.visualViewport,foldBox=fold.getBoundingClientRect();
@@ -148,16 +162,19 @@ export class ResponseScroll {
         const rect=bar.getBoundingClientRect();
         if(rect.height>0&&rect.width>0&&rect.right>foldBox.left&&rect.left<foldBox.right&&rect.bottom>=bottom&&rect.top>box.top)bottom=Math.min(bottom,rect.top);
       }
-      const delta=foldBox.bottom-(bottom-inset);
+      // Let the stream fill the visible space before following its growth.
+      // Shrinking content or a larger viewport must not scroll the reader up.
+      const delta=Math.max(0,foldBox.bottom-(bottom-inset));
+      const previous=following.progress??0;
+      if(delta<=0.5){following.progress=1;if(previous!==1)this.notify();return;}
       if(following.started===undefined)following.started=time;
-      const progress=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?1:Math.min(1,(time-following.started)/duration);
+      const progress=previous===1||window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?1:Math.min(1,(time-following.started)/duration);
       // Re-measure the remaining distance every frame: streaming can change
       // the target during the trip. There is no competing smooth-scroll job.
-      const previous=following.progress??0,ease=(t:number)=>1-Math.pow(1-t,3);
+      const ease=(t:number)=>1-Math.pow(1-t,3);
       const fraction=progress===1?1:(ease(progress)-ease(previous))/(1-ease(previous));
       following.progress=progress;
-      if(Math.abs(delta)>0.5)scroller.scrollTop+=delta*fraction;
-      this.expectedScroll={element:scroller,top:scroller.scrollTop,left:scroller.scrollLeft};
+      scroller.scrollTop+=delta*fraction;
       if(progress<1)this.updated();
       else if(previous!==1)this.notify();
     });

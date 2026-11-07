@@ -1,41 +1,57 @@
 # Explicit response follow control
 
-The running response block offers a double-down-arrow button in Live Preview
-and Reading. Each note in a pane starts with follow off. A trusted click, Enter
+The expanded running response block offers a double-down-arrow button at its
+bottom right in Live Preview and Reading, whether follow is on or off. The
+button has its own footer space and does not cover response text or move to
+the header. Each note in a pane starts with follow off. A trusted click, Enter
 or Space on this button enables follow for its exact active fold identity. Text clicks,
 synthetic clicks, cursor proximity and arriving stream updates do not enable it.
 Source mode has no rendered block button; a mode change cancels follow.
 
-Activation immediately starts a 420 ms trip, using the rendered callout's
-bottom edge and the active pane's own scroller. A visible status bar which
-overlaps that block is excluded from the available space. The button moves to the lower
-right with the same edge distances as its initial header placement, then pops
-and glows Obsidian purple. Resize and DOM observations also realign later native
-layout changes, such as opened tools and loaded images, without waiting for new
-response bytes. Reading measures only its own rendered scroller; a retained,
+Activation keeps the viewport where it is when the stream's bottom is already
+visible. The box can grow into the remaining space without scrolling. Once
+its bottom would pass the visible lower edge, Follow scrolls down only enough
+to keep it visible, with an 8 px inset. Shrinking output or a larger viewport
+does not pull the reader up. If the bottom is already below the visible edge
+on activation, a 420 ms trip brings it into view. Subsequent growth is followed
+as needed, using the rendered callout and the active pane's own scroller. A
+visible status bar which overlaps that block is excluded from the available
+space. A virtualized widget is revealed only when its estimated bottom
+overflows, using the minimal native scroll strategy. The button stays at
+the lower right, then pops and glows Obsidian purple when enabled. Resize and
+DOM observations also realign later native layout changes, such as opened tools
+and loaded images, without waiting for new response bytes. Reading measures
+only its own rendered scroller; a retained,
 hidden Source widget cannot supply its target geometry. Reduced-motion clients
-align immediately and omit the button animation.
+make necessary corrections immediately and omit the button animation.
 
-The explicit off action retains the button's current position. Off restores the
+The explicit off action retains the button's bottom position. Off restores the
 normal icon color and leaves the viewport in place. Collapsing the response hides
-the button, cancels follow, and resets its position to the top for the next
-expansion. This also resets a lower button left by an earlier cancellation.
-Manual wheel/touch scroll or a native pane scroll from a scrollbar or keyboard
-turns follow off and retains the current button position. Follow's own scroll
-events do not turn it off. Clicking elsewhere in the app, typing and selecting
-text keep it active. Switching to another note pauses viewport work and retains
-the choice for that note in that pane; returning restores active follow.
-Collapsing turns it off before storing that note's state. Completion, removal,
-mode changes and conflicts also cancel active viewport work. State stays in
-memory, local to the note and pane, and is never written into the note or
+the button and cancels follow. Re-expanding shows it at the bottom with follow
+off. Vertical wheel input, touch scrolling, pane scroll keys and vertical
+scrollbar interaction turn follow off. A generic browser scroll event does not
+prove user input: native anchoring, rendered content growth and mobile viewport
+changes also produce these events, and keep follow enabled. A replacement
+widget's collapsed state is checked in the animation frame after presentation
+has restored the user's expansion choice. Clicking elsewhere in the app, typing
+and selecting text keep it active. Switching to another note pauses viewport
+work and retains the choice for that note in that pane; returning restores
+active follow.
+A collapsed response does not resume following when reopened. Completion,
+removal, mode changes and conflicts also cancel active viewport work. State
+stays in memory, local to the note and pane, and is never written into the note or
 settings. Completed saved history keeps its existing close action and checked
 deletion behavior.
 
-Regression tests cover immediate activation, rendered geometry, layout-only
-growth, a changing target during the animation, repeated off actions retaining their position,
-collapse and re-expansion resetting only the affected response to the top,
-manual scrolling, app clicks and selection, note-switch restoration, response identity, Reading's visible viewport,
-virtualized widget recovery and listener cleanup. The synthetic native fixture
+Existing regression tests cover immediate activation, rendered geometry,
+layout-only growth, a changing target during the animation, repeated off actions,
+collapse and re-expansion, manual scrolling, app clicks and selection, note-switch
+restoration, response identity, Reading's visible viewport, virtualized widget
+recovery and listener cleanup. The activation, position and scroll-event
+expectations now cover the behavior described above, including growth into
+available viewport space and cancellation by explicit scroll input. Native VPS
+verification is recorded with the release evidence; native mobile behavior
+remains unverified. The synthetic native fixture
 is prepared with:
 
 ```

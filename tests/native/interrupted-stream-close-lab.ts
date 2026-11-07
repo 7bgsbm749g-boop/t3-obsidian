@@ -30,7 +30,7 @@ export default class InterruptedStreamCloseLab extends Plugin {
         const view=leaf.view as MarkdownView;
         evidence('state.json',{label,saved:view.getViewData(),display:view.editor.getValue(),disk:await this.app.vault.read(file),events,folds:Array.from(view.contentEl.querySelectorAll<HTMLElement>('.callout[data-callout="t3-progress"]')).map(fold=>{
           const actions=fold.closest('.cm-embed-block')?.querySelector(':scope > .embed-actions'),button=actions?.querySelector<HTMLElement>('.send-to-t3-stream-close');
-          return {key:fold.querySelector<HTMLElement>('.send-to-t3-fold-key')?.dataset.t3Fold,text:fold.innerText,close:button?{hidden:button.hidden,label:button.getAttribute('aria-label')}:null};
+          return {key:fold.querySelector<HTMLElement>('.send-to-t3-fold-key')?.dataset.t3Fold,text:fold.innerText,close:button?{hidden:button.hidden,label:button.getAttribute('aria-label'),display:getComputedStyle(button).display,opacity:getComputedStyle(button).opacity,box:button.getBoundingClientRect().toJSON()}:null};
         })});
       };
       for(const type of ['click','keydown'])this.registerDomEvent(document,type as any,(event:any)=>{events.push({type,trusted:event.isTrusted,key:event.key,target:event.target?.className});if(events.length>100)events.shift();},true);
@@ -40,7 +40,7 @@ export default class InterruptedStreamCloseLab extends Plugin {
           const action=JSON.parse(fs.readFileSync(mailbox,'utf8'));fs.unlinkSync(mailbox);
           if(action.kind==='capture'&&/^[a-z0-9-]+$/.test(action.name)){
             await snapshot(action.name);fs.copyFileSync(path.join(root,'state.json'),path.join(root,`${action.name}.json`));
-            const frame=await require('electron').remote.getCurrentWindow().webContents.capturePage();fs.writeFileSync(path.join(root,`${action.name}.png`),frame.toPNG());
+            const frame=await require('@electron/remote').getCurrentWebContents().capturePage();fs.writeFileSync(path.join(root,`${action.name}.png`),frame.toPNG());
           }
           if(action.kind==='cleanup'){
             manager.dispose();await this.app.vault.delete(file);

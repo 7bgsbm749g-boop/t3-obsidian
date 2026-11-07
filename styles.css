@@ -304,9 +304,12 @@ body .send-to-t3-destination-actions button[hidden] { display: none; }
 /* A default-closed native fold with the H6-sized thread/status header.
    Its blockquote boundary, rather than heading level, bounds the history. */
 .callout[data-callout="t3-progress"] {
+  --send-to-t3-stream-actions-space: 0px;
+  --send-to-t3-stream-actions-footer: 0px;
   background: transparent;
   border: 0;
   padding: 0.35em 0.5em;
+  padding-block-end: calc(0.35em + var(--send-to-t3-stream-actions-footer));
   margin: 0.7em 0;
 }
 .callout[data-callout="t3-progress"] > .callout-title {
@@ -315,6 +318,7 @@ body .send-to-t3-destination-actions button[hidden] { display: none; }
   font-family: var(--h6-font);
   color: var(--h6-color, var(--text-muted));
   gap: 0.4em;
+  padding-inline-end: var(--send-to-t3-stream-actions-space, 0px);
   cursor: pointer;
 }
 /* Keep the inner title and Markdown bold at the same intermediate weight. */
@@ -329,7 +333,7 @@ body .send-to-t3-response-dragging, .send-to-t3-response-dragging * { cursor: gr
 .send-to-t3-response-drop[hidden] { display: none; }
 .send-to-t3-response-drag-ghost { position: fixed; z-index: 10001; pointer-events: none; padding: 5px 9px; border-radius: 5px; background: var(--background-primary); border: 1px solid var(--interactive-accent); color: var(--text-normal); font-size: var(--font-ui-small); box-shadow: var(--shadow-s); }
 .callout[data-callout="t3-progress"].send-to-t3-stream-stoppable { position: relative; }
-.send-to-t3-stream-stoppable.send-to-t3-stop-visible > .callout-title { padding-inline-end: 56px; }
+.send-to-t3-stream-stoppable.send-to-t3-stop-visible > .callout-title { padding-inline-end: calc(var(--send-to-t3-stream-actions-space, 0px) + 32px); }
 .send-to-t3-stream-stop { position: absolute; top: var(--send-to-t3-stop-center, 1em); right: 4px; transform: translateY(-50%); z-index: 3; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; min-width: 0; min-height: 0; margin: 0; padding: 0; color: var(--text-muted); background: transparent; border: 0; border-radius: var(--radius-s, 4px); box-shadow: none; cursor: pointer; touch-action: manipulation; }
 body .send-to-t3-stream-stop[hidden] { display: none; }
 .send-to-t3-stream-stop svg { width: 14px; height: 14px; fill: currentColor; }
@@ -343,20 +347,35 @@ body .send-to-t3-stream-stop[hidden] { display: none; }
   top: var(--send-to-t3-header-center);
   transform: translateY(-50%);
 }
-.send-to-t3-stream-actions .edit-block-button:not(.send-to-t3-stream-close):not(.send-to-t3-stream-follow):not(.send-to-t3-stream-sign-in),
-body .send-to-t3-stream-close[hidden], .send-to-t3-stream-follow[hidden], .send-to-t3-stream-sign-in[hidden] { display: none; }
+/* Native and mobile action styles must not put hidden controls back on screen. */
+.markdown-source-view.mod-cm6 .embed-actions.send-to-t3-stream-actions > .edit-block-button:not(.send-to-t3-stream-close):not(.send-to-t3-stream-follow):not(.send-to-t3-stream-sign-in),
+.markdown-source-view.mod-cm6 .embed-actions.send-to-t3-stream-actions > .edit-block-button[hidden],
+.markdown-source-view.mod-cm6 .embed-actions.send-to-t3-stream-actions > .send-to-t3-stream-sign-in[hidden],
+.callout[data-callout="t3-progress"] > .send-to-t3-reading-actions.send-to-t3-stream-actions > [hidden] { display: none; }
+/* The toolbar owns placement; cloned native actions must not position themselves. */
+.markdown-source-view.mod-cm6 .embed-actions.send-to-t3-stream-actions > .edit-block-button,
+.send-to-t3-reading-actions > .edit-block-button { position: static; opacity: 1; }
 .send-to-t3-stream-sign-in { cursor: pointer; min-height: 28px; padding: 3px 12px; border-radius: 4px; white-space: nowrap; font-size: var(--font-ui-small); }
 .markdown-source-view.mod-cm6 .embed-actions.send-to-t3-stream-auth-required { opacity: 1; }
-.send-to-t3-stream-close[aria-disabled="true"] { pointer-events: none; opacity: 0.5; }
+.markdown-source-view.mod-cm6 .embed-actions.send-to-t3-stream-actions > .send-to-t3-stream-close[aria-disabled="true"] { pointer-events: none; opacity: 0.5; }
+/* Completed history exposes Close anywhere over the block, folded or expanded.
+   Keyboard focus also reveals it; devices without hover require expansion. */
+@media (hover: hover) {
+  .markdown-source-view.mod-cm6 .cm-embed-block:not(:hover) > .send-to-t3-stream-actions .send-to-t3-stream-close:not(:focus-visible) { opacity: 0; pointer-events: none; }
+}
+@media (hover: none) {
+  .markdown-source-view.mod-cm6 .cm-embed-block.send-to-t3-stream-collapsed > .embed-actions.send-to-t3-stream-actions .send-to-t3-stream-close { display: none; }
+}
 .markdown-source-view.mod-cm6 .embed-actions.send-to-t3-stream-actions,
 .send-to-t3-reading-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   top: var(--send-to-t3-stream-top-center);
   transform: translateY(-50%);
   opacity: 1;
   visibility: visible;
 }
-.markdown-source-view.mod-cm6 .embed-actions.send-to-t3-stream-actions-moving,
-.send-to-t3-reading-actions.send-to-t3-stream-actions-moving { transition: top 420ms cubic-bezier(.33, 1, .68, 1); }
 .markdown-source-view.mod-cm6 .embed-actions.send-to-t3-stream-actions-bottom,
 .send-to-t3-reading-actions.send-to-t3-stream-actions-bottom { top: var(--send-to-t3-stream-bottom-center); }
 .callout[data-callout="t3-progress"].send-to-t3-has-reading-actions { position: relative; }

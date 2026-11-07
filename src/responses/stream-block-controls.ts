@@ -12,7 +12,7 @@ import {installStreamStopControls} from './stream-stop-control';
 export function installStreamBlockControls(app:App,root:Document,icon:(element:HTMLElement,name:string)=>void,onError:(error:unknown)=>void,onSignIn:()=>void=()=>{},onStop?:(id:string,view:MarkdownView)=>Promise<void>):()=>void {
   const {setInterval,clearInterval}=clockForDocument(root);
   const stopDrag=installResponseDrag(app,root,icon,onError);
-  const owned=new Map<HTMLElement,{close:HTMLElement;follow:HTMLElement;signIn:HTMLButtonElement;reading:boolean}>();
+  const owned=new Map<HTMLElement,{close:HTMLElement;follow:HTMLElement;signIn:HTMLButtonElement;reading:boolean;fold:HTMLElement}>();
   const watched=new Set<Element>();
   let queued=false,disposed=false;
   const key=(fold:Element)=>fold.querySelector<HTMLElement>(':scope > .callout-title .send-to-t3-fold-key')?.dataset.t3Fold;
@@ -47,7 +47,7 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
         const follow=native?native.cloneNode(false) as HTMLElement:root.win.createDiv();follow.classList.add('edit-block-button','send-to-t3-stream-follow');follow.setAttribute('role','button');follow.tabIndex=0;icon(follow,'chevrons-down');actions.appendChild(follow);
         const signIn=root.win.createEl('button');signIn.type='button';signIn.className='send-to-t3-stream-sign-in';signIn.textContent='Sign in';signIn.setAttribute('aria-label','Sign in to T3 to resume this response');actions.appendChild(signIn);
         signIn.addEventListener('click',event=>{event.preventDefault();event.stopImmediatePropagation();onSignIn();});
-        controls={close:button,follow,signIn,reading};owned.set(actions,controls);
+        controls={close:button,follow,signIn,reading,fold};owned.set(actions,controls);
         const run=()=>{
           if(button.getAttribute('aria-disabled')==='true')return;
           try{
@@ -69,6 +69,7 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
         follow.addEventListener('click',toggle);
         follow.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' ')toggle(event);});
       }
+      if(controls.fold!==fold){controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');controls.fold=fold;}
       const id=key(fold),view=viewFor(fold);
       // This is only a visibility hint. Use the compact native document for
       // it; the click handler above rechecks canonical saved bytes before any
@@ -82,19 +83,24 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
       controls.follow.hidden=!state||needsSignIn||fold.classList.contains('is-collapsed');
       const label=state?.active?'Stop following response':'Follow response';
       controls.follow.setAttribute('aria-label',label);controls.follow.setAttribute('title',label);controls.follow.setAttribute('aria-pressed',String(!!state?.active));
-      actions.classList.toggle('send-to-t3-stream-actions-bottom',state?.position==='bottom');
+      const bottom=!controls.follow.hidden;
+      actions.classList.toggle('send-to-t3-stream-actions-bottom',bottom);
       actions.classList.toggle('send-to-t3-stream-actions-active',!!state?.active);
-      actions.classList.toggle('send-to-t3-stream-actions-moving',!!state?.moving);
       const heading=fold.querySelector<HTMLElement>(':scope > .callout-title'),parent=(actions.offsetParent as HTMLElement|null)??fold;
       if(heading){
+        // Follow has its own footer, including while off. Close and sign-in
+        // stay at the header, with space reserved before measuring its title.
+        const toolbar=actions.getBoundingClientRect(),width=bottom?0:toolbar.width;
+        fold.style.setProperty('--send-to-t3-stream-actions-space',`${width>0?width+8:0}px`);
+        fold.style.setProperty('--send-to-t3-stream-actions-footer',`${bottom?toolbar.height+8:0}px`);
         const header=heading.getBoundingClientRect(),box=fold.getBoundingClientRect(),container=parent.getBoundingClientRect(),edge=header.top+header.height/2-box.top;
         actions.style.setProperty('--send-to-t3-stream-top-center',`${header.top+header.height/2-container.top-parent.clientTop}px`);
-        actions.style.setProperty('--send-to-t3-stream-bottom-center',`${box.bottom-edge-container.top-parent.clientTop}px`);
+        actions.style.setProperty('--send-to-t3-stream-bottom-center',`${box.bottom-(bottom?toolbar.height/2+4:edge)-container.top-parent.clientTop}px`);
       }
       if(!watched.has(fold)){resize?.observe(fold);watched.add(fold);}
     }
     for(const element of watched)if(!element.isConnected){resize?.unobserve(element);watched.delete(element);}
-    for(const [actions,controls] of owned)if(!live.has(actions)){controls.close.remove();controls.follow.remove();controls.signIn.remove();actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading){actions.parentElement?.classList.remove('send-to-t3-has-reading-actions');actions.remove();}actions.closest('.cm-embed-block')?.classList.remove('send-to-t3-stream-collapsed');owned.delete(actions);}
+    for(const [actions,controls] of owned)if(!live.has(actions)){controls.close.remove();controls.follow.remove();controls.signIn.remove();controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading){actions.parentElement?.classList.remove('send-to-t3-has-reading-actions');actions.remove();}actions.closest('.cm-embed-block')?.classList.remove('send-to-t3-stream-collapsed');owned.delete(actions);}
   };
   const schedule=()=>{if(!queued&&!disposed){queued=true;queueMicrotask(refresh);}};
   const resize=typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(schedule);
@@ -114,5 +120,5 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
   root.addEventListener(responseScrollChanged,schedule);
   const observer=new MutationObserver(records=>{if(records.some(record=>record.type==='childList'||record.target.instanceOf(Element)&&record.target.matches('.callout[data-callout="t3-progress"]')&&((record.oldValue??'').split(/\s+/).includes('is-collapsed')!==record.target.classList.contains('is-collapsed'))))schedule();});observer.observe(root.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class'],attributeOldValue:true});
   const timer=setInterval(refresh,1000);refresh();
-  return ()=>{disposed=true;stopControls();stopDrag();observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener(responseScrollChanged,schedule);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('mousedown',pointer,true);root.removeEventListener('click',click,true);for(const [actions,controls] of owned){controls.close.remove();controls.follow.remove();controls.signIn.remove();actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading){actions.parentElement?.classList.remove('send-to-t3-has-reading-actions');actions.remove();}actions.closest('.cm-embed-block')?.classList.remove('send-to-t3-stream-collapsed');}owned.clear();};
+  return ()=>{disposed=true;stopControls();stopDrag();observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener(responseScrollChanged,schedule);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('mousedown',pointer,true);root.removeEventListener('click',click,true);for(const [actions,controls] of owned){controls.close.remove();controls.follow.remove();controls.signIn.remove();controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading){actions.parentElement?.classList.remove('send-to-t3-has-reading-actions');actions.remove();}actions.closest('.cm-embed-block')?.classList.remove('send-to-t3-stream-collapsed');}owned.clear();};
 }

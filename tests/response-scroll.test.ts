@@ -16,17 +16,17 @@ function fixture(state?:ResponseScrollState){
   const window={MutationObserver:class{constructor(callback:(records:any[])=>void){mutations=callback;}observe(_target:any,options:MutationObserverInit){observed=options;}disconnect(){mutations=undefined;}},Event:class{constructor(public type:string){}},getSelection:()=>({isCollapsed:!selected,anchorNode:{kind:'response'}}),addEventListener:add,removeEventListener:remove,matchMedia:()=>({matches:reduced}),requestAnimationFrame:(fn:(time:number)=>void)=>{frames.set(++sequence,fn);return sequence;},cancelAnimationFrame:(id:number)=>frames.delete(id),visualViewport:{offsetTop:0,height:900,addEventListener:add,removeEventListener:remove}};
   const saved=`Before\n\n${responseAnchor(id)}\n\nBetween\n\n${responseAnchor(other)}\n\nAfter`;
   let responses:LocalResponse[]=[{id,body:body(key)},{id:other,body:body(otherKey)}],projection=projectResponses(saved,responses);
-  const scroller={scrollTop:200,scrollLeft:0,clientTop:0,clientHeight:600,getBoundingClientRect:()=>({top:100,bottom:700}),querySelectorAll:(selector:string)=>rendered?folds.filter(fold=>!selector.includes('is-collapsed')||fold.collapsed):[]};
-  const fold=(key:string)=>({collapsed:false,matches:(selector:string)=>selector==='.callout[data-callout="t3-progress"]',getBoundingClientRect:()=>({bottom:tail-(scroller.scrollTop-200),left:100,right:700}),querySelector:()=>({dataset:{t3Fold:key}})});
+  const scroller={scrollTop:200,scrollLeft:0,clientTop:0,clientLeft:0,clientWidth:600,clientHeight:600,contains:(el:any)=>el?.kind!=='outside',getBoundingClientRect:()=>({top:100,bottom:700,left:100,right:700}),querySelectorAll:(selector:string)=>rendered?folds.filter(fold=>!selector.includes('is-collapsed')||fold.collapsed):[]};
+  const fold=(key:string)=>({collapsed:false,get classList(){return {contains:(name:string)=>name==='is-collapsed'&&this.collapsed};},matches:(selector:string)=>selector==='.callout[data-callout="t3-progress"]',getBoundingClientRect:()=>({bottom:tail-(scroller.scrollTop-200),left:100,right:700}),querySelector:()=>({dataset:{t3Fold:key}})});
   const folds=[fold(key),fold(otherKey)];
-  const target=(kind:'response'|'outside'|'control'|'follow'='response')=>({nodeType:1,kind,closest:(selector:string)=>selector==='.send-to-t3-stream-follow'&&kind==='follow'?{}:null});
+  const target=(kind:'response'|'outside'|'control'|'follow'='response')=>({nodeType:1,kind,closest:(selector:string)=>kind==='follow'&&(selector==='.send-to-t3-stream-follow'||selector.includes('button'))?{}:null});
   const effects:any[]=[],notifications:any[]=[];
-  const cm={scrollDOM:scroller,state:EditorState.create({doc:projection.display}),dispatch:(spec:any)=>effects.push(spec)};
+  const cm={scrollDOM:scroller,documentTop:0,scaleY:1,lineBlockAt:()=>({bottom:tail-(scroller.scrollTop-200)}),state:EditorState.create({doc:projection.display}),dispatch:(spec:any)=>effects.push(spec)};
   const document={defaultView:window,addEventListener:add,removeEventListener:remove,querySelectorAll:()=>[] as any[]};
   const contentEl={ownerDocument:document,isConnected:true,contains:(el:any)=>el?.kind!=='outside',querySelector:(selector:string)=>selector.includes('is-live-preview')?live?{}:null:scroller,querySelectorAll:(selector:string)=>rendered?folds.filter(fold=>!selector.includes('is-collapsed')||fold.collapsed):[],getBoundingClientRect:()=>({bottom:800}),dispatchEvent:(event:any)=>{notifications.push(event);return true;}};
   const view:any={file:{path:'Response.md'},contentEl,editor:{cm},getMode:()=>mode};
   const scroll=new ResponseScroll(view,()=>projection,state);
-  const event=(type:string,kind:Parameters<typeof target>[0]='response',extra:any={})=>{for(const fn of handlers.get(type)??[])fn({isTrusted:true,button:0,target:target(kind),...extra});};
+  const event=(type:string,kind:Parameters<typeof target>[0]='response',extra:any={})=>{for(const fn of handlers.get(type)??[])fn({isTrusted:true,button:0,deltaY:type==='wheel'?1:0,target:target(kind),...extra});};
   const update=(binding=id,text='New response tail')=>{responses=responses.map(response=>response.id===binding?{id:binding,body:body(binding===id?key:otherKey,text)}:response);projection=projectResponses(saved,responses);cm.state=EditorState.create({doc:projection.display});scroll.updated();};
   const flush=(at=time+=16)=>{const pending=[...frames.values()];frames.clear();for(const fn of pending)fn(at);};
   return {scroll,view,event,update,flush,effects,frames,handlers,scroller,notifications,observed:()=>observed,terminal:()=>{responses=responses.map(response=>response.id===id?{...response,followable:false}:response);projection=projectResponses(saved,responses);scroll.updated();},collapse:(index=0,value=true)=>{folds[index].collapsed=value;mutations?.([{type:'attributes',attributeName:'class',target:folds[index]}]);},mode:(value:string)=>{mode=value;},selected:(value:boolean)=>{selected=value;},rendered:(value:boolean)=>{rendered=value;},reduced:(value:boolean)=>{reduced=value;},grow:(pixels:number)=>{tail+=pixels;scroll.updated();},remove:()=>{projection=projectResponses(saved,[]);scroll.updated();}};
@@ -37,7 +37,7 @@ test('interruption cancels a pending follow frame even when its active key and p
  h.scroll.toggle(key);h.grow(100);h.flush();assert.equal(h.scroller.scrollTop,200);assert.ok(h.scroll.control(otherKey));h.scroll.dispose();
 });
 test('stream updates and text or synthetic clicks never enable follow',()=>{
-  const h=fixture();h.update();h.event('click');h.event('click','follow',{isTrusted:false});h.flush();assert.equal(h.scroller.scrollTop,200);assert.deepEqual(h.scroll.control(key),{active:false,position:'top',moving:false});h.scroll.dispose();
+  const h=fixture();h.update();h.event('click');h.event('click','follow',{isTrusted:false});h.flush();assert.equal(h.scroller.scrollTop,200);assert.deepEqual(h.scroll.control(key),{active:false,position:'bottom',moving:false});h.scroll.dispose();
 });
 test('inactive scroll helpers never force layout during native viewport mutations',()=>{
  const h=fixture();
@@ -49,8 +49,12 @@ test('inactive scroll helpers never force layout during native viewport mutation
 test('explicit activation aligns immediately without waiting for another response update or changing editor state',()=>{
   const h=fixture(),before=h.view.editor.cm.state;h.scroll.toggle(key);h.flush();assert.equal(h.scroller.scrollTop,608);assert.equal(h.view.editor.cm.state,before);assert.equal(h.effects.length,0);assert.deepEqual(h.scroll.control(key),{active:true,position:'bottom',moving:false});h.scroll.dispose();
 });
-test('large rendered widgets and layout-only growth keep their bottom aligned',()=>{
-  const h=fixture();h.scroll.toggle(key);h.flush();h.grow(2400);h.flush();assert.equal(h.scroller.scrollTop,3008);h.scroll.dispose();
+test('a visible stream grows into spare space before follow scrolls, and shrinkage never pulls the reader up',()=>{
+  const h=fixture();h.grow(-600);h.scroll.toggle(key);h.flush();assert.equal(h.scroller.scrollTop,200);
+  h.grow(100);h.flush();assert.equal(h.scroller.scrollTop,200);
+  h.grow(200);h.flush();assert.equal(h.scroller.scrollTop,308);
+  h.grow(2400);h.flush();assert.equal(h.scroller.scrollTop,2708);
+  h.grow(-500);h.flush();assert.equal(h.scroller.scrollTop,2708);h.scroll.dispose();
 });
 test('activation animates to the current target, including growth during the trip',()=>{
   const h=fixture();h.reduced(false);h.scroll.toggle(key);h.flush(0);assert.equal(h.scroller.scrollTop,200);h.flush(210);assert.ok(h.scroller.scrollTop>200&&h.scroller.scrollTop<608);h.grow(500);h.flush(420);assert.equal(h.scroller.scrollTop,1108);assert.equal(h.frames.size,0);h.scroll.dispose();
@@ -64,22 +68,22 @@ test('explicit off retains the bottom position and preserves the current viewpor
   }
   h.scroll.dispose();
 });
-test('collapsing cancels pending follow and reopens at the top without resuming or moving the viewport',()=>{
+test('collapsing cancels pending follow and reopens at the bottom without resuming or moving the viewport',()=>{
   for(const mode of ['source','preview']){
     const h=fixture();h.mode(mode);h.reduced(false);h.scroll.toggle(key);h.flush(0);
     assert.equal(h.observed()?.attributes,true);assert.deepEqual(h.observed()?.attributeFilter,['class']);
-    h.collapse();assert.equal(h.frames.size,0);assert.deepEqual(h.scroll.control(key),{active:false,position:'top',moving:false});
+    h.collapse();h.flush();assert.equal(h.frames.size,0);assert.deepEqual(h.scroll.control(key),{active:false,position:'bottom',moving:false});
     const top=h.scroller.scrollTop;h.collapse(0,false);h.grow(800);h.flush();
-    assert.equal(h.scroller.scrollTop,top);assert.deepEqual(h.scroll.control(key),{active:false,position:'top',moving:false});h.scroll.dispose();
+    assert.equal(h.scroller.scrollTop,top);assert.deepEqual(h.scroll.control(key),{active:false,position:'bottom',moving:false});h.scroll.dispose();
   }
 });
-test('collapsing resets a retained bottom position and only resets that response',()=>{
+test('collapsing another response preserves active follow and keeps both buttons at the bottom',()=>{
   const h=fixture();h.scroll.toggle(key);h.flush();h.event('wheel');
   assert.deepEqual(h.scroll.control(key),{active:false,position:'bottom',moving:false});
-  h.scroll.toggle(otherKey);h.flush();const top=h.scroller.scrollTop,notifications=h.notifications.length;
-  h.collapse();assert.ok(h.notifications.length>notifications);assert.deepEqual(h.scroll.control(key),{active:false,position:'top',moving:false});
+  h.scroll.toggle(otherKey);h.flush();const top=h.scroller.scrollTop;
+  h.collapse();h.flush();assert.deepEqual(h.scroll.control(key),{active:false,position:'bottom',moving:false});
   assert.deepEqual(h.scroll.control(otherKey),{active:true,position:'bottom',moving:false});
-  h.collapse(0,false);h.flush();assert.equal(h.scroller.scrollTop,top);assert.equal(h.scroll.control(key)?.position,'top');h.scroll.dispose();
+  h.collapse(0,false);h.flush();assert.equal(h.scroller.scrollTop,top);assert.equal(h.scroll.control(key)?.position,'bottom');h.scroll.dispose();
 });
 test('wheel and touch scroll cancel pending follow and preserve its button position',()=>{
   for(const type of ['wheel','touchmove']){const h=fixture();h.scroll.toggle(key);h.event(type);h.flush();assert.equal(h.scroller.scrollTop,200);assert.deepEqual(h.scroll.control(key),{active:false,position:'bottom',moving:false});h.grow(800);h.flush();assert.equal(h.scroller.scrollTop,200);h.scroll.dispose();}
@@ -90,12 +94,16 @@ test('app clicks, pointer input, typing and text selection retain follow',()=>{
     assert.equal(h.scroll.control(key)?.active,true);assert.equal(h.scroller.scrollTop,608);h.grow(800);h.flush();assert.equal(h.scroller.scrollTop,1408);h.scroll.dispose();
   }
 });
-test('native scroll events from follow keep it active; scrollbar or keyboard scrolling disables it',()=>{
-  const h=fixture();h.scroll.toggle(key);h.flush();h.event('scroll','response',{target:h.scroller});
-  assert.equal(h.scroll.control(key)?.active,true);
-  h.scroller.scrollTop-=100;h.event('scroll','response',{target:h.scroller});
-  assert.deepEqual(h.scroll.control(key),{active:false,position:'bottom',moving:false});const top=h.scroller.scrollTop;
-  h.grow(800);h.flush();assert.equal(h.scroller.scrollTop,top);h.scroll.dispose();
+test('native anchoring retains follow while explicit keyboard or scrollbar input cancels it',()=>{
+  for(const kind of ['keyboard','scrollbar'] as const){
+    const h=fixture();h.scroll.toggle(key);h.flush();h.event('scroll','response',{target:h.scroller});
+    h.scroller.scrollTop-=100;h.event('scroll','response',{target:h.scroller});
+    assert.equal(h.scroll.control(key)?.active,true);h.flush();assert.equal(h.scroller.scrollTop,608);
+    if(kind==='keyboard')h.event('keydown','response',{key:'PageUp'});
+    else h.event('pointerdown','response',{target:h.scroller,clientX:702,pointerType:'mouse'});
+    assert.deepEqual(h.scroll.control(key),{active:false,position:'bottom',moving:false});const top=h.scroller.scrollTop;
+    h.grow(800);h.flush();assert.equal(h.scroller.scrollTop,top);h.scroll.dispose();
+  }
 });
 test('note navigation retains active follow and restores it with a fresh controller',()=>{
   const state:ResponseScrollState={positions:new Map()},h=fixture(state);h.scroll.toggle(key);h.flush();
@@ -103,8 +111,8 @@ test('note navigation retains active follow and restores it with a fresh control
   assert.equal(h.frames.size,0);assert.equal(state.following?.key,key);
   const returned=fixture(state);returned.scroll.updated();returned.flush();
   assert.deepEqual(returned.scroll.control(key),{active:true,position:'bottom',moving:false});assert.equal(returned.scroller.scrollTop,608);
-  returned.collapse();returned.scroll.dispose();
-  const reopened=fixture(state);reopened.scroll.updated();reopened.flush();assert.deepEqual(reopened.scroll.control(key),{active:false,position:'top',moving:false});assert.equal(reopened.scroller.scrollTop,200);reopened.scroll.dispose();
+  returned.collapse();returned.flush();returned.scroll.dispose();
+  const reopened=fixture(state);reopened.scroll.updated();reopened.flush();assert.deepEqual(reopened.scroll.control(key),{active:false,position:'bottom',moving:false});assert.equal(reopened.scroller.scrollTop,200);reopened.scroll.dispose();
 });
 test('an editor detached during a pending frame pauses without losing follow intent',()=>{
   const h=fixture();h.scroll.toggle(key);h.view.contentEl.isConnected=false;h.flush();
