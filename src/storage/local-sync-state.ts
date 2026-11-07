@@ -65,3 +65,14 @@ export function localSyncReady(app:unknown,path?:string):boolean {
     return path===undefined?status==='synced':noteReady(app,sync,path)??status==='synced';
   }catch{return false;}
 }
+
+/** Evidence for diagnostics; an external transport has no plugin freshness API. */
+export function localSyncEvidence(app:unknown,path?:string){
+  try{
+    if(!object(app)||!object(app.internalPlugins))return {provider:'external-or-none',freshness:'unknown',localSaveAllowed:localSyncReady(app,path)};
+    const plugins=app.internalPlugins,registered=object(plugins.plugins)&&object(plugins.plugins.sync)?plugins.plugins.sync:undefined;
+    const sync=typeof plugins.getEnabledPluginById==='function'?callMember(plugins,'getEnabledPluginById','sync'):registered?.enabled?registered.instance:undefined;
+    if(!object(sync)||!sync.vaultId)return {provider:'external-or-none',freshness:'unknown',localSaveAllowed:localSyncReady(app,path)};
+    return {provider:'obsidian-core',status:typeof sync.getStatus==='function'?callMember(sync,'getStatus'):undefined,localSaveAllowed:localSyncReady(app,path)};
+  }catch{return {provider:'unknown',freshness:'unknown',localSaveAllowed:false};}
+}

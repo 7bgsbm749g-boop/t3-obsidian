@@ -24,8 +24,8 @@ import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../sh
 import {SendPreviews} from '../responses/send-preview';
 import {savedToDisplay} from '../responses/native-response-projection';
 import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,explicitSelectionText,rememberResponse,rememberNoteEdits,confirmSmartSend,moveSmartNotes,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from '../notes/smart-send';
-import {noteIdentity,withNoteIdentity} from '../notes/note-identity';
-import {retainedLocalFinal,restoredLocalFinal} from '../responses/local-final-cache';
+import {noteIdentityRanges,withoutNoteIdentity} from '../notes/note-identity';
+import {retainedLocalFinal,restoredLocalFinal,localFinalIdentity} from '../responses/local-final-cache';
 import {HtmlResultStore} from '../responses/html-result-store';
 import {HtmlResultViews} from '../responses/html-result-view';
 import {hasResponseMarkers} from '../conversations/inline-thread';
@@ -33,8 +33,8 @@ import {responseIds,responseFrame} from '../responses/response-container';
 import {noteSteeringTarget} from '../notes/note-steering';
 import {interruptStoppedResponse} from '../responses/response-stop';
 import {localResponseBindings,localResponseRange} from '../responses/local-response-binding';
-import {loadResponseBindingData,mergeResponseBindingData,updateResponseBindingData,responseBindingRequests,type ResponseBindingData} from '../responses/response-binding-data';
-import {localSyncReady} from '../storage/local-sync-state';
+import {loadResponseBindingData,mergeResponseBindingData,updateResponseBindingData,completeResponseBinding,responseBindingRequests,type ResponseBindingData} from '../responses/response-binding-data';
+import {localSyncReady,localSyncEvidence} from '../storage/local-sync-state';
 import {rewriteReplyReferences} from '../responses/reply-assets';
 import {isClientCommand} from './client-command';
 import {markdownCodeCacheStatus,escapeReplyHtml} from '../responses/reply-html';
@@ -75,7 +75,7 @@ import {captureCursorInsertion,resolveCursorInsertion,type CursorInsertion} from
 import {continueQuestionAnswer} from '../interaction/question-continuation';
 import {validateNoteCommand,validateAgentCommand,type NoteCommand,type NoteCommandResult} from '../notes/note-command';
 import {isFolderCommand,executeFolderCommand,type FolderCommand} from '../projects/folder-command';
-import {configureDiagnostics,logEvent,logFailure,type EventJournal} from './diagnostics';
+import {configureDiagnostics,logEvent,logFailure,EventJournal,diagnosticPreferences,diagnosticCategory,connectionDiagnosticPolicy,type DiagnosticCategory} from './diagnostics';
 import {clearVaultDiagnostics} from './disabled-diagnostics';
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from '../connection/cloud';
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from '../connection/native-account';
@@ -83,7 +83,7 @@ import {pair,readDirect,commandId,environmentApi,endpoint,type PairedConnection,
 import {environmentAccess} from '../connection/environment-access';
 import {setIcon, App, FileSystemAdapter, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type SettingDefinition,type SettingDefinitionItem,type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, MarkdownRenderer,  requestUrl } from 'obsidian';
 import { Buffer } from 'buffer/';
-import { deviceState,retainDeviceState,clearDeviceDiagnostics } from '../storage/device-state';
+import { deviceState,retainDeviceState } from '../storage/device-state';
 import {nativeStoppedStore} from '../responses/native-stop-store';
 import { downloadImage,nativeAccountFetch } from '../connection/network';
 import {ensureVaultIdentityRecord} from './vault-identity';
@@ -236,6 +236,13 @@ export default class SendToT3 extends Plugin {
   private noteCommandOpening?:Promise<void>;
   private eventLocalEnvironmentId?:string;
   diagnostics?:EventJournal;
+  diagnosticLogging=diagnosticPreferences(undefined);
+  private diagnosticPreferenceKey(){return `t3-diagnostic-preferences-v1:${this.settings.vaultId}:${this.deviceId}`;}
+  setDiagnosticLogging(category:DiagnosticCategory,enabled:boolean){
+    const preferences={...this.diagnosticLogging,[category]:enabled};
+    this.app.saveLocalStorage(this.diagnosticPreferenceKey(),preferences);this.diagnosticLogging=preferences;
+  }
+  private diagnosticLog(since?:string){const diagnostics=this.diagnostics?.snapshot(since);return {...sendFailureLog(this.app.loadLocalStorage(this.failureKey()),pluginManifest.version,this.deviceId,since),...(diagnostics?{diagnostics:{...diagnostics,enabled:{...this.diagnosticLogging},responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app)}}:{})};}
   private failedRequests=new WeakSet<Request>();
   private connectionRecovery?:ConnectionRecovery;
   private connectionRecoveryTarget(target:ResponseStorageTarget){return JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);}
@@ -356,16 +363,20 @@ export default class SendToT3 extends Plugin {
     const restoreResponseBindings=JSON.stringify(loadResponseBindingData(data?.responseBindings))!==JSON.stringify(this.responseBindingReplica);
     const restoreSmartSend=JSON.stringify(loadSmartSend(data?.smartSend))!==JSON.stringify(this.smartReplica);
     const restoreFolderLinks=JSON.stringify(loadFolderLinks(data))!==JSON.stringify(this.settings.folderLinks)||JSON.stringify(loadFolderLinkChanges(data?.folderLinkChanges))!==JSON.stringify(this.folderLinkReplica);
-    // General logging is disabled for the performance isolation trial. Do not create
-    // a journal, operation wrappers, diagnostic listeners or flush timers.
-    configureDiagnostics();
-    try{await clearDeviceDiagnostics(this.settings.vaultId);}catch(error){new Notice(message(error));}
+    // Reuse the device journal for opted-in connection, Follow and response diagnostics.
+    // General operation/chunk logging and synced log publication stay disabled.
+    this.diagnosticLogging=diagnosticPreferences(this.app.loadLocalStorage(this.diagnosticPreferenceKey()));
+    const diagnosticKey=`diagnostics:${this.settings.vaultId}:${this.deviceId}`;
+    this.diagnostics=new EventJournal({load:()=>deviceState(diagnosticKey),save:state=>deviceState(diagnosticKey,state),id:randomId,context:{deviceId:this.deviceId,pluginVersion:pluginManifest.version,platform:Platform.isMobile?'mobile':'desktop'}},{...connectionDiagnosticPolicy,retain:event=>diagnosticCategory(event)!==undefined,accept:event=>{const category=diagnosticCategory(event);return !!category&&this.diagnosticLogging[category];}});
+    await this.diagnostics.load();configureDiagnostics(this.diagnostics);
     const adapter=this.app.vault?.adapter;
     if(adapter&&typeof adapter.exists==='function'&&typeof adapter.remove==='function'){
       try{await clearVaultDiagnostics(adapter,this.app.vault.configDir);}catch(error){new Notice(`Could not clear plugin logs: ${message(error)}`);}
     }
-    this.addCommand({id:'export-diagnostics',name:'Export send failure log…',callback:()=>void this.exportDiagnostics().catch(error=>new Notice(message(error)))});
+    this.addCommand({id:'export-diagnostics',name:'Export diagnostic log…',callback:()=>void this.exportDiagnostics().catch(error=>new Notice(message(error)))});
     if(typeof window!=='undefined'&&typeof window.addEventListener==='function'){
+      const root=workspaceDocument(this.app);this.registerDomEvent(root,'visibilitychange',()=>logEvent('connection.client-state',{cause:'visibilitychange',visibility:root.visibilityState}));
+      for(const event of ['online','offline'] as const)this.registerDomEvent(window,event,()=>logEvent('connection.client-state',{cause:event}));
       const watch=(win:Window)=>this.register(this.sendGesture.watch(win));
       watch(window);
       const windows=new Set<Window>([window]);
@@ -422,6 +433,13 @@ export default class SendToT3 extends Plugin {
       localFinalNotes:deviceFinalNoteIO(this.app,()=>!this.stopped),
       rememberResponse:async(request,body,before,after,offset)=>{if(await rememberResponse(this.smartData(),request.notePath,request.id,body,before,after,offset))await this.save(true);},
       rememberNoteEdits:async(request,before,after)=>{if(await rememberNoteEdits(this.smartData(),request.notePath,request.id,before,after))await this.save(true);},
+      loadLocalCompletion:async request=>{const receipt=await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`);return isRecord(receipt)&&receipt.identity===localFinalIdentity(request)&&typeof receipt.saved==='boolean'?{saved:receipt.saved}:undefined;},
+      isVisible:path=>this.app.workspace.getActiveViewOfType(MarkdownView)?.file?.path===path,
+      knownCompleted:request=>this.settings.responseBindings?.[request.id]?.completion?.identity===localFinalIdentity(request),
+      retainLocalCompletion:async(request,saved,update)=>{
+        await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`,{version:1,identity:localFinalIdentity(request),saved});
+        if(saved&&update?.turnId){this.responseBindingReplica=completeResponseBinding(this.responseBindingReplica,request,update.turnId,contentHash(update.body),this.deviceId);this.settings.responseBindings=this.responseBindingReplica;await this.save(true);}
+      },
       localBindings:()=>responseBindingRequests(this.settings.responseBindings??this.responseBindingReplica),
       saveLocalBinding:request=>this.saveResponseBinding(request),
       retainLocalFinal:async update=>{await deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${update.request.id}`,retainedLocalFinal(update));},
@@ -620,7 +638,9 @@ export default class SendToT3 extends Plugin {
       // unchanged native view at that rate. Workspace changes remain immediate.
       const queueNative=()=>{if(queued)return;queued=true;queueMicrotask(()=>{queued=false;refreshNative();});};
       this.registerEvent(this.app.workspace.on('layout-change',queueNative));
-      this.registerEvent(this.app.workspace.on('file-open',queueNative));
+      const retireIdentity=(path?:string)=>{if(path&&Object.values(this.smartData().notes).some(note=>!note.deleted&&note.path===path))void this.ensureNoteIdentity(path).catch(error=>logFailure('response.recovery.identity-cleanup',error));};
+      this.registerEvent(this.app.workspace.on('file-open',file=>{queueNative();retireIdentity(file?.path);}));
+      for(const path of new Set(this.app.workspace.getLeavesOfType('markdown').map(leaf=>(leaf.view as MarkdownView).file?.path)))retireIdentity(path);
       let lastResume=-Infinity,lastTick=Date.now();
       const resume=()=>{
         if(this.stopped||document.hidden)return;
@@ -812,8 +832,8 @@ export default class SendToT3 extends Plugin {
     if(isClientCommand(input)){
       if(!this.clientMaintenance||this.stopped)throw Error('Client maintenance is unavailable.');
       const result=await this.clientMaintenance.execute(input);
-      if(input.kind==='send-failure-log')return {...result,failureLog:sendFailureLog(this.app.loadLocalStorage(this.failureKey()),result.client!.loadedVersion,this.deviceId,input.since)};
-      return input.kind==='client-status'?{...result,commandServer:{transport:'t3-connect',connected:this.commandHosts.size},connectionRecovery:this.connectionRecovery?.status(),codeRangeCache:markdownCodeCacheStatus(),legacyRepliesRetired:true}:result;
+      if(input.kind==='send-failure-log')return {...result,failureLog:this.diagnosticLog(input.since)};
+      return input.kind==='client-status'?{...result,commandServer:{transport:'t3-connect',connected:this.commandHosts.size},connectionRecovery:this.connectionRecovery?.status(),codeRangeCache:markdownCodeCacheStatus(),responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app),legacyRepliesRetired:true}:result;
     }
     if(isResponseCommand(input)){
       const command=validateResponseCommand(input);
@@ -992,10 +1012,11 @@ export default class SendToT3 extends Plugin {
   private noteThreadRelations(){return resolveNoteThreadPaths(this.settings.noteThreads,this.settings.smartSend?.notes??{}).filter(entry=>entry.noteId||!this.app?.vault?.getFileByPath||!!this.app.vault.getFileByPath(entry.notePath));}
   private async relocateNoteThreads(before:string,after?:string,folder=false){
     const affected=(path:string)=>path===before||folder&&path.startsWith(before+'/'),data=this.smartData();
-    if(!this.settings.noteThreads.some(entry=>!entry.deletedAt&&affected(entry.notePath))&&!Object.values(data.notes).some(note=>!note.deleted&&affected(note.path)))return;
+    if(!this.settings.noteThreads.some(entry=>!entry.deletedAt&&affected(entry.notePath))&&!Object.values(data.notes).some(note=>!note.deleted&&affected(note.path))&&!responseBindingRequests(this.settings.responseBindings??{}).some(binding=>affected(binding.notePath)))return;
     this.settings.noteThreads=bindNoteThreadIds(this.settings.noteThreads,data.notes);
     moveSmartNotes(data,before,after,folder);
     this.settings.noteThreads=mutateNoteThreads(this.settings.noteThreads,before,after,folder);
+    if(after!==undefined){for(const binding of responseBindingRequests(this.settings.responseBindings??{}))if(affected(binding.notePath))this.responseBindingReplica=updateResponseBindingData(this.responseBindingReplica,{...binding,notePath:after+binding.notePath.slice(before.length)},this.deviceId);this.settings.responseBindings=this.responseBindingReplica;}
     await this.save();
   }
   private noteThread(path?:string){return path?lastUsedNoteThread(threadNoteMode(this.settings.threadNoteMode)==='one-to-one'?oneToOneNoteThreads(this.modeRelations()):this.noteThreadRelations(),path):undefined;}
@@ -1156,7 +1177,7 @@ export default class SendToT3 extends Plugin {
   async openNoteSend(file:TFile,showSelector=false,insertion=this.noteSendInsertion(file)){
     const finishPreview=!showSelector&&this.hasConfirmedNoteSend(file.path)?this.previewSend(file.path,undefined,insertion):()=>{};
     try{
-
+    showSelector ||= await this.noteNeedsRelink(file.path);
     const host:ChatHost=this.withSendAvailability({...this.destinationContext(this.noteContext(file)),
       beginSend:options=>this.previewSend(file.path,undefined,insertion,options.inline.enabled),
       hasNewContent:(destination)=>this.hasSmartContent(file,destination),
@@ -1633,7 +1654,11 @@ export default class SendToT3 extends Plugin {
           const safe=payload===undefined||['/api/auth/websocket-ticket','/api/orchestration/turn-item','/api/assets/create-url'].includes(path);
           if(!(error instanceof T3HttpError)||error.status!==401||!paired.managed||!safe)throw error;
           if(api===attemptedApi){
-            renewing??=(async()=>{session=await this.sessionFor(paired.id,true);api=await environmentApi(connection,session);})().finally(()=>{renewing=undefined;});
+            renewing??=(async()=>{
+              const started=Date.now(),fields={environmentId,routeId:paired.id,cause:'http-401',status:401};logEvent('connection.auth.renewing',fields);
+              try{session=await this.sessionFor(paired.id,true);api=await environmentApi(connection,session);logEvent('connection.auth.recovered',{...fields,elapsedMs:Date.now()-started});}
+              catch(error){logEvent('connection.auth.failed',{...fields,elapsedMs:Date.now()-started,error},'warning');throw error;}
+            })().finally(()=>{renewing=undefined;});
             await renewing;
           }
           return await api(path,payload,options);
@@ -1641,7 +1666,7 @@ export default class SendToT3 extends Plugin {
       }catch(error){this.routeFailures.set(paired.id,message(error));throw error;}
     });
     routed.trackConnection=connection=>this.routeStatus.track(paired.id,connection);
-    return {origin:endpoint(paired.url),get expiresAt(){return session?.expiresAt;},api:routed};
+    return {origin:endpoint(paired.url),diagnosticRoute:{routeId:paired.id,environmentId,routeKind:localRoute(paired)?'local':'remote'},get expiresAt(){return session?.expiresAt;},api:routed};
   }
   private async localInlineEnvironment():Promise<string>{
     const local=this.settings.paired.find(connection=>localRoute(connection));
@@ -1798,7 +1823,7 @@ export default class SendToT3 extends Plugin {
         await this.assertNoteMode(path,{threadId:request.threadId,projectId:request.projectId,environmentId:request.threadEnvironmentId});
         const current={...request,localOnly:true as const,nativeProjection:true,responseContainer:true,notePath:path};await editorStream(current,path,io,()=>!this.stopped,request.id);await this.deviceInline.register(current);
       },
-    },watchThread:(target,item,sequence,reconnecting)=>watchThread(target.threadId,()=>this.inlineThreadAccess(target.environmentId),{item:value=>{if(value.kind==='snapshot'&&value.snapshot?.thread?.projectId!==target.projectId)return;item(value);},reconnecting:()=>reconnecting()},undefined,undefined,{afterSequence:sequence,pollSnapshots:false})});
+    },watchThread:(target,item,sequence,reconnecting)=>watchThread(target.threadId,()=>this.inlineThreadAccess(target.environmentId),{item:value=>{if(value.kind==='snapshot'&&value.snapshot?.thread?.projectId!==target.projectId)return;item(value);},reconnecting:()=>reconnecting()},undefined,undefined,{afterSequence:sequence,pollSnapshots:false,diagnostics:()=>({role:'host',environmentId:target.environmentId,projectId:target.projectId})})});
     await service.initialize();if(this.stopped){service.stop();return;}this.threadDisplays=service;
     this.registerInlineInterval(()=>{if(service.active)void service.tick().catch(error=>logFailure('reply.follow',error));},1000);
     this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{void service.rename(oldPath,file.path).catch(error=>logFailure('reply.rename',error));}));
@@ -2075,10 +2100,11 @@ export default class SendToT3 extends Plugin {
     finally{this.busy=false;}
   }
   async exportDiagnostics(){
-    const modal=new Modal(this.app);modal.titleEl.setText('Send failure log');
-    const log=sendFailureLog(this.app.loadLocalStorage(this.failureKey()),pluginManifest.version,this.deviceId);
-    modal.contentEl.createEl('p',{text:'The last 64 send failures on this device. Message text and credentials are excluded.'});
+    const modal=new Modal(this.app);modal.titleEl.setText('Diagnostic log');
+    const log=this.diagnosticLog();
+    modal.contentEl.createEl('p',{text:'The last 64 send failures and enabled connection, Follow or response events on this device. Events are limited to 512 records, 256 KB and seven days. Message text and credentials are excluded.'});
     const field=modal.contentEl.createEl('textarea',{cls:'send-to-t3-failure-log'});field.readOnly=true;field.value=JSON.stringify(log,null,2);
+    modal.open();
   }
 
   projects(){
@@ -2696,16 +2722,19 @@ export default class SendToT3 extends Plugin {
   }
   private async ensureNoteIdentity(path?:string,id?:string){
     if(!path||!this.app?.vault?.getFileByPath?.(path))return;
-    id??=smartNote(this.smartData(),path);
+    // The registry owns identity. Persist it before retiring a legacy comment.
+    smartNote(this.smartData(),path,id);
     const io=deviceNoteIO(this.app),document=await io.readNote(path);
-    if(document===undefined)throw Error('Save the note before sending so its T3 identity can be retained.');
-    const previous=noteIdentity(document);if(previous===id)return;
-    if(previous){const original=this.smartData().notes[previous];if(!original||original.path===path)throw Error('The note identity changed while sending. Send again from its current note.');}
-    const next=await io.updateNote(path,current=>{if(noteIdentity(current)!==previous)throw Error('The note identity changed while sending. Send again.');return withNoteIdentity(current,id);},()=>!this.stopped);
-    if(next===undefined)throw Error('The note changed before its T3 identity was saved. Send again.');
+    if(document===undefined||!document.includes('<!-- t3-note-id:')||withoutNoteIdentity(document)===document)return;
+    await this.save();
+    const next=await io.updateNote(path,current=>withoutNoteIdentity(current),()=>!this.stopped);
+    if(next===undefined)return;
     for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===path&&view.editor&&view.getMode?.()!=='preview')await view.save();}
-    const file=this.app.vault.getFileByPath(path);
-    if(!file||noteIdentity(await this.app.vault.read(file))!==id)throw Error('The T3 note identity has not been saved. Save the note and send again.');
+  }
+  private async noteNeedsRelink(path:string){
+    if(this.noteThread(path))return false;
+    const document=await deviceNoteIO(this.app).readNote(path);if(document===undefined)return false;
+    return noteIdentityRanges(document).some(({id})=>!!this.smartData().notes[id]&&this.smartData().notes[id].path!==path)||responseIds(document).some(id=>responseBindingRequests(this.settings.responseBindings??{}).some(binding=>binding.id===id&&binding.notePath!==path));
   }
   private async reserveResponseStreams(request:Request){
     const responses=new Map<string,string>();
@@ -2772,7 +2801,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }
   }
-  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;configureDiagnostics();void this.diagnostics?.close().catch(()=>{});this.diagnostics=undefined;}
   async monitorCompletions() {
     if(this.monitoring||this.stopped||this.busy)return;
     this.monitoring=true;try{await this.monitorSettlements();}finally{this.monitoring=false;}
@@ -2872,7 +2901,7 @@ export class T3Settings extends PluginSettingTab {
       {type:'page',name:'Connection',items:this.connectionDefinitions()},
       {type:'page',name:'Replies',items:this.replyPageDefinitions()},
       {type:'page',name:'Projects',items:[block('Linked folders and project files',['Vault connection','Connect vault','Change machine','Unlink','Codebase view','Open project files'],el=>this.projectsUI(el))]},
-      {type:'page',name:'Advanced',items:[block('Troubleshooting',['Send failure log'],el=>this.advancedUI(el))]},
+      {type:'page',name:'Advanced',items:[block('Troubleshooting',['Send failure log','Diagnostic log','Connection logging','Follow logging','Response logging'],el=>this.advancedUI(el))]},
     ];
   }
   refresh(){this.update();}
@@ -2956,7 +2985,11 @@ export class T3Settings extends PluginSettingTab {
 
   private advancedUI(el:HTMLElement){
     new Setting(el).setName('Troubleshooting').setHeading();
-    new Setting(el).setName('Send failure log').setDesc('View failed sends on this device. Failed sends are not queued for retry.').addButton(button=>button.setButtonText('View log').onClick(()=>this.plugin.exportDiagnostics()));
+    const preferences=diagnosticPreferences(this.plugin.diagnosticLogging);
+    new Setting(el).setName('Connection logging').setDesc('Record connection, reconnect and recovery events on this device only. Off by default.').addToggle(toggle=>toggle.setValue(preferences.connection).onChange(enabled=>this.plugin.setDiagnosticLogging('connection',enabled)));
+    new Setting(el).setName('Follow logging').setDesc('Record when auto-scroll starts, pauses, resumes or turns off on this device only. Off by default.').addToggle(toggle=>toggle.setValue(preferences.follow).onChange(enabled=>this.plugin.setDiagnosticLogging('follow',enabled)));
+    new Setting(el).setName('Response logging').setDesc('Record response recovery, rendering and final-save decisions on this device only. Off by default.').addToggle(toggle=>toggle.setValue(preferences.response).onChange(enabled=>this.plugin.setDiagnosticLogging('response',enabled)));
+    new Setting(el).setName('Diagnostic log').setDesc('View send failures and enabled diagnostic events from this device. Nothing is synced.').addButton(button=>button.setButtonText('View log').onClick(()=>this.plugin.exportDiagnostics()));
   }
 
   private replyPageDefinitions():SettingDefinitionItem[]{const fields=this.replyDefinitions();return [...fields.slice(0,-1),{type:'page',name:'Beta',desc:'Optional thread and note behavior.',items:[fields.at(-1)!]}];}

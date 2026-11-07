@@ -1,7 +1,7 @@
 import {isRecord,records} from '../shared/values';
 import {redact} from '../app/diagnostics';
 export interface SendFailure {at:string;stage:string;elapsedMs:number;requestId?:string;threadId?:string;messageId?:string;environmentId?:string;bindingIds?:string[];delivery:'not-started'|'unconfirmed'|'accepted';error:unknown}
-export interface SendFailureLog {version:1;pluginVersion:string;deviceId:string;failures:SendFailure[]}
+export interface SendFailureLog {version:1;pluginVersion:string;deviceId:string;failures:SendFailure[];diagnostics?:import('../app/diagnostics').DiagnosticExport}
 /** A read-only, bounded export of this device's existing failure log. Unknown
  * stored fields are excluded; export rechecks redaction without altering it. */
 export function sendFailureLog(saved:unknown,pluginVersion:string,deviceId:string,since?:string):SendFailureLog {

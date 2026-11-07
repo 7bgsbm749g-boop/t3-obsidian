@@ -427,7 +427,8 @@ def defer_memory(directory: Path, state: dict, memory: str, *, phase: str,
 def wait_for_memory(job_id: str, memory: str, resume_task_id: str, *, queue: Path = QUEUE) -> dict:
     """Register an agent-owned verification wait with a native recovery watch."""
     memory = release_memory.budget(memory)
-    if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', resume_task_id):
+    # Current T3 returns opaque, colon-delimited command IDs for schedules.
+    if not re.fullmatch(r'[A-Za-z0-9_:-]{1,512}', resume_task_id):
         raise ValueError('Supply the returned native scheduledTaskId for this job’s recovery watch.')
     with locked(queue / 'queue.lock'):
         directory = job_path(queue, job_id)

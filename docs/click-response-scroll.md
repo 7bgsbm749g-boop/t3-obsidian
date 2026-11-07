@@ -37,6 +37,13 @@ has restored the user's expansion choice. Clicking elsewhere in the app, typing
 and selecting text keep it active. Switching to another note pauses viewport
 work and retains the choice for that note in that pane; returning restores
 active follow.
+Connection loss or a sign-in requirement pauses viewport work while retaining
+the explicit Follow choice for the same response and fold in that pane. When
+the connection returns, following resumes only if that choice is still on.
+Manual scrolling or switching Follow off during the pause cancels the retained
+choice. A different response, completion or removal cannot inherit it. This
+state survives network reconnections within the running plugin; it is not
+persisted across an Obsidian or plugin restart.
 A collapsed response does not resume following when reopened. Completion,
 removal, mode changes and conflicts also cancel active viewport work. State
 stays in memory, local to the note and pane, and is never written into the note or

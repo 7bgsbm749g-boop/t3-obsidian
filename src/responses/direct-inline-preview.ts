@@ -6,7 +6,7 @@ import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs} fr
 import {mergeProse,observeIncoming,steeringBoundary} from '../conversations/inline-steering';
 import {completionTime,finalAnswerFormat,intermediateMode} from './response-presentation';
 import {watchThread,readInlineSnapshot,type ThreadAccess,type ThreadStreamItem} from '../conversations/thread-stream';
-import {logFailure} from '../app/diagnostics';
+import {logEvent,logFailure,diagnosticEnabled} from '../app/diagnostics';
 import {checkFinalResponse,finalResponseKey} from './final-response';
 import {responseTooLarge,type StreamReadFailure} from '../connection/t3-response-limits';
 import {signInRequired,type ResponseConnectionIssue} from '../connection/sign-in-state';
@@ -35,6 +35,8 @@ export class DirectInlinePreview {
   private minimumSequence:number;
   private pending?:unknown;
   private lastRender=-Infinity;
+  private lastRenderDiagnostic=-Infinity;
+  private receivedAt=0;
   private verifiedSequence=-1;
   private verifiedKey?:string;
   private completionTurnId?:string;
@@ -49,9 +51,10 @@ export class DirectInlinePreview {
   private nextInterruptionVerification=0;
   private connectionIssue?:ResponseConnectionIssue;
   constructor(record:ResponseRecord,private access:()=>Promise<ThreadAccess>,private receive:(update:DirectInlineUpdate)=>void,private watch:Watch=watchThread,private clock:PreviewClock=displayClock,private connectionChanged?:(issue?:ResponseConnectionIssue)=>void){this.record=record;this.minimumSequence=record.state?.bindingCheckpoint?.sequence??0;this.update(record);}
-  private connectionFailed(error:unknown){
+  private diagnosticContext(){const request=this.record.request;return {role:'response' as const,bindingId:request.id,threadId:request.threadId,environmentId:request.threadEnvironmentId,projectId:request.projectId,messageId:this.messageId(),turnId:turnForMessage(this.state,this.messageId()),afterSequence:this.state.sequence,generation:this.generation};}
+  private connectionFailed(error:unknown,cause:string){
     const issue:ResponseConnectionIssue={kind:signInRequired(error)?'sign-in-required':'reconnecting'};
-    if(this.connectionIssue?.kind!==issue.kind){this.connectionIssue=issue;this.connectionChanged?.(issue);}
+    if(this.connectionIssue?.kind!==issue.kind){logEvent('stream.direct.reconnecting',{...this.diagnosticContext(),cause,issue:issue.kind,error},'warning');this.connectionIssue=issue;this.connectionChanged?.(issue);}
     if(issue.kind==='sign-in-required')this.suspend();
   }
   update(record:ResponseRecord){
@@ -87,9 +90,9 @@ export class DirectInlinePreview {
     const generation=++this.generation;
     this.monitor=this.watch(record.request.threadId,this.access,{
       item:item=>{if(!this.stopped&&this.generation===generation)this.item(item);},
-      reconnecting:error=>{if(!this.stopped&&this.generation===generation){logFailure('stream.direct.reconnecting',error,{bindingId:record.request.id});this.connectionFailed(error);}},
+      reconnecting:error=>{if(!this.stopped&&this.generation===generation)this.connectionFailed(error,'stream-or-snapshot');},
       failure:error=>{if(!this.stopped&&this.generation===generation&&responseTooLarge(error)){this.failure??={kind:'response-too-large',operation:'snapshot'};if(!this.render())this.receive({request:this.record.request,messageId:this.messageId(),sequence:this.state.sequence??0,body:this.record.state?.body??'> **T3 · Working**',failure:this.failure,completionVerified:false});}},
-    },undefined,()=>({messageIds:[this.messageId(),...this.record.state?.steering?.map(input=>input.messageId)??[],...this.follows?.filter(item=>!item.dismissed).map(item=>`async-answer:${item.requestId}`)??[]],turnIds:this.turnIds}),{afterSequence:()=>this.state.sequence??0,pollImmediately:true,pollSnapshots:()=>this.state.protocolVersion!==2&&this.failure?.operation!=='snapshot'});
+    },undefined,()=>({messageIds:[this.messageId(),...this.record.state?.steering?.map(input=>input.messageId)??[],...this.follows?.filter(item=>!item.dismissed).map(item=>`async-answer:${item.requestId}`)??[]],turnIds:this.turnIds}),{afterSequence:()=>this.state.sequence??0,pollImmediately:true,pollSnapshots:()=>this.state.protocolVersion!==2&&this.failure?.operation!=='snapshot',diagnostics:()=>this.diagnosticContext()});
   }
   private messageId(){return this.record.state?.pendingMessageId??this.record.state?.messageId??this.record.request.messageId;}
   private item(item:ThreadStreamItem){
@@ -99,7 +102,8 @@ export class DirectInlinePreview {
     if(item.kind!=='event'||item.event?.type!=='thread.worktree-setup')if(typeof sequence!=='number'||!Number.isSafeInteger(sequence)||sequence<0)return;
     if(item.kind==='snapshot'&&(item.snapshot?.thread?.id!==request.threadId||item.snapshot?.thread?.projectId!==request.projectId))return;
     if(item.kind==='event'&&item.event?.aggregateId!==undefined&&item.event.aggregateId!==request.threadId)return;
-    if(this.connectionIssue){this.connectionIssue=undefined;this.connectionChanged?.();}
+    if(this.connectionIssue){logEvent('stream.direct.recovered',{...this.diagnosticContext(),source:item.kind,receivedSequence:sequence});this.connectionIssue=undefined;this.connectionChanged?.();}
+    this.receivedAt=this.clock.now();
     const next=applyThreadItem(this.state,item).state;if(next===this.state)return;this.state=next;
     this.schedule(item.kind==='event'&&((item.event?.type==='thread.run-updated'&&['completed','interrupted'].includes(item.event.payload?.status))||(item.event?.type==='thread.session-set'&&item.event.payload?.session?.status!=='running')||(item.event?.type==='thread.message-sent'&&item.event.payload?.streaming===false)));
   }
@@ -110,6 +114,7 @@ export class DirectInlinePreview {
     this.pending=this.clock.later(()=>{this.pending=undefined;if(this.stopped)return;if(this.render())this.lastRender=this.clock.now();},DIRECT_DISPLAY_INTERVAL_MS-elapsed);
   }
   private render(){
+    const renderStarted=this.clock.now();
     if((this.state.sequence??-1)<this.minimumSequence)return false;
     const request=this.record.request,messageId=this.messageId();
     let turnId=turnForMessage(this.state,messageId);
@@ -155,6 +160,7 @@ export class DirectInlinePreview {
     this.receive({request:{...request,notePath:this.record.state?.notePath??request.notePath},messageId,sequence:this.state.sequence??0,body,displayedInputIds:inputs.map(input=>input.messageId),turnId,turnIds:this.turnIds.slice(),phase:this.failure&&!completionVerified?'error':phase,completionVerified,questionsPending:questions.waiting,resume:{bindingCheckpoint:checkpoint,turnIds:this.turnIds.slice(),questionFollows:this.follows,prose:this.prose,incoming:this.incoming,presentationTurns:current.turns},failure:completionVerified?undefined:this.failure,checkpoint,...(questionActivities.length?{questionActivities}:{})});
     if((request.deviceCompletion||request.localOnly)&&terminal&&!completionVerified)this.verifyCompletion();
     if(this.interruptedTurnId)this.verifyInterruption();
+    if(diagnosticEnabled('response.render.batch')&&this.clock.now()-this.lastRenderDiagnostic>=1000){this.lastRenderDiagnostic=this.clock.now();logEvent('response.render.batch',{bindingId:request.id,threadId:request.threadId,turnId,sequence:this.state.sequence,phase,bodyLength:body.length,messageCount:this.state.messages.length,activityCount:this.state.activities.length,receivedToRenderMs:this.lastRenderDiagnostic-this.receivedAt,renderMs:this.lastRenderDiagnostic-renderStarted});}
     return true;
   }
   private verifyInterruption(){
@@ -177,7 +183,7 @@ export class DirectInlinePreview {
       const next=applyThreadItem(this.state,{kind:'snapshot',snapshot}).state;this.state=next;
       this.nextInterruptionVerification=this.clock.now()+1200;
       this.schedule(true);
-    }).catch(error=>{if(!this.stopped&&generation===this.generation){logFailure('stream.direct.interruption-verification',error,{bindingId:request.id});if(responseTooLarge(error)){this.failure={kind:'response-too-large',operation:'snapshot'};this.schedule(true);}else this.connectionFailed(error);}})
+    }).catch(error=>{if(!this.stopped&&generation===this.generation){if(!this.connectionIssue)logFailure('stream.direct.interruption-verification',error,this.diagnosticContext());if(responseTooLarge(error)){this.failure={kind:'response-too-large',operation:'snapshot'};this.schedule(true);}else this.connectionFailed(error,'interruption-verification');}})
       .finally(()=>{this.clock.cancel(timeout);if(this.interruptionVerification===work){this.interruptionVerification=undefined;this.nextInterruptionVerification=this.clock.now()+1200;}});
     this.interruptionVerification=work;
   }
@@ -217,10 +223,10 @@ export class DirectInlinePreview {
         this.verifiedSequence=result.snapshotSequence;
       }
       this.schedule(true);
-    }).catch(error=>{if(!this.stopped&&generation===this.generation){logFailure('stream.direct.completion-verification',error,{bindingId:request.id});if(responseTooLarge(error)){this.failure={kind:'response-too-large',operation:state.protocolVersion===2?'final-reply':'snapshot',key};this.schedule(true);}else this.connectionFailed(error);}}).finally(()=>{cancel();if(this.closeVerification===cancel)this.closeVerification=undefined;this.clock.cancel(timeout);if(this.verification===work){this.verification=undefined;this.nextVerification=this.clock.now()+1000;}});
+    }).catch(error=>{if(!this.stopped&&generation===this.generation){if(!this.connectionIssue)logFailure('stream.direct.completion-verification',error,this.diagnosticContext());if(responseTooLarge(error)){this.failure={kind:'response-too-large',operation:state.protocolVersion===2?'final-reply':'snapshot',key};this.schedule(true);}else this.connectionFailed(error,'completion-verification');}}).finally(()=>{cancel();if(this.closeVerification===cancel)this.closeVerification=undefined;this.clock.cancel(timeout);if(this.verification===work){this.verification=undefined;this.nextVerification=this.clock.now()+1000;}});
     this.verification=work;
   }
-  reconnect(open:boolean){if(this.stopped)return;this.suspend();this.connectionIssue=undefined;this.connectionChanged?.();this.tick(open);}
+  reconnect(open:boolean){if(this.stopped)return;logEvent('stream.direct.reset',{...this.diagnosticContext(),cause:'requested-reconnect',open});this.suspend();this.connectionIssue=undefined;this.connectionChanged?.();this.tick(open);}
   suspend(){this.generation++;this.monitor?.stop();this.monitor=undefined;this.closeVerification?.();this.closeVerification=undefined;this.verification=undefined;this.interruptionVerification=undefined;this.nextInterruptionVerification=0;this.nextVerification=0;if(this.pending!==undefined)this.clock.cancel(this.pending);this.pending=undefined;this.lastRender=-Infinity;}
-  dispose(){this.stopped=true;this.suspend();}
+  dispose(){this.stopped=true;this.suspend();this.state={messages:[],activities:[]};this.prose=[];this.turnIds=[];this.follows=[];this.incoming=[];this.verifiedInterruptions.clear();this.record={...this.record,request:{...this.record.request,localResume:undefined},state:undefined};}
 }

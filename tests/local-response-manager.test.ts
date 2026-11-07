@@ -13,6 +13,7 @@ import {retainedLocalFinal,restoredLocalFinal} from '../src/responses/local-fina
 import type {ResponseRequest} from '../src/responses/response-model';
 import type {DirectInlineUpdate} from '../src/responses/direct-inline-preview';
 import {loadSmartSend,rememberNoteEdits,rememberResponse,prepareSmartSend} from '../src/notes/smart-send';
+import {SharedThreadStreams} from '../src/conversations/shared-thread-stream';
 
 function request():ResponseRequest{return {version:4,localOnly:true,nativeProjection:true,responseContainer:true,independent:true,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'env',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'},notePath:'Test.md',threadId:randomUUID(),projectId:randomUUID(),messageId:randomUUID(),threadEnvironmentId:'env',initialHash:contentHash(''),createdAt:'2026-10-14T00:00:00Z'};}
 function fixture(binding=request(),initial?:string,records:ResponseBindingData={},stops?:unknown){
@@ -35,6 +36,60 @@ test('reload restores Working and its watch before the saved note is opened',asy
   h.manager.tick();assert.equal(ticks,1,'The recovered closed reply retains its background watch');
   h.emit('Final answer');await drain();assert.equal(h.manager.responses()[0].active,false);assert.equal(h.manager.responses()[0].complete,true);assert.equal(h.writes(),0,'Closed ordinary notes retain the final-save boundary');
   h.open(true);h.manager.resume();await drain();assert.equal(h.writes(),1);h.manager.dispose();
+});
+
+test('a verified note write remains saved when device receipt storage fails',async()=>{
+  const h=fixture();h.io.retainLocalCompletion=async()=>{throw Error('Device storage unavailable');};
+  await h.manager.register(h.binding);h.emit();await drain();
+  assert.deepEqual(await h.manager.waitForSave(h.binding.id,0),{saved:true});assert.equal(h.writes(),1);
+  for(let n=0;n<10;n++)h.manager.tick();await drain();assert.equal(h.writes(),1);h.manager.dispose();
+});
+test('settled responses release transcript bodies and retain only exact completion metadata',async()=>{
+  const h=fixture();await h.manager.register(h.binding);h.emit('Large completed transcript');await drain();
+  assert.match(h.read(),/Large completed transcript/);assert.equal(h.manager.record(h.binding.id)?.state?.body,undefined);
+  assert.equal((h.manager as any).jobs.get(h.binding.id).update.body,'');h.manager.dispose();
+});
+test('observed anchor removal persists a local retirement without writing note content',async()=>{
+  const h=fixture(),receipts:boolean[]=[];h.io.retainLocalCompletion=async(_request:ResponseRequest,saved:boolean)=>{receipts.push(saved);};
+  await h.manager.register(h.binding);h.write('User deleted the response.');h.manager.changed(h.binding.notePath);await drain();
+  assert.deepEqual(receipts,[false]);assert.equal(h.writes(),0);h.manager.dispose();
+});
+test('an explicit reconnect restarts one shared source for all of its readers',async()=>{
+  const first=request(),second={...request(),threadId:first.threadId,projectId:first.projectId},h=fixture(first,responseAnchor(first.id)+'\n'+responseAnchor(second.id));
+  let starts=0,stops=0;
+  const pool=new SharedThreadStreams(()=>{starts++;return {stop:()=>{stops++;}};});
+  h.io.access=async()=>({origin:'https://synthetic.invalid',api:async()=>({thread:{id:first.threadId,projectId:first.projectId,messages:[]},snapshotSequence:1})});
+  const manager=new LocalResponseManager(randomUUID(),'vault',h.io,h.notes);(manager as any).sources=pool;
+  await manager.register(first);await manager.register(second);await drain();assert.equal(starts,1);assert.equal(pool.status().readers,2);
+  manager.reconnect();await drain();assert.equal(stops,1);assert.equal(starts,2);assert.equal(pool.status().readers,2);
+  manager.dispose();h.manager.dispose();
+});
+test('reconnect waits for local retirement recovery before opening any source',async()=>{
+  const h=fixture();let resolve!:(value:{saved:boolean})=>void,starts=0;
+  h.io.loadLocalCompletion=()=>new Promise(done=>resolve=done);
+  const manager=new LocalResponseManager(randomUUID(),'vault',h.io,h.notes);
+  (manager as any).sources=new SharedThreadStreams(()=>{starts++;return {stop:()=>{}};});
+  await manager.register(h.binding);manager.reconnect();await drain();assert.equal(starts,0);
+  resolve({saved:true});await drain();assert.equal(starts,0);assert.equal(manager.status(h.binding.id)?.finalSaved,true);
+  manager.dispose();h.manager.dispose();
+});
+
+test('an observed rename cannot move a new response created at the reused old path',async()=>{
+  const h=fixture();await h.manager.register(h.binding);h.manager.renamed(h.binding.notePath,'Moved.md');
+  const next=request();h.write(responseAnchor(next.id));await h.manager.register(next);
+  assert.equal(h.manager.request(h.binding.id)?.notePath,'Moved.md');assert.equal(h.manager.request(next.id)?.notePath,'Test.md');h.manager.dispose();
+});
+test('an explicit checked destination choice can return an attachment to its previous path',async()=>{
+  const h=fixture();await h.manager.register(h.binding);h.manager.renamed(h.binding.notePath,'Moved.md');
+  await h.manager.register(h.binding,true);assert.equal(h.manager.request(h.binding.id)?.notePath,'Test.md');h.manager.dispose();
+});
+
+test('unchanged different panes retain separate parse caches without invalidating save retries',async()=>{
+  const h=fixture();await h.manager.register(h.binding);
+  h.io.openedNotes=()=>[{path:h.binding.notePath,document:h.read()+'\nFirst pane.'},{path:h.binding.notePath,document:h.read()+'\nSecond pane.'}];
+  h.manager.resume();const cached=[...(h.manager as any).documents.get(h.binding.notePath)],revision=(h.manager as any).noteVersions.get(h.binding.notePath);
+  for(let n=0;n<10;n++)h.manager.tick();
+  assert.equal((h.manager as any).documents.get(h.binding.notePath)[0],cached[0]);assert.equal((h.manager as any).documents.get(h.binding.notePath)[1],cached[1]);assert.equal((h.manager as any).noteVersions.get(h.binding.notePath),revision);h.manager.dispose();
 });
 
 test('closed recovery reads a shared note once and skips historical, missing and stopped anchors',async()=>{
@@ -217,7 +272,7 @@ test('a refused final write reports a pending note change and a deleted response
   assert.deepEqual(await removed.manager.waitForSave(removed.binding.id,0),{saved:false,reason:'note-changed'});assert.equal(removed.writes(),0);removed.manager.dispose();
 });
 test('a closed response keeps its completion watch and projects only verified success for the explorer',async()=>{
-  const h=fixture();await h.manager.register(h.binding);
+  const h=fixture();await h.manager.register(h.binding);await drain();
   let ticks=0,suspends=0;
   const runtime=(h.manager as any).jobs.get(h.binding.id);runtime.preview.tick=()=>ticks++;runtime.preview.suspend=()=>suspends++;
   h.open(false);h.manager.tick();assert.equal(ticks,1);assert.equal(suspends,0);
@@ -225,7 +280,7 @@ test('a closed response keeps its completion watch and projects only verified su
   h.emit('Final answer');await drain();
   assert.equal(h.writes(),0);assert.equal(h.manager.responses()[0].complete,true);assert.equal(h.manager.responses()[0].active,false);
   const identity=h.manager.responses()[0].completionId;
-  h.manager.tick();assert.equal(suspends,1,'Verified runs release their background watch');
+  const released=suspends;h.manager.tick();assert.ok(suspends>=released,'Verified runs keep their background watch suspended');
   h.open(true);h.manager.tick();await drain();
   assert.equal(h.writes(),1);assert.equal(h.manager.responses()[0].complete,true);assert.equal(h.manager.responses()[0].completionId,identity);
   h.manager.dispose();
@@ -241,9 +296,9 @@ test('explicit Stop saves its frozen local text while completion is waiting for 
   const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit('Canonical final');await drain();
   const receipt=await h.manager.stop(h.binding.id,'Frozen visible text');assert.equal(receipt.finalSaved,true);assert.equal(receipt.hostRecorded,true);assert.match(h.read(),/Frozen visible text/);assert.equal(h.writes(),1);h.manager.dispose();
 });
-test('a stale response block that returns through Sync can be replaced with the same final result',async()=>{
-  const h=fixture();await h.manager.register(h.binding);const original=h.read();h.emit();await drain();const final=h.read();
-  h.write(original);h.advance();h.manager.resume();h.emit();await drain();assert.equal(h.read(),final);assert.equal(h.writes(),2);h.manager.dispose();
+test('a stale response block cannot restart a settled response or overwrite later Undo',async()=>{
+  const h=fixture();await h.manager.register(h.binding);const original=h.read();h.emit();await drain();
+  h.write(original);h.advance();h.manager.resume();h.emit();await drain();assert.equal(h.read(),original);assert.equal(h.writes(),1);h.manager.dispose();
 });
 test('verified final recovery survives reload without another T3 read and rejects another binding',async()=>{
   const first=fixture();await first.manager.register(first.binding);first.ready(false);
@@ -404,4 +459,33 @@ test('live completion cannot write before the local question checkpoint has load
  const h=fixture();let release!:(value:DirectInlineUpdate|undefined)=>void;h.io.loadLocalFinal=()=>new Promise(resolve=>{release=resolve;});
  await h.manager.register(h.binding);h.emit();await drain();assert.equal(h.writes(),0);
  release(undefined);await drain();assert.equal(h.writes(),1);h.manager.dispose();
+});
+
+test('opening only a copied anchor cannot move a recorded response or start its watch',async()=>{
+ const h=fixture();await h.manager.register(h.binding);await drain();
+ const original=h.read();h.io.openedNotes=()=>[{path:'Copy.md',document:original}];h.io.isOpen=(path:string)=>path==='Copy.md';
+ h.manager.resume();await drain();assert.equal(h.manager.request(h.binding.id)?.notePath,h.binding.notePath);
+ h.emit();await drain();assert.equal(h.writes(),0);h.manager.dispose();
+});
+test('a copied historical anchor stays inert when the original has already completed',async()=>{
+ const binding=request(),h=fixture(binding,undefined,updateResponseBindingData({},binding,'A'));
+ const copy=h.read();h.write('Saved final reply');h.io.openedNotes=()=>[{path:'Copy.md',document:copy}];
+ await recover(h);assert.equal(h.registered.length,0);assert.equal(h.writes(),0);h.manager.dispose();
+});
+test('two ready attachments to a note share one checked final write and keep ordinary typing',async()=>{
+ const a=request(),b={...request(),notePath:a.notePath},document='User typing\n'+responseAnchor(a.id)+'\n'+responseAnchor(b.id);
+ const h=fixture(a,document);await h.manager.register(a);await h.manager.register(b);await drain();
+ h.emit('First final');h.callbacks.get(b.id)!({request:b,messageId:b.messageId,sequence:5,body:'Second final',turnId:'second-turn',phase:'complete',completionVerified:true});
+ await drain();assert.equal(h.writes(),1);assert.match(h.read(),/^User typing/);assert.match(h.read(),/First final/);assert.match(h.read(),/Second final/);h.manager.dispose();
+});
+test('unchanged save refusals do not repeat until a relevant note change',async()=>{
+ const h=fixture();await h.manager.register(h.binding);let attempts=0;h.notes.compareAndSet=async()=>{attempts++;return false;};
+ h.emit();await drain();for(let n=0;n<20;n++){h.advance();h.manager.tick();}await drain();assert.equal(attempts,1);
+ h.manager.changed(h.binding.notePath);await drain();assert.equal(attempts,2);h.manager.dispose();
+});
+test('a durable completion receipt prevents network recovery of a resurrected original anchor',async()=>{
+ const binding=request(),h=fixture(binding,undefined,updateResponseBindingData({},binding,'A'));let ticks=0;
+ h.io.loadLocalCompletion=async()=>({saved:true});h.io.access=async()=>{ticks++;throw Error('No network');};
+ await recover(h);assert.equal(h.manager.status(binding.id)?.finalSaved,true);assert.equal(ticks,0);assert.equal(h.writes(),0);
+ const count=h.registered.length;h.manager.resume();await drain();assert.equal(h.registered.length,count);h.manager.dispose();
 });

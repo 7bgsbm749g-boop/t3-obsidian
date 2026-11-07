@@ -70,7 +70,7 @@ async function folderMenuHarness(initial?:any){
   const folder=new Folder();
   class Plugin {
     app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,value:any)=>{local=value;},
-      workspace:{getActiveViewOfType:()=>undefined,onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{if(name==='file-menu')fileMenu=callback;}},
+      workspace:{getActiveViewOfType:()=>undefined,getLeavesOfType:()=>[],onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{if(name==='file-menu')fileMenu=callback;}},
       vault:{getName:()=> 'QLO2',read:async()=> '# Synthetic note',getAbstractFileByPath:(path:string)=>path===folder.path?folder:undefined},
     };
     async loadData(){return {...(shared.at(-1)??{}),paired:[{id:'c',name:'Laptop',url:'https://folder.example',environmentId:'env'}],directScanId:'c',directProjects:[project],directSelected:['c:project']};}

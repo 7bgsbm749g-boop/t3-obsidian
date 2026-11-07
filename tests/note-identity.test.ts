@@ -3,16 +3,18 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from './obsidian-context';
 import {webcrypto} from 'node:crypto';
-import {noteIdentity,noteIdentityMarker,withNoteIdentity} from '../src/notes/note-identity';
+import {noteIdentity,withoutNoteIdentity} from '../src/notes/note-identity';
 import {loadSmartSend,smartNote,moveSmartNotes,mergeSmartSend,prepareSmartSend} from '../src/notes/smart-send';
 import {bindNoteThreadIds,lastUsedNoteThread,mergeNoteThreads,mutateNoteThreads,resolveNoteThreadPaths,type NoteThread} from '../src/notes/note-threads';
 
+const noteIdentityMarker=(id:string)=>`<!-- t3-note-id:${id} -->`;
+const withNoteIdentity=(document:string,id:string)=>document+(document.endsWith('\n')?'':'\n')+'\n'+noteIdentityMarker(id)+'\n';
 const old='Original/Note.md',moved='Renamed/Subfolder/Moved.md';
 const link=(noteId?:string):NoteThread=>({notePath:old,noteId,threadId:'thread',projectId:'project',connectionId:'',environmentId:'machine',workspaceRoot:'/project',selectedAt:'2026-10-30T00:00:00.000Z'});
 
 test('note IDs survive editing, exclude literal examples and cannot have two owners in one note',async()=>{
   const id='a'.repeat(64),marker=noteIdentityMarker(id),document=withNoteIdentity('# User text\n',id);
-  assert.equal(noteIdentity(document),id);assert.equal(withNoteIdentity(document,id),document);
+  assert.equal(noteIdentity(document),id);
   assert.equal(noteIdentity('```md\n'+marker+'\n```'),undefined);
   assert.equal(noteIdentity('> '+marker),undefined);
   assert.throws(()=>noteIdentity(marker+'\n'+marker),/several T3 note IDs/);
@@ -63,14 +65,23 @@ test('a copy gets independent source and cannot take its original thread',async(
  const h=await fixture(),text=withNoteIdentity('Same source.',h.id);h.put(old,text);h.put(moved,text);
  assert.equal(h.p.noteThread(moved),undefined);assert.equal(h.p.noteThread(old).threadId,'thread');
  const copy=smartNote(h.p.smartData(),moved);assert.notEqual(copy,h.id);await h.p.ensureNoteIdentity(moved,copy);
- assert.equal(noteIdentity(h.files.get(moved)!.text),copy);assert.equal(noteIdentity(h.files.get(old)!.text),h.id);
+ assert.equal(noteIdentity(h.files.get(moved)!.text),undefined);assert.equal(noteIdentity(h.files.get(old)!.text),h.id);
+ assert.equal(h.p.smartData().notes[copy].path,moved);
 });
 
-test('an unobserved move starts fresh at the explicit path, preserving prose without recovering another thread',async()=>{
+test('an unobserved move asks for a destination without taking another path or writing a note ID',async()=>{
  const h=await fixture(),text=withNoteIdentity('User text and saved output.',h.id);h.put(moved,text);
+ assert.equal(await h.p.noteNeedsRelink(moved),true);assert.equal(await h.p.noteNeedsRelink(old),false);
  const fresh=smartNote(h.p.smartData(),moved);await h.p.ensureNoteIdentity(moved,fresh);
- assert.notEqual(fresh,h.id);assert.equal(h.p.noteThread(moved),undefined);assert.equal(noteIdentity(h.files.get(moved)!.text),fresh);assert.equal(h.files.get(moved)!.text,text.replace(h.id,fresh));
- const before=h.files.get(moved)!.text;await assert.rejects(h.p.ensureNoteIdentity(moved,'f'.repeat(64)),/identity changed/);assert.equal(h.files.get(moved)!.text,before);
+ assert.notEqual(fresh,h.id);assert.equal(h.p.noteThread(moved),undefined);assert.equal(noteIdentity(h.files.get(moved)!.text),undefined);assert.equal(h.files.get(moved)!.text,withoutNoteIdentity(text));
+ const before=h.files.get(moved)!.text;await h.p.ensureNoteIdentity(moved,'f'.repeat(64));assert.equal(h.files.get(moved)!.text,before);assert.equal(h.p.smartData().notes[fresh].path,moved);
+});
+
+test('new identities exist only in the registry and legacy cleanup leaves prose and literal examples intact',async()=>{
+ const h=await fixture(),literal='```md\n'+noteIdentityMarker(h.id)+'\n```\n';h.put(old,'User text.\n'+literal);
+ await h.p.ensureNoteIdentity(old,h.id);assert.equal(h.files.get(old)!.text,'User text.\n'+literal);
+ h.put(old,noteIdentityMarker(h.id)+'\nUser text.\n'+literal);await h.p.ensureNoteIdentity(old,h.id);
+ assert.equal(h.files.get(old)!.text,'\nUser text.\n'+literal);assert.equal(h.p.smartData().notes[h.id].path,old);
 });
 
 test('legacy saved progress does not restore a missed thread link by searching the vault',async()=>{

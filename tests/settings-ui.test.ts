@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from './obsidian-context';
 import {webcrypto} from 'node:crypto';
+import {EventJournal,connectionDiagnosticPolicy} from '../src/app/diagnostics';
 
 // Exercise the shipped settings tab with Obsidian's small DOM/component surface.
 class Element {
@@ -19,8 +20,9 @@ class Element {
   fire(name:string,event:any={}){this.listeners[name]?.(event);}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}
 }
 async function harness(mobile=false){
-  let updates=0;
+  let updates=0,modalOpens=0;
   class Base{}
+  class Modal {titleEl={setText:(_text:string)=>{}};contentEl=new Element();constructor(_app:unknown){}open(){modalOpens++;}}
   class Tab{containerEl=new Element();constructor(public app:any){}}
   Object.defineProperty(Tab.prototype,'update',{value(){updates++;}});
   class Setting {
@@ -31,13 +33,13 @@ async function harness(mobile=false){
     addText(callback:any){return this.add(callback);}addDropdown(callback:any){return this.add(callback);}
     addButton(callback:any){return this.add(callback);}addToggle(callback:any){return this.add(callback);}
   }
-  const api={Plugin:Base,PluginSettingTab:Tab,Setting,Platform:{isMobile:mobile},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base};
+  const api={Plugin:Base,PluginSettingTab:Tab,Setting,Platform:{isMobile:mobile},Modal,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base};
   const module={exports:{} as any};
   runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},crypto:webcrypto,TextEncoder,TextDecoder,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},console},{timeout:5000});
   let saves=0,refreshes=0;
   const plugin:any={mode:'direct',manifest:{id:'t-three-code'},settings:{connection:{executable:'',baseDir:''},paired:[],folderLinks:[],completion:{action:'keep',archiveFolder:'Archive/T3 Code'},completionJobs:[],inlineStreaming:{enabled:true,finalAnswerFormat:'formatted'},threadTitleGeneration:'untitled-only',autoSettleThreads:true,settlementJobs:[{id:'pending'}]},save:async()=>{saves++;},refreshMachines:async()=>{refreshes++;},vaultConnection:()=>undefined,paletteChatStatus:()=> 'active'};
   const tab=new module.exports.T3Settings({},plugin);
-  return {tab,plugin,Setting,updates:()=>updates,saves:()=>saves,refreshes:()=>refreshes};
+  return {tab,plugin,Setting,Plugin:module.exports.default,modalOpens:()=>modalOpens,updates:()=>updates,saves:()=>saves,refreshes:()=>refreshes};
 }
 test('native settings definitions expose the supported pages without credential writes or legacy renderers',async()=>{
  const h=await harness(),pages=h.tab.getSettingDefinitions();assert.deepEqual(Array.from(pages,(page:any)=>page.name),['Agent tools','Connection','Replies','Projects','Advanced']);
@@ -62,4 +64,32 @@ test('route text updates in place and detached rows stop receiving updates',asyn
  h.plugin.routeDescription=()=>text;h.tab.routeRows.set('route',{setting,description:text});
  text='Disconnected · machine offline';h.tab.refreshRouteStatus();assert.equal(setting.description,text);assert.equal(input.focused,true);assert.equal(h.updates(),0);
  Object.assign(setting.settingEl,{isConnected:false});text='Active · Connected';h.tab.refreshRouteStatus();assert.equal(setting.description,'Disconnected · machine offline');assert.equal(h.tab.routeRows.size,0);
+});
+
+test('diagnostic switches save only device-specific local preferences and retain separate categories',async()=>{
+ const h=await harness(),stored=new Map<string,unknown>(),shared={vaultId:'same-vault'};
+ const device=(deviceId:string)=>Object.assign(Object.create(h.Plugin.prototype),{settings:shared,deviceId,diagnosticLogging:{connection:false,follow:false},app:{saveLocalStorage:(key:string,value:unknown)=>stored.set(key,value)},save:()=>assert.fail('Diagnostic settings must not write synced settings')});
+ const phone=device('phone'),laptop=device('laptop');phone.setDiagnosticLogging('connection',true);
+ assert.equal(phone.diagnosticLogging.connection,true);assert.equal(phone.diagnosticLogging.follow,false);assert.equal(laptop.diagnosticLogging.connection,false);
+ assert.equal(stored.size,1);assert.ok(stored.has('t3-diagnostic-preferences-v1:same-vault:phone'));assert.equal(stored.has(laptop.diagnosticPreferenceKey()),false);
+ phone.setDiagnosticLogging('follow',true);phone.setDiagnosticLogging('connection',false);
+ assert.equal(phone.diagnosticLogging.follow,true);assert.equal(phone.diagnosticLogging.connection,false);assert.deepEqual(shared,{vaultId:'same-vault'});
+ h.plugin.diagnosticLogging=phone.diagnosticLogging;h.plugin.setDiagnosticLogging=(category:string,enabled:boolean)=>phone.setDiagnosticLogging(category,enabled);
+ const page=h.tab.getSettingDefinitions().find((item:any)=>item.name==='Advanced'),root=new Element(),setting=new h.Setting(root);page.items[0].render(setting);
+ const rows=setting.el.children,connection=rows.find((row:any)=>row.text==='Connection logging'),follow=rows.find((row:any)=>row.text==='Follow logging');
+ assert.ok(connection&&follow);assert.equal(connection.controls[0].value,false);assert.equal(follow.controls[0].value,true);
+ connection.controls[0].change(true);assert.equal(phone.diagnosticLogging.connection,true);assert.equal(laptop.diagnosticLogging.connection,false);
+});
+
+test('the existing failure-log command exports both send failures and correlated diagnostics with since filtering',async()=>{
+ const h=await harness(),at='2026-11-07T12:00:00.000Z';
+ const journal=new EventJournal({load:async()=>undefined,save:async()=>{},id:()=> 'instance',now:()=>Date.parse(at),context:{deviceId:'phone'}},connectionDiagnosticPolicy);
+ journal.record('stream.reconnecting',{threadId:'thread',bindingId:'binding',cause:'socket-close',closeCode:1006});
+ const plugin=Object.assign(Object.create(h.Plugin.prototype),{settings:{vaultId:'vault'},deviceId:'phone',diagnosticLogging:{connection:true,follow:false},diagnostics:journal,clientMaintenance:{execute:async()=>({ok:true,client:{loadedVersion:'test'}})},app:{loadLocalStorage:()=>[{at,stage:'dispatch',elapsedMs:1,delivery:'accepted',threadId:'thread',error:{message:'failed'}}]}});
+ try{
+  const command={version:1,id:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',kind:'send-failure-log',since:at};
+  const result=await plugin.executeAgentCommand(command);assert.equal(result.failureLog.failures.length,1);assert.equal(result.failureLog.diagnostics.events.length,1);assert.equal(result.failureLog.diagnostics.events[0].fields.threadId,'thread');assert.equal(result.failureLog.diagnostics.enabled.connection,true);
+  const later=await plugin.executeAgentCommand({...command,since:'2026-11-07T12:01:00.000Z'});assert.equal(later.failureLog.failures.length,0);assert.equal(later.failureLog.diagnostics.events.length,0);
+  await plugin.exportDiagnostics();assert.equal(h.modalOpens(),1);
+ }finally{await journal.close();}
 });

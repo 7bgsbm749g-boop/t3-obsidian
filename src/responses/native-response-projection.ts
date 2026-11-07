@@ -2,8 +2,8 @@ import {startMarker,endMarker} from '../conversations/inline-thread';
 import {containerBody,containerStart,containerEnd,containsResponseBoundary,responseFrame,responseBoundaries} from './response-container';
 import type {Transaction} from '@codemirror/state';
 
-export interface LocalResponse {id:string;body:string;movable?:boolean;stoppable?:boolean;followable?:boolean}
-export interface ProjectionRange {id:string;savedFrom:number;savedTo:number;displayFrom:number;displayTo:number;anchor:string;followable?:boolean}
+export interface LocalResponse {id:string;body:string;movable?:boolean;stoppable?:boolean;followable?:boolean;followPaused?:boolean}
+export interface ProjectionRange {id:string;savedFrom:number;savedTo:number;displayFrom:number;displayTo:number;anchor:string;followable?:boolean;followPaused?:boolean}
 export interface ResponseProjection {saved:string;display:string;ranges:ProjectionRange[]}
 export class ProjectionConflict extends Error {}
 
@@ -36,7 +36,7 @@ export function projectResponses(saved:string,responses:readonly LocalResponse[]
     if(!output||output.from!==0||output.to!==rendered.length)throw new ProjectionConflict('Generated text changed the response container boundaries.');
     display+=saved.slice(cursor,region.from);
     const displayFrom=display.length;display+=rendered;
-    ranges.push({id:response.id,savedFrom:region.from,savedTo:region.to,displayFrom,displayTo:display.length,anchor,...(response.followable!==undefined?{followable:response.followable}:{})});cursor=region.to;
+    ranges.push({id:response.id,savedFrom:region.from,savedTo:region.to,displayFrom,displayTo:display.length,anchor,...(response.followable!==undefined?{followable:response.followable}:{}),...(response.followPaused!==undefined?{followPaused:response.followPaused}:{})});cursor=region.to;
   }
   display+=saved.slice(cursor);
   return {saved,display,ranges};

@@ -752,6 +752,17 @@ class ReleaseQueueTests(unittest.TestCase):
             queue.wait_for_memory(job['jobId'], '768M', 'native-watch', queue=self.store)
         self.assertEqual(queue.status(job['jobId'], queue=self.store)['jobs'][0]['status'], 'queued')
 
+    def test_verification_retains_current_native_command_schedule_ids(self):
+        source = self.source('native-command-watch')
+        job = queue.enqueue(source, self.root, 'HEAD', thread_id='owning-thread', queue=self.store)
+        queue.drain(self.release, queue=self.store)
+        watch = 'scheduled-task:command:mcp:a9325d6d-b56c-43d3-ac63-9fb9f63814b4:schedule-task:release-recovery'
+        state = queue.wait_for_memory(job['jobId'], '768M', watch, queue=self.store)
+        self.assertEqual(state['recoveryTaskId'], watch)
+        for invalid in ['watch\nbad', 'watch;command', 'a' * 513]:
+            with self.assertRaisesRegex(ValueError, 'scheduledTaskId'):
+                queue.wait_for_memory(job['jobId'], '768M', invalid, queue=self.store)
+
     def test_later_release_does_not_reset_probe_deadline_or_block_behind_verification(self):
         _, first, clock = self.memory_job()
         second = self.submit(self.source('memory-second'))

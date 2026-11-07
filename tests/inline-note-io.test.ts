@@ -21,8 +21,13 @@ test('device final IO includes dirty ordinary text in one atomic save without wa
  assert.equal(await h.io.compareAndSet('Note.md',before,after),true);assert.equal(h.writes(),1);assert.equal(h.saves(),0);assert.equal(h.disk(),after);assert.equal(h.views[0].getViewData(),after);h.manager.dispose();
 });
 
-test('divergent native panes prevent the final write and retain their separate ordinary edits',async()=>{
+test('compatible pane edits reconcile before one final write without closing either pane',async()=>{
  const h=localFinalFixture(2);h.edit(h.visible().replace('Before','Pane one edit'),0);h.edit(h.visible(1).replace('After','Pane two edit'),1);
+ const before=(await h.io.read('Note.md'))!;assert.match(before,/Pane one edit/);assert.match(before,/Pane two edit/);
+ const after=before.replace(responseAnchor(h.id),'> Final response');assert.equal(await h.io.compareAndSet('Note.md',before,after),true);assert.equal(h.writes(),1);assert.equal(h.views[0].getViewData(),after);assert.equal(h.views[1].getViewData(),after);h.manager.dispose();
+});
+test('overlapping pane edits remain separate and do not write a guessed merge',async()=>{
+ const h=localFinalFixture(2);h.edit(h.visible().replace('Before','Pane one edit'),0);h.edit(h.visible(1).replace('Before','Pane two edit'),1);
  assert.equal(await h.io.read('Note.md'),undefined);assert.equal(h.writes(),0);assert.match(h.visible(),/Pane one edit/);assert.match(h.visible(1),/Pane two edit/);h.manager.dispose();
 });
 

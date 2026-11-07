@@ -1,5 +1,60 @@
 # Silent T3 file connections and recovery
 
+## Reply stream lifetime and diagnostic controls
+
+Healthy reply subscriptions no longer restart after four minutes. The timer
+entered with the first inline streamer in `0970a37` on 2026-09-26, alongside a
+desktop access factory that issued five-minute CLI credentials. This supports a
+credential-refresh explanation, but the commit and conversation do not state
+that rationale explicitly. The original feasibility report already distinguished
+the five-minute socket-opening ticket from the lifetime of a running turn.
+
+The current server handles actual session expiry and revocation, including
+successor sessions for managed DPoP credentials. The plugin keeps its existing
+fresh-ticket retry and backoff after a real socket close, transport failure or
+opening timeout. It does not proactively close an otherwise healthy subscription.
+
+**Advanced → Troubleshooting** contains independent **Connection logging** and
+**Follow logging** switches. Both are off by default. Preferences use native
+device-local storage, keyed by vault and device; they are not shared settings.
+Enabling a switch affects only that device. Turning it off stops new records
+without removing retained records.
+
+These controls reuse `EventJournal`, its existing private IndexedDB namespace,
+redaction and log export. They do not enable general operation wrappers, chunk
+logging, synced log publication or flush timers. Connection and Follow events
+share a limit of 512 records, 256,000 UTF-8 bytes and seven days. Transition
+bursts are coalesced into local writes. There are no writes for token updates or
+animation frames.
+
+Connection records identify the device/session, thread, response binding, turn,
+stream monitor/attempt and selected route where available. They include retry
+delay, time to first recovered data, socket/frame ages, server sequence cursors,
+HTTP status and WebSocket close code/clean flag with a redacted close reason.
+Snapshot and final-verification failures remain distinct from socket failures.
+Repeated snapshot failures are recorded once until a successful snapshot read.
+Visibility and online state help align incidents with app suspension or network
+changes. No prompts, note bodies, credentials or socket URLs are retained.
+
+Follow records describe transitions between following, paused and off. A
+reconnect pause retains intent; manual scrolling, explicit off, collapse, mode
+changes and unavailable response identities each carry a reason. Response
+binding IDs join these records to the connection timeline. Thread/turn IDs,
+timestamps and server cursors permit comparison with T3 history; transcript
+history alone cannot reconstruct device socket or Follow events.
+
+**Diagnostic log** and **Export diagnostic log** reuse the existing viewer and
+command ID. The checked `send-failure-log` command remains compatible: its
+`failureLog` still contains send failures and adds a `diagnostics` object with
+events, current switches, client context and storage errors. Its existing UTC
+`since` filter applies to both types of record. Exports are read-only and do not
+send a message, reload the client or dispatch work.
+
+Regression coverage checks a healthy stream past the old four-minute refresh
+and five-minute ticket deadline, a real-close retry, correlation fields,
+redaction, retention, device-isolated switches and combined export. Portable
+bundle checks do not establish native phone behavior.
+
 ## Confirmed observations
 
 The laptop send failures on 2026-10-10 occurred during response registration,
