@@ -78,7 +78,7 @@ authorize these steps.
 
 1. Complete the normal release queue, changed-behavior smoke checks, fresh Sync,
    and exact real-client verification. Keep all fixtures outside the real vault.
-2. Push the reviewed single-parent release commit and its exact numeric tag.
+2. Push the reviewed release merge commit, its source history and its exact numeric tag.
    `.github/workflows/release-provenance.yml` builds that tag and uses GitHub's
    official provenance action to attest `main.js`, `manifest.json` and
    `styles.css`. It installs dependencies, runs lint, checks types and builds

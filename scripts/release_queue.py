@@ -78,7 +78,7 @@ def commit_tree(root: Path, tree: str, parents: list[str], message: str) -> str:
 
 
 def integration_context(root: Path, head: str, queue: Path) -> str:
-    """Keep source ancestry private, while the public branch stays linear.
+    """Recover source ancestry for integrations made by the old squash worker.
 
     The tree is always the current canonical tree. Extra parents describe
     already integrated task sources, so a later task can edit their changes
@@ -343,10 +343,11 @@ def recover_version_collision(release, canonical: Path, job_id: str, *, queue: P
         if journal_path.exists() and read(journal_path).get('status') == 'complete':
             return {'jobId': job_id, 'status': 'already-recovered', 'journal': str(journal_path)}
         state = read(directory / 'state.json')
-        if state['status'] not in {'failed', 'awaiting-smoke'} or state.get('integrationStyle') != 'squash':
-            raise SystemExit('Collision recovery requires a failed, unshipped squash integration.')
+        if state['status'] not in {'failed', 'awaiting-smoke'} or state.get('integrationStyle') not in {'squash', 'merge'}:
+            raise SystemExit('Collision recovery requires a failed, unshipped queue integration.')
         candidate = state.get('releaseCommit')
-        if not candidate or state.get('ownedIntegrations') != [{'commit': candidate, 'merge': False}]:
+        is_merge = state.get('integrationStyle') == 'merge'
+        if not candidate or state.get('ownedIntegrations') != [{'commit': candidate, 'merge': is_merge}]:
             raise SystemExit('Collision recovery cannot prove one owned integration.')
         version = state['version']
         source_root = release.ROOT
@@ -371,7 +372,7 @@ def recover_version_collision(release, canonical: Path, job_id: str, *, queue: P
         if not journal:
             if not ancestor(canonical, candidate, head):
                 raise SystemExit('The owned integration is not on the canonical branch.')
-            owned_paths = set(git(canonical, 'diff-tree', '--no-commit-id', '--name-only', '-r', candidate).splitlines())
+            owned_paths = set(git(canonical, 'diff', '--name-only', candidate + '^1', candidate).splitlines())
             newer_paths = set(git(canonical, 'diff', '--name-only', candidate, head).splitlines())
             if owned_paths & newer_paths:
                 raise SystemExit('Later changes overlap this integration. Automatic collision recovery stopped.')
@@ -386,10 +387,10 @@ def recover_version_collision(release, canonical: Path, job_id: str, *, queue: P
         release.ROOT = canonical
         try:
             if head == journal['baseHead']:
-                revert_owned(release, candidate)
+                revert_owned(release, candidate, merge=is_merge)
                 reverted = git(canonical, 'rev-parse', 'HEAD')
             elif (git(canonical, 'rev-parse', 'HEAD^') == journal['baseHead'] and
-                  f'This reverts commit {candidate}.' in git(canonical, 'show', '-s', '--format=%B', 'HEAD')):
+                  f'This reverts commit {candidate}' in git(canonical, 'show', '-s', '--format=%B', 'HEAD')):
                 reverted = head  # Crash after the journalled revert committed.
             else:
                 raise SystemExit('Canonical HEAD moved outside the recovery journal.')
@@ -697,9 +698,11 @@ def apply_pending_integration(release, directory: Path, state: dict) -> None:
         release.run(['git', 'merge', '--ff-only', pending['commit']])
     elif head != pending['commit']:
         raise SystemExit('Canonical HEAD moved outside the pending queue integration; recovery stopped.')
-    values = dict(integrationStyle='squash', integratedCommit=pending['commit'],
+    # Journals written by the old worker have one parent and no style field.
+    style = pending.get('integrationStyle', 'squash')
+    values = dict(integrationStyle=style, integratedCommit=pending['commit'],
                   integratedSourceCommit=pending['sourceCommit'], pendingIntegration=None,
-                  ownedIntegrations=[*state.get('ownedIntegrations', []), {'commit': pending['commit'], 'merge': False}],
+                  ownedIntegrations=[*state.get('ownedIntegrations', []), {'commit': pending['commit'], 'merge': style == 'merge'}],
                   pastRollbacks=[*state.get('pastRollbacks', []), *state.get('rollbackCommits', [])], rollbackCommits=[])
     if pending.get('version'):
         values.update(version=pending['version'], releaseCommit=pending['commit'])
@@ -721,15 +724,25 @@ def integrate_job(release, directory: Path, request: dict, state: dict) -> None:
         # A pre-upgrade worker may have already merged this tooling update.
         update(directory, state, integratedSourceCommit=request['commit'])
         return
-    # Older queued failures have real merge parents. Restore only their owned
-    # reverts. Squashed candidates are instead recreated from reviewed source.
-    if state.get('integrationStyle') != 'squash':
+    # Pre-versioned legacy merges can still restore their owned reverts directly.
+    # New merges include version files, which must not overwrite later releases.
+    if state.get('integrationStyle') not in {'squash', 'merge'}:
         while state.get('rollbackCommits'):
             revert_owned(release, state['rollbackCommits'][-1])
             update(directory, state, rollbackCommits=state['rollbackCommits'][:-1],
                    ownedIntegrations=[*state.get('ownedIntegrations', []), {'commit': git(root, 'rev-parse', 'HEAD'), 'merge': False}])
     head = git(root, 'rev-parse', 'HEAD')
     context = integration_context(root, head, directory.parent.parent)
+    if state.get('integrationStyle') == 'merge':
+        for rollback in reversed(state.get('rollbackCommits', [])):
+            # Replay the inverse of each owned revert in private, excluding its
+            # version edits. The final candidate restores source and applies its
+            # repair atomically, even if another release shipped in the meantime.
+            restored = update_tree(root, git(root, 'rev-parse', rollback + '^1^{tree}'),
+                                   {name: tree_bytes(root, rollback, name) for name in VERSION_FILES}, directory)
+            restoration = commit_tree(root, restored, [rollback], 'Private release queue source restoration\n')
+            tree = merged_tree(root, context, restoration, directory)
+            context = commit_tree(root, tree, [context], 'Private release queue restored context\n')
     tree = merged_tree(root, context, request['commit'], directory)
     version = None
     if not request['maintenanceOnly']:
@@ -751,12 +764,15 @@ def integrate_job(release, directory: Path, request: dict, state: dict) -> None:
     summary = ' '.join(request.get('summary', '').split())[:160] or 'Reviewed changes'
     title = f'Release {version}: {summary}' if version else f'Maintenance: {summary}'
     message = f"{title}\n\nSource-Commit: {request['commit']}\nRelease-Queue-Job: {directory.name}\n"
-    candidate = commit_tree(root, tree, [head], message)
+    # Keep the exact submitted commits, authors, messages and merge topology in
+    # public ancestry. The first parent remains the canonical release branch.
+    candidate = commit_tree(root, tree, [head, request['commit']], message)
     git(root, 'update-ref', f'refs/t3-release-queue/candidates/{directory.name}/{candidate}', candidate)
     # Save ownership before moving the branch. An interruption on either side
     # of the fast-forward resumes this exact commit, never a second release.
     update(directory, state, pendingIntegration={'baseCommit': head, 'commit': candidate,
-                                                'sourceCommit': request['commit'], 'version': version})
+                                                'sourceCommit': request['commit'], 'version': version,
+                                                'integrationStyle': 'merge'})
     apply_pending_integration(release, directory, state)
 
 
@@ -767,7 +783,7 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
             git(root, 'diff', '--name-only', '--no-renames', request['mergeBase'], request['commit']).splitlines())}
     version = state.get('version')
     deployed = version and (release.release_receipt_dir(version) / 'deployment.json').is_file()
-    if deployed and state.get('integrationStyle') == 'squash' and state.get('releaseCommit'):
+    if deployed and state.get('releaseCommit'):
         owner = read(release.release_receipt_dir(version) / 'deployment.json').get('gitCommit')
         if owner != state['releaseCommit']:
             raise SystemExit('Another release owns this deployment. Use --recover-version-collision; its archive and client proof cannot satisfy this job.')
@@ -829,7 +845,7 @@ def run_job(release, directory: Path, request: dict, state: dict, loaded_engine:
     # New releases already committed their exact version bytes before packaging.
     dirty = release.git_state()[1]
     if dirty:
-        if state.get('integrationStyle') == 'squash':
+        if state.get('releaseCommit'):
             raise SystemExit('Committed release inputs changed during publication; no extra commit will be created.')
         if any(line[:3] != ' M ' or line[3:] not in VERSION_FILES for line in dirty):
             raise SystemExit('Unexpected canonical edits appeared; release queue stopped.')
@@ -934,7 +950,7 @@ def drain(release, *, queue: Path = QUEUE) -> dict:
                         for path, item in pending:
                             if item['status'] == 'awaiting-smoke' and completed_smoke(release, item['version']):
                                 deployed = read(release.release_receipt_dir(item['version']) / 'deployment.json')
-                                if item.get('integrationStyle') == 'squash' and deployed.get('gitCommit') != item.get('releaseCommit'):
+                                if item.get('releaseCommit') and deployed.get('gitCommit') != item['releaseCommit']:
                                     update(path, item, error='Another release owns this deployment. Use --recover-version-collision.',
                                            nextAction='Recover the unshipped version collision; older smoke records cannot complete it.')
                                     continue

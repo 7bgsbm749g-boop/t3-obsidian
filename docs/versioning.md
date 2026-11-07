@@ -27,11 +27,11 @@ add another row. Failed candidates remain traceable; archived bytes and old
 release records remain immutable. Keep every comparison column until the user
 explicitly graduates from alpha.
 
-New plugin releases have one commit on `main` combining source changes and all
-version files, titled `Release VERSION: summary`. Its commit ID is the archive
-and deployment provenance. The private history still records the original task
-source commit and thread link. Local queue refs preserve source ancestry without
-adding task commits or merge commits to the public release history. Historical
+New plugin releases preserve the submitted task commits on `main` without
+squashing. A merge commit titled `Release VERSION: summary` joins the canonical
+branch and task tip, with the resolved source tree and final version files.
+Its commit ID is the archive and deployment provenance. The private history
+also records the original task source commit and thread link. Historical
 releases and already packaged retries retain their existing records.
 
 Use `--thread-id ID --summary "CHANGE"` with `--enqueue HEAD` to record the
