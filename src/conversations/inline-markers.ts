@@ -41,14 +41,20 @@ export function hiddenInlineMarkerExtension():Extension {
     constructor(view:EditorView){this.decorations=matcher.createDeco(view);}
     update(update:ViewUpdate){this.decorations=matcher.updateDeco(update,this.decorations);}
   },{decorations:value=>value.decorations});
-  // Multiline replacements must be direct state decorations. Hide the extra
-  // container separator newline too, retaining the old comment-line geometry in
-  // both Live Preview and Source mode. Literal containers in code stay visible.
+  // Multiline replacements must be direct state decorations. Keep the saved
+  // Markdown separators that isolate callouts, but hide the opening marker's
+  // whole line when a blank line already precedes it (or it starts the note).
+  // Both Live Preview and Source mode retain the user's existing blank lines.
+  // Literal containers in code stay visible.
   const {StateField}=cmState;
   const containers=(index:ContainerMarkerIndex,doc:import('@codemirror/state').Text)=>Decoration.set(index.boundaries.map(boundary=>{
     const from=boundary.from-(boundary.kind==='end'&&doc.sliceString(Math.max(0,boundary.from-2),boundary.from)==='\n\n'?1:0);
-    const to=boundary.to+(boundary.kind==='start'&&doc.sliceString(boundary.to,boundary.to+2)==='\n\n'?1:0);
-    return Decoration.replace({}).range(from,to);
+    const line=doc.lineAt(boundary.from);
+    const separated=line.from===boundary.from&&(line.number===1||/^[ \t]*$/.test(doc.line(line.number-1).text));
+    const to=boundary.to+(boundary.kind==='start'&&doc.sliceString(boundary.to,boundary.to+2)==='\n\n'?(separated?2:1):0);
+    // A whole-line marker needs a block replacement; an inline replacement
+    // leaves Obsidian's native callout line box and quote border behind.
+    return Decoration.replace({block:boundary.kind==='start'&&separated&&to>boundary.to+1}).range(from,to);
   }),true);
   const field=StateField.define<ContainerMarkerDecorations>({
     create:state=>{const index=ContainerMarkerIndex.create(state.doc);return {index,decorations:containers(index,state.doc)};},

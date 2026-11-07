@@ -20,13 +20,13 @@ export default class ScrollFollowLab extends Plugin {
     this.register(installResponsePresentation(document,setIcon));this.register(installActivityShine(document));this.register(()=>manager.dispose());
     this.register(installStreamBlockControls(this.app,document,setIcon,error=>void fs.writeFile(path.join(root,'error.json'),String(error))));
     this.app.workspace.onLayoutReady(()=>void(async()=>{
-      let config:{large?:boolean}={};try{config=JSON.parse(await fs.readFile(path.join(root,'case.json'),'utf8'));}catch(error:any){if(error.code!=='ENOENT')throw error;}
+      let config:{large?:boolean;prefix?:string;lines?:number}={};try{config=JSON.parse(await fs.readFile(path.join(root,'case.json'),'utf8'));}catch(error:any){if(error.code!=='ENOENT')throw error;}
       const prefix=config.large?Array.from({length:1000},(_,i)=>`${i%25===0?'## Section '+i+'\n\n':''}Reference paragraph ${i+1}. A synthetic design review describes navigation, spacing, typography, comparison cards, filters, and layout alternatives. `+'This text stays unchanged while the response grows. '.repeat(2)+'\n\n').join(''):'';
-      const id=crypto.randomUUID(),file=this.app.vault.getFileByPath('Virtual.md')!,saved=`# Scroll follow fixture\n\n${prefix}${responseAnchor(id)}\n\n${config.large?'\n\n':'Ordinary after.\n'}`;
+      const id=crypto.randomUUID(),file=this.app.vault.getFileByPath('Virtual.md')!,saved=`${config.prefix??'# Scroll follow fixture'}\n\n${prefix}${responseAnchor(id)}\n\n${config.large?'\n\n':'Ordinary after.\n'}`;
       await this.app.vault.modify(file,saved);
       const leaf=this.app.workspace.getLeaf(false);await leaf.openFile(file);
       await leaf.setViewState({type:'markdown',state:{file:file.path,mode:'source',source:false}});
-      let lines=config.large?1200:35,revision=0;
+      let lines=config.lines??(config.large?1200:35),revision=0;
       const record:any={coordinated:true,owner:'fixture',epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,request:{version:3,id,vaultId:'fixture',host:{environmentId:'fixture',workspaceRoot:(this.app.vault.adapter as any).getFullPath(''),directory:'.obsidian/fixture'},notePath:file.path,threadId:'fixture-thread',messageId:id,projectId:'fixture-project',threadEnvironmentId:'fixture',initialHash:'initial',createdAt:new Date().toISOString()},state:{accepted:true,notePath:file.path,status:'running',hashes:[],body:'',updatedAt:''}};
       const update=async()=>{record.revision++;record.state.body=`> [!t3-progress]+ Scroll follow · Working ${revision} <span class="send-to-t3-fold-key" data-t3-fold="fixture:active"></span>\n>\n`+Array.from({length:lines},(_,i)=>`> Paragraph ${i+1}. ${config.large?'Synthetic streamed design detail. The layout uses a navigation panel, comparison cards, visible actions, balanced spacing, and distinct sections to test long wrapped paragraphs.':'Synthetic streaming text.'}\n>\n`).join('');await manager.receive(record);};
       await update();
