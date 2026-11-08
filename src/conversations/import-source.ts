@@ -1,6 +1,6 @@
 import {readThreadList} from '../connection/wire-readers';
 import {abortableRead,requestAborted} from '../connection/t3-api';
-import {applyThreadItem,type InlineThreadState} from './inline-thread';
+import {applyThreadItem,inlineTurnMessages,type InlineThreadState} from './inline-thread';
 import {readInlineSnapshot,type ThreadAccess} from './thread-stream';
 import type {ThreadSnapshot} from '../connection/wire-types';
 import {availableImportRun,importRuns,importRunPreview,type ImportRun} from './run-import';
@@ -12,9 +12,9 @@ import {T3RpcError} from '../connection/t3-rpc';
 
 const histories=new WeakMap<ImportRun,{snapshot:ThreadSnapshot;state:InlineThreadState}>();
 const indexes=new ImportIndexCache();
-async function readHistory(access:ThreadAccess,threadId:string,projectId:string,signal?:AbortSignal,conversation=false,runId?:string){
+async function readHistory(access:ThreadAccess,threadId:string,projectId:string,signal?:AbortSignal,conversation=false,runId?:string,onImportSnapshot?:(snapshot:ThreadSnapshot)=>void){
  requestAborted(signal);
- const api=Object.assign((path:string,payload?:unknown)=>access.api(path,payload,{signal}),access.api);
+ const api=Object.assign((path:string,payload?:unknown)=>access.api(path,payload,{signal,onImportSnapshot}),access.api);
  return abortableRead(readInlineSnapshot({...access,api},threadId,projectId,undefined,true,conversation,runId),signal);
 }
 
@@ -33,7 +33,7 @@ export async function readImportThreads(access:ThreadAccess,projectId:string,sig
  return projectThreads({threads:readThreadList(shell)},projectId);
 }
 
-export async function readImportRuns(access:ThreadAccess,threadId:string,projectId:string,signal?:AbortSignal):Promise<ImportRun[]>{
+export async function readImportRuns(access:ThreadAccess,threadId:string,projectId:string,signal?:AbortSignal,progress?:(runs:ImportRun[])=>void):Promise<ImportRun[]>{
  requestAborted(signal);
  let identity=access.api.importCacheIdentity;let head:unknown;
  if(identity){
@@ -51,7 +51,19 @@ export async function readImportRuns(access:ThreadAccess,threadId:string,project
   if(head.threadId!==threadId||head.projectId!==projectId)throw Error('Waiting for the requested T3 thread.');
   const cached=indexes.read(identity,threadId,projectId,revision);if(cached){requestAborted(signal);return cached;}
  }
- const snapshot=await readHistory(access,threadId,projectId,signal,true);
+ let lastProgress='';
+ const publish=progress?(snapshot:ThreadSnapshot)=>{
+  requestAborted(signal);
+  if(snapshot.thread.id!==threadId||snapshot.thread.projectId!==projectId)throw Error('Waiting for the requested T3 thread.');
+  const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
+  // The partial tail may expose exact recent roots whose persisted run state
+  // is known. Missing older lifecycle evidence must wait for complete history.
+  const runs=importRuns({...state,historyComplete:true}).filter(run=>availableImportRun(run)&&state.turns?.[run.turnId!]?.messageId===run.messageId&&(run.status==='Running'||inlineTurnMessages(state,run.turnId!).length>0));
+  const signature=JSON.stringify(runs.map(run=>[run.messageId,run.turnId,run.status]));if(signature===lastProgress)return;lastProgress=signature;
+  for(const run of runs)histories.set(run,{snapshot,state});
+  progress(runs);
+ }:undefined;
+ const snapshot=await readHistory(access,threadId,projectId,signal,true,undefined,publish);
  const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
  const runs=importRuns(state).filter(availableImportRun).map(run=>{histories.set(run,{snapshot,state});return run;});
  if(identity&&revision&&access.api.importCacheIdentity===identity)indexes.remember(identity,threadId,projectId,revision,runs,snapshot);

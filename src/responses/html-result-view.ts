@@ -66,6 +66,7 @@ function viewerDocument(html:string,doc:Document):string {
 export class HtmlResultViews {
   private mounted=new Set<Mounted>();private stopped=false;
   private prepared=new Map<string,string>();private preparedCharacters=0;
+  private prefetching=0;
   constructor(private app:App,private store:HtmlResultStore,private options:HtmlResultViewOptions={}){}
   private prepare(html:string,doc:Document){
     const cached=this.prepared.get(html);if(cached!==undefined){this.prepared.delete(html);this.prepared.set(html,cached);return cached;}
@@ -75,6 +76,13 @@ export class HtmlResultViews {
       while(this.prepared.size>16||this.preparedCharacters>8_000_000){const [source,value]=this.prepared.entries().next().value!;this.prepared.delete(source);this.preparedCharacters-=source.length+value.length;}
     }
     return prepared;
+  }
+  /** Warm one explicitly selected result while its import confirmation is
+   * open. Preparing inert bytes creates no iframe or authored script runtime. */
+  async prefetch(reference:HtmlResultReference,doc:Document):Promise<void>{
+    if(this.stopped||this.prefetching>=2)return;
+    this.prefetching++;
+    try{const html=await this.store.get(reference);if(!this.stopped)this.prepare(html,doc);}finally{this.prefetching--;}
   }
   install(plugin:Plugin){
     plugin.registerMarkdownCodeBlockProcessor(HTML_RESULT_LANGUAGE,(source,el,ctx)=>{

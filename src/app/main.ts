@@ -1204,7 +1204,12 @@ export default class SendToT3 extends Plugin {
       projects:()=>this.projects(),projectLabel:project=>this.projectChoiceLabel(project),
       threads:(project,signal)=>read(project,async access=>{threadSources.set(projectKey(project),access.api);return this.availableModeThreads(file.path,project,await readImportThreads(access,project.id,signal));}),
       watchThreads:(project,changed)=>{const api=threadSources.get(projectKey(project));return api?.watchImportThreads?.(project.id,()=>{const threads=api.cachedImportThreads?.(project.id);if(threads)void this.availableModeThreads(file.path,project,threads).then(changed).catch(()=>{});})??(()=>{});},
-      runs:async(project,thread,signal)=>{const runs=await read(project,access=>readImportRuns(access,thread.id,project.id,signal));for(const run of runs)catalogs.set(run,runs);return runs;},
+      runs:async(project,thread,signal,progress)=>{const remember=(runs:ImportRun[])=>{for(const run of runs)catalogs.set(run,runs);return runs;};return remember(await read(project,access=>readImportRuns(access,thread.id,project.id,signal,runs=>progress?.(remember(runs)))));},
+      prepareSelection:async(project,thread,run)=>{
+        if(!this.htmlResults||!run.turnId)return;
+        run.preview??=await read(project,(access,environmentId)=>readImportPreview(access,thread.id,project.id,run,environmentId));
+        const first=run.preview.html[0];if(first)await this.htmlResults.prefetch(first,activeDocument);
+      },
       preview:async(project,thread,run,el,child,signal)=>{
         if(!run.preview&&run.turnId)run.preview=await read(project,(access,environmentId)=>readImportPreview(access,thread.id,project.id,run,environmentId,signal));
         if(!signal.aborted)await renderRunImportPreview(this.app,run,el,child,signal,this.htmlResults);

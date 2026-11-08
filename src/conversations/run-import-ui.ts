@@ -8,7 +8,8 @@ export interface RunImportHost {
   projects():Project[];projectLabel(project:Project):string;
   threads(project:Project,signal?:AbortSignal):Promise<ThreadChoice[]>;
   watchThreads?(project:Project,changed:(threads:ThreadChoice[])=>void):()=>void;
-  runs(project:Project,thread:ThreadChoice,signal?:AbortSignal):Promise<ImportRun[]>;
+  runs(project:Project,thread:ThreadChoice,signal?:AbortSignal,progress?:(runs:ImportRun[])=>void):Promise<ImportRun[]>;
+  prepareSelection?(project:Project,thread:ThreadChoice,run:ImportRun):Promise<void>;
   attach(project:Project,thread:ThreadChoice,run:ImportRun,follow:boolean):Promise<RunImportResult>;
   preview?(project:Project,thread:ThreadChoice,run:ImportRun,element:HTMLElement,component:Component,signal:AbortSignal):Promise<void>;
 }
@@ -23,8 +24,25 @@ export class RunImportPicker extends FuzzySuggestModal<ImportRun>{
   private closed=false;
   private keyboardPreview=false;
   private names=new WeakMap<ImportRun,{prompt:string;name:string}>();
-  constructor(app:App,private runs:ImportRun[],private choose:(run:ImportRun)=>void,private preview:(run:ImportRun,el:HTMLElement,child:Component,signal:AbortSignal)=>Promise<void>,private exited?:()=>void){
-    super(app);this.setPlaceholder('Choose a T3 response');this.emptyStateText='No available runs.';
+  private status?:HTMLElement;private restoreSelection?:{messageId:string;query:string};
+  constructor(app:App,private runs:ImportRun[],private choose:(run:ImportRun)=>void,private preview:(run:ImportRun,el:HTMLElement,child:Component,signal:AbortSignal)=>Promise<void>,private exited?:()=>void,private loading=false){
+    super(app);this.setPlaceholder('Choose a T3 response');this.emptyStateText=loading?'Loading T3 runs…':'No available runs.';
+  }
+  setRuns(runs:ImportRun[],loading=false,error?:string){
+    if(this.closed)return;
+    const selected=this.modalEl.querySelector<HTMLElement>('.suggestion-item.is-selected')?.dataset.t3ImportRun;
+    this.restoreSelection=selected?{messageId:selected,query:this.inputEl.value}:undefined;
+    this.clear();this.runs=runs;this.loading=loading;this.emptyStateText=error??(loading?'Loading T3 runs…':'No available runs.');
+    this.updateStatus(error);this.inputEl.dispatchEvent(new Event('input'));
+  }
+  private updateStatus(error?:string){if(this.status){this.status.hidden=!this.loading&&!error;this.status.setText(error??'Loading earlier runs…');}}
+  private restoreSelected(){
+    const saved=this.restoreSelection;if(!saved||this.inputEl.value!==saved.query){this.restoreSelection=undefined;return;}
+    const rows=Array.from(this.modalEl.querySelectorAll<HTMLElement>('[data-t3-import-run]')),index=rows.findIndex(row=>row.dataset.t3ImportRun===saved.messageId);
+    if(index<0)return;
+    const chooser=(this as unknown as {chooser?:{setSelectedItem?:(index:number,scroll:boolean)=>void}}).chooser;
+    if(typeof chooser?.setSelectedItem==='function')chooser.setSelectedItem(index,false);
+    this.restoreSelection=undefined;
   }
   getItems(){return this.runs.filter(availableImportRun);}
   getItemText(run:ImportRun){
@@ -47,9 +65,11 @@ export class RunImportPicker extends FuzzySuggestModal<ImportRun>{
   }
   onOpen(){
     void super.onOpen();this.modalEl.addClass('send-to-t3-run-picker');
+    this.status=this.modalEl.createDiv({cls:'send-to-t3-import-status',attr:{role:'status','aria-live':'polite'}});this.updateStatus();
     const doc=this.modalEl.ownerDocument,win=doc.defaultView!;
     this.observer=new win.MutationObserver(()=>{
       if(this.active&&!this.active.row.isConnected)this.clear();
+      this.restoreSelected();
       // Arrow keys change the native selected class. Pointer selection is
       // handled by pointerenter, so layout changes never restart the dwell.
     });this.observer.observe(this.modalEl,{childList:true,subtree:true});
@@ -100,8 +120,10 @@ class ImportPicker<T> extends FuzzySuggestModal<T>{
   private selected=false;
   private closed=false;private unwatch?:()=>void;
   private stopWatching=()=>{this.unwatch?.();this.unwatch=undefined;};
-  constructor(app:App,private items:T[],private label:(item:T)=>string,private choose:(item:T)=>Promise<void>,placeholder:string,private flow?:AbortController,private watch?:(changed:(items:T[])=>void)=>()=>void,private prepare?:(item:T|undefined)=>void){super(app);this.setPlaceholder(placeholder);this.emptyStateText='No available items. Check the T3 connection.';}
-  onOpen(){void super.onOpen();this.unwatch=this.watch?.(items=>{if(this.closed||this.flow?.signal.aborted)return;this.items=items;this.inputEl.dispatchEvent(new Event('input'));});this.flow?.signal.addEventListener('abort',this.stopWatching,{once:true});if(this.flow?.signal.aborted)this.stopWatching();}
+  constructor(app:App,private items:T[],private label:(item:T)=>string,private choose:(item:T)=>Promise<void>,placeholder:string,private flow?:AbortController,private watch?:(changed:(items:T[])=>void)=>()=>void,private prepare?:(item:T|undefined)=>void,private loading=false){super(app);this.setPlaceholder(placeholder);this.emptyStateText=loading?'Loading T3 threads…':'No available items. Check the T3 connection.';}
+  private startWatching(){if(!this.loading&&!this.unwatch)this.unwatch=this.watch?.(items=>this.setItems(items));}
+  setItems(items:T[],error?:string){if(this.closed||this.flow?.signal.aborted)return;this.items=items;this.loading=false;this.emptyStateText=error??'No available items. Check the T3 connection.';this.startWatching();this.inputEl?.dispatchEvent(new Event('input'));}
+  onOpen(){void super.onOpen();this.startWatching();this.flow?.signal.addEventListener('abort',this.stopWatching,{once:true});if(this.flow?.signal.aborted)this.stopWatching();}
   getItems(){return this.items;}
   getSuggestions(query:string){const matches=super.getSuggestions(query);this.prepare?.(query.trim()&&matches.length===1?matches[0].item:undefined);return matches;}
   getItemText(item:T){return this.label(item);}
@@ -113,28 +135,34 @@ export function openRunImport(app:App,notePath:string,host:RunImportHost){
   importFlows.get(app)?.abort();const flow=new AbortController();importFlows.set(app,flow);
   const current=()=>!flow.signal.aborted&&importFlows.get(app)===flow;
   const finish=()=>{flow.abort();if(importFlows.get(app)===flow)importFlows.delete(app);};
+  const failure=(error:unknown)=>error instanceof Error?error.message:String(error);
   new ImportPicker(app,host.projects(),project=>host.projectLabel(project),async project=>{
-    new Notice('Loading T3 threads…',2000);
-    const threads=await host.threads(project,flow.signal);if(!current())return;
-    let prepared:{threadId:string;controller:AbortController;work:Promise<ImportRun[]>}|undefined;
+    if(!current())return;
+    let prepared:{threadId:string;controller:AbortController;work:Promise<ImportRun[]>;runs:ImportRun[]}|undefined;
+    let publish:((runs:ImportRun[])=>void)|undefined;
     const prepare=(thread:ThreadChoice|undefined)=>{
       if(prepared?.threadId===thread?.id)return;
       prepared?.controller.abort();prepared=undefined;
       if(!thread||!current())return;
       const controller=new AbortController(),cancel=()=>controller.abort(flow.signal.reason);
       flow.signal.addEventListener('abort',cancel,{once:true});
-      const work=Promise.resolve().then(()=>{if(controller.signal.aborted)throw controller.signal.reason;return host.runs(project,thread,controller.signal);}).finally(()=>flow.signal.removeEventListener('abort',cancel));
+      const progress=(runs:ImportRun[])=>{if(prepared?.controller!==controller||controller.signal.aborted||!current())return;prepared.runs=runs;publish?.(runs);};
+      const work=Promise.resolve().then(()=>{if(controller.signal.aborted)throw controller.signal.reason;return host.runs(project,thread,controller.signal,progress);}).finally(()=>flow.signal.removeEventListener('abort',cancel));
       // Preparation is optional. Only an explicit selection reports a failure.
-      void work.catch(()=>{});prepared={threadId:thread.id,controller,work};
+      void work.catch(()=>{});prepared={threadId:thread.id,controller,work,runs:[]};
     };
-    new ImportPicker(app,threads,thread=>`${thread.title} · ${thread.status} · ${thread.id.slice(0,8)}`,async thread=>{
-      new Notice('Reading T3 run history…',2000);
-      prepare(thread);const runs=await prepared!.work;if(!current())return;
-      new RunImportPicker(app,runs,run=>{
+    const threads=new ImportPicker(app,[] as ThreadChoice[],thread=>`${thread.title} · ${thread.status} · ${thread.id.slice(0,8)}`,async thread=>{
+      prepare(thread);if(!current()||!prepared)return;
+      const picker=new RunImportPicker(app,prepared.runs,run=>{
         if(!current())return;finish();
+        void Promise.resolve().then(()=>host.prepareSelection?.(project,thread,run)).catch(()=>{});
         new ImportRunModal(app,notePath,thread,run,follow=>host.attach(project,thread,run,follow)).open();
-      },(run,el,child,signal)=>host.preview?host.preview(project,thread,run,el,child,signal):Promise.resolve().then(()=>{el.setText('No preview available.');}),finish).open();
-    },'Choose the source T3 thread',flow,changed=>host.watchThreads?.(project,changed)??(()=>{}),prepare).open();
+      },(run,el,child,signal)=>host.preview?host.preview(project,thread,run,el,child,signal):Promise.resolve().then(()=>{el.setText('No preview available.');}),finish,true);
+      publish=runs=>picker.setRuns(runs,true);picker.open();
+      try{const runs=await prepared.work;if(current())picker.setRuns(runs);}catch(error){if(current())picker.setRuns(prepared.runs,false,failure(error));}
+    },'Choose the source T3 thread',flow,changed=>host.watchThreads?.(project,changed)??(()=>{}),prepare,true);
+    threads.open();
+    try{const items=await host.threads(project,flow.signal);if(current())threads.setItems(items);}catch(error){if(current())threads.setItems([],failure(error));}
   },'Choose the source T3 project and machine',flow).open();
 }
 export class ImportRunModal extends Modal {

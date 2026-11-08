@@ -3,7 +3,7 @@ import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../sh
 import {T3_PROTOCOL_VERSION} from './orchestration-v2';
 import type {RouteConnection} from './route-status';
 
-export type T3Api=((path:string,payload?:unknown,options?:{signal?:AbortSignal;compactImport?:boolean})=>Promise<unknown>)&{trackConnection?:(connection:RouteConnection)=>void;cachedImportThreads?:(projectId:string)=>import('../conversations/thread-target').ThreadChoice[]|undefined;importCacheIdentity?:object;prepareImportCatalog?:(signal?:AbortSignal)=>Promise<void>;watchImportThreads?:(projectId:string,changed:()=>void)=>()=>void};
+export type T3Api=((path:string,payload?:unknown,options?:import('./t3-api').T3RequestOptions)=>Promise<unknown>)&{trackConnection?:(connection:RouteConnection)=>void;cachedImportThreads?:(projectId:string)=>import('../conversations/thread-target').ThreadChoice[]|undefined;importCacheIdentity?:object;prepareImportCatalog?:(signal?:AbortSignal)=>Promise<void>;watchImportThreads?:(projectId:string,changed:()=>void)=>()=>void};
 export interface T3RpcConnection extends RouteConnection {call(tag:string,payload:unknown):Promise<unknown>;close():void}
 export type SocketFactory=(url:string)=>WebSocket;
 export interface RpcClock {now():number;timer(callback:()=>void,milliseconds:number):ReturnType<typeof setTimeout>;clear(timer:ReturnType<typeof setTimeout>):void}

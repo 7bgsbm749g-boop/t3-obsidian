@@ -58,6 +58,18 @@ function device(module:any){
  return {store,cache,get attempts(){return attempts;},get downloads(){return downloads;},online(value:boolean){online=value;},signIn(value:boolean){signIn=value;},invalid(){invalid=true;}};
 }
 
+test('selected HTML preparation verifies and caches inert bytes without starting a frame',async()=>{
+ const module=await production(),receiver=device(module),document=documentFixture(),views=new module.HtmlResultViews({},receiver.store);
+ await views.prefetch(reference,document.doc);assert.equal(receiver.downloads,1);assert.equal(document.blobs.size,0);assert.equal(document.listeners.size,0);const parses=document.parses;assert.ok(parses>0);
+ const mounted=views.mount(reference,document.doc);await loaded(mounted.root);assert.equal(receiver.downloads,1);assert.equal(document.parses,parses);assert.equal(document.blobs.size,1);views.dispose();assert.equal(document.blobs.size,0);
+});
+
+test('disposing during selected HTML preparation prevents late document preparation',async()=>{
+ const module=await production(),document=documentFixture();let finish!:(html:string)=>void;
+ const views=new module.HtmlResultViews({},{get:()=>new Promise<string>(resolve=>{finish=resolve;}),dispose(){}}),pending=views.prefetch(reference,document.doc);views.dispose();finish(page);await pending;
+ assert.equal(document.parses,0);assert.equal(document.blobs.size,0);
+});
+
 test('a cold receiver shows a compact connection state and recovers once after host access returns',async()=>{
  const module=await production(),sender=device(module),receiver=device(module),document=documentFixture();
  await sender.store.get(reference);receiver.online(false);

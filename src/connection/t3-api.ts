@@ -8,7 +8,7 @@ import {htmlRenderFromToolItem} from '../responses/html-results';
 
 interface Attachment {id:string;dataUrl?:string;type?:string;name?:string;mimeType?:string;sizeBytes?:number}
 
-export interface T3RequestOptions {signal?:AbortSignal;compactImport?:boolean}
+export interface T3RequestOptions {signal?:AbortSignal;compactImport?:boolean;onImportSnapshot?:(snapshot:import('./wire-types').ThreadSnapshot)=>void}
 export type AbortableT3Api=(path:string,payload?:unknown,options?:T3RequestOptions)=>Promise<unknown>;
 
 export function cancelledRequest(message='Request cancelled.'):Error{return typeof DOMException==='function'?new DOMException(message,'AbortError'):Object.assign(Error(message),{name:'AbortError'});}
@@ -195,21 +195,28 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       const needed=(item:WireTurnItem)=>importOnly?['user_message','assistant_message','error','approval_request','user_input_request','run_interrupt_request'].includes(item.type)||!!htmlRenderFromToolItem(item):!importRunId||conversation(item)||item.runId===importRunId;
       const rows=[...(snapshot.projection.visibleTurnItems??[])].filter(row=>needed(row.item));
       let cursor=snapshot.historyCursor,more=snapshot.hasMoreHistory===true;const cursors=new Set<string>();
-      while(more){
-        if(!cursor||cursors.has(cursor))throw Error('T3 returned an invalid or repeated history cursor.');
-        cursors.add(cursor);
-        const page=readHistory(await request(root+'/history?cursor='+encodeURIComponent(cursor)+(importOnly?'&view=conversation&deferWork=1':'')));
-        if(!Array.isArray(page.items))throw Error('T3 returned an invalid history page.');
-        rows.unshift(...page.items.filter(row=>needed(row.item)));cursor=page.nextCursor;more=page.hasMoreHistory===true;
-      }
+      const recoveredSnapshot=()=>{
       const p=snapshot.projection,items=new Map<string,WireTurnItem>(),messages=new Map<string,WireMessage>();
       for(const row of rows)if(row.sourceThreadId===p.thread.id)items.set(row.item.id,row.item);
       for(const item of p.turnItems??[])if(needed(item))items.set(item.id,item);
       for(const item of items.values())if((item.type==='user_message'||item.type==='assistant_message')&&typeof item.messageId==='string'&&typeof item.text==='string')messages.set(item.messageId,{id:item.messageId,threadId:p.thread.id,runId:item.runId??null,nodeId:item.nodeId,role:item.type==='user_message'?'user':'assistant',text:item.text,streaming:item.streaming===true,createdAt:item.startedAt??item.updatedAt,context:item.context,attachments:item.attachments??[],createdBy:item.createdBy,creationSource:item.creationSource,senderThreadId:item.senderThreadId,delegatedCompletion:item.delegatedCompletion});
       for(const message of p.messages)messages.set(message.id,message);
-      const recovered={...snapshot,hasMoreHistory:false,projection:{...p,turnItems:[...items.values()].sort((a,b)=>a.ordinal-b.ordinal),messages:[...messages.values()].sort((a,b)=>(a.createdAt??'').localeCompare(b.createdAt??''))}};
-      if(importOnly)return normalizeV2Snapshot({...recovered,projection:{...recovered.projection,turnItems:recovered.projection.turnItems.map(item=>htmlRenderFromToolItem(item)?{...item,input:undefined}:item),visibleTurnItems:[]}});
-      return normalizeV2Snapshot(await hydrate(recovered));
+      return {...snapshot,hasMoreHistory:more,projection:{...p,turnItems:[...items.values()].sort((a,b)=>a.ordinal-b.ordinal),messages:[...messages.values()].sort((a,b)=>(a.createdAt??'').localeCompare(b.createdAt??''))}};
+      };
+      const importedSnapshot=()=>{const recovered=recoveredSnapshot();return normalizeV2Snapshot({...recovered,projection:{...recovered.projection,turnItems:recovered.projection.turnItems.map(item=>htmlRenderFromToolItem(item)?{...item,input:undefined}:item),visibleTurnItems:[]}});};
+      if(importOnly&&options?.onImportSnapshot)options.onImportSnapshot(importedSnapshot());
+      while(more){
+        if(!cursor||cursors.has(cursor))throw Error('T3 returned an invalid or repeated history cursor.');
+        cursors.add(cursor);
+        const page=readHistory(await raw(root+'/history?cursor='+encodeURIComponent(cursor)+(importOnly?'&view=conversation&deferWork=1':''),undefined,{...options,...(importOnly?{compactImport:true}:{})}));
+        if(!Array.isArray(page.items))throw Error('T3 returned an invalid history page.');
+        rows.unshift(...page.items.filter(row=>needed(row.item)));cursor=page.nextCursor;more=page.hasMoreHistory===true;
+        // New roots make more runs usable. Tool-only pages do not need to
+        // rebuild and publish the same conversation on every network chunk.
+        if(importOnly&&options?.onImportSnapshot&&more&&page.items.some(row=>row.item.type==='user_message'))options.onImportSnapshot(importedSnapshot());
+      }
+      if(importOnly)return importedSnapshot();
+      return normalizeV2Snapshot(await hydrate(recoveredSnapshot()));
     }
     return normalizeV2Snapshot(await request(path,payload));
   };

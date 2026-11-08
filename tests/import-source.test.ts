@@ -16,6 +16,7 @@ function fixture(){
   if(path.includes('/bounded?'))return {snapshotSequence:7,hasMoreHistory:true,historyCursor:'opaque / older',turnItemsOmitLocalVisible:true,projection:{thread,runs:[run(3)],messages:[message(3,'user'),message(3,'assistant')],turnItems:[],visibleTurnItems:[]}};
   assert.ok(path.includes('/history?cursor=opaque%20%2F%20older&view=conversation&deferWork=1'),'only documented bounded/history reads are permitted');
   assert.equal(options?.signal?.aborted??false,false);
+  assert.equal(options?.compactImport,true,'history pages also discard unrelated JSON fields while streaming');
   return {snapshotSequence:9,items:[1,2].flatMap(n=>['user','assistant'].map(role=>{const m=message(n,role as 'user'|'assistant');return {sourceThreadId:'thread',item:{id:'item-'+m.id,type:role+'_message',messageId:m.id,runId:m.runId,text:m.text,streaming:false,ordinal:n*2+(role==='assistant'?1:0),startedAt:m.createdAt}};})),hasMoreHistory:false,nextCursor:null};
  },'https://stock.example');
  const access:ThreadAccess={origin:'https://stock.example',api};
@@ -60,4 +61,23 @@ test('caller cancellation prevents a read and is preserved through catalog, prev
  await assert.rejects(readImportThreads(access,'project',controller.signal),/User closed/);
  await assert.rejects(readImportRuns(access,'thread','project',controller.signal),/User closed/);
  await assert.rejects(readImportRun(access,'thread','project','run-1',{signal:controller.signal}),/User closed/);assert.equal(calls,0);
+});
+
+test('canonical recent runs appear while older pages wait, and their partial snapshot cannot authorize a save',async()=>{
+ let release!:(page:unknown)=>void;
+ const older=new Promise<unknown>(resolve=>{release=resolve;}),progress:any[][]=[];
+ const api=t3Api(async path=>path.includes('/bounded?')?{snapshotSequence:7,hasMoreHistory:true,historyCursor:'older',projection:{thread,runs:[run(3)],messages:[message(3,'user'),message(3,'assistant')],turnItems:[],visibleTurnItems:[]}}:older,'https://stock.example');
+ const access={origin:'https://stock.example',api},work=readImportRuns(access,'thread','project',undefined,runs=>progress.push(runs));
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(progress.length,1);assert.deepEqual(progress[0].map(run=>run.turnId),['run-3']);
+ const selected=progress[0][0],preview=await readImportPreview(access,'thread','project',selected,'machine');assert.equal(preview.body,'Complete answer 3');
+ const first=await readImportRun(access,'thread','project','run-3',{selected,firstPageOnly:true});assert.equal(first.state.historyComplete,false);assert.equal(first.snapshot.page?.hasMore,true);
+ release({snapshotSequence:7,hasMoreHistory:false,nextCursor:null,items:[1,2].flatMap(n=>['user','assistant'].map(role=>{const m=message(n,role as 'user'|'assistant');return {sourceThreadId:'thread',item:{id:'item-'+m.id,type:role+'_message',messageId:m.id,runId:m.runId,text:m.text,ordinal:n*2,startedAt:m.createdAt}};}))});
+ assert.deepEqual((await work).map(run=>run.turnId),['run-3','run-2','run-1']);
+});
+
+test('progressive choices do not infer a missing persisted lifecycle from an incomplete page',async()=>{
+ const progress:any[][]=[];
+ const api=t3Api(async()=>({snapshotSequence:7,hasMoreHistory:false,projection:{thread,runs:[],messages:[message(1,'user'),message(1,'assistant'),message(2,'user'),message(2,'assistant')],turnItems:[],visibleTurnItems:[]}}),'https://stock.example');
+ const completed=await readImportRuns({origin:'https://stock.example',api},'thread','project',undefined,runs=>progress.push(runs));
+ assert.deepEqual(progress,[[]]);assert.ok(completed.some(run=>run.turnId==='run-1'),'the complete canonical boundary can prove the older lifecycle');
 });

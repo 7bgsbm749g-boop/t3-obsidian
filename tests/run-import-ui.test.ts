@@ -99,9 +99,9 @@ test('run preview dwell, stale work, search names and modal cleanup share one li
 
 test('native close-before-choose keeps selection alive while cancelled and replaced flows stop',async()=>{
  const opened:any[]=[],signals:AbortSignal[]=[],module={exports:{} as any},realRequire=createRequire(import.meta.url);
- class Modal {modalEl={ownerDocument:{defaultView:{clearTimeout(){},removeEventListener(){}}}};open(){opened.push(this);}close(){this.onClose();}onClose(){}}
+ class Modal {modalEl={querySelector:()=>null,ownerDocument:{defaultView:{clearTimeout(){},removeEventListener(){}}}};inputEl={value:'',dispatchEvent(){}};open(){opened.push(this);}close(){this.onClose();}onClose(){}}
  class Suggest extends Modal {placeholder='';setPlaceholder(value:string){this.placeholder=value;}select(item:unknown){this.close();(this as any).onChooseItem(item);}}
- runInNewContext((await bundle).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{FuzzySuggestModal:Suggest,Modal,Notice:class{}}:realRequire(id),AbortController,queueMicrotask});
+ runInNewContext((await bundle).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{FuzzySuggestModal:Suggest,Modal,Notice:class{}}:realRequire(id),AbortController,Event,queueMicrotask});
  const app={},project={id:'project'},thread={id:'thread',projectId:'project'},run={messageId:'prompt',turnId:'run',turn:{turnId:'run',state:'completed'},status:'Completed',prompt:'Synthetic',createdAt:'2026-11-07'};
  const pending=deferred<any[]>();let calls=0;
  const host={projects:()=>[project],projectLabel:()=>'',threads:async(_project:unknown,signal:AbortSignal)=>{signals.push(signal);return ++calls===1?[thread]:pending.promise;},runs:async()=>[run],attach:async()=>{throw Error('No import was requested.');}};
@@ -123,21 +123,22 @@ test('a thread picker receives fresh rows without losing its filter or choosing 
  const app={},project={id:'project'},thread={id:'old',projectId:'project',title:'Old',status:'Idle'},fresh={...thread,id:'new',title:'New'};
  const host={projects:()=>[project],projectLabel:()=>'',threads:async()=>[thread],watchThreads:(_project:unknown,changed:(items:any[])=>void)=>{update=changed;return ()=>{stops++;};},runs:async()=>{runs++;return [];},attach:async()=>{throw Error('No import requested');}};
  module.exports.openRunImport(app,'Synthetic.md',host);opened.at(-1).select(project);await drain();const picker=opened.at(-1);
- update([thread,fresh]);assert.deepEqual(picker.getItems().map((item:any)=>item.id),['old','new']);assert.equal(picker.inputEl.value,'typed filter');assert.deepEqual(inputEvents,[{type:'input',value:'typed filter'}]);assert.equal(runs,0);
- picker.close();await drain();assert.equal(stops,1);update([fresh]);assert.equal(inputEvents.length,1);
+ const initial=inputEvents.length;
+ update([thread,fresh]);assert.deepEqual(picker.getItems().map((item:any)=>item.id),['old','new']);assert.equal(picker.inputEl.value,'typed filter');assert.equal(inputEvents.length,initial+1);assert.ok(inputEvents.every(event=>event.type==='input'&&event.value==='typed filter'));assert.equal(runs,0);
+ picker.close();await drain();assert.equal(stops,1);update([fresh]);assert.equal(inputEvents.length,initial+1);
  module.exports.openRunImport(app,'Synthetic.md',host);opened.at(-1).select(project);await drain();const abandoned=opened.at(-1),late=update;
- module.exports.openRunImport(app,'Synthetic.md',host);assert.equal(stops,2);late([fresh]);assert.equal(inputEvents.length,1);assert.equal(abandoned.inputEl.value,'typed filter');
+ const beforeAbandon=inputEvents.length;module.exports.openRunImport(app,'Synthetic.md',host);assert.equal(stops,2);late([fresh]);assert.equal(inputEvents.length,beforeAbandon);assert.equal(abandoned.inputEl.value,'typed filter');
 });
 
 test('a unique typed thread match prepares one cancellable run read that selection joins',async()=>{
  const opened:any[]=[],notices:string[]=[],reads:Array<{thread:string;signal:AbortSignal}>=[],pending=new Map<string,ReturnType<typeof deferred<any[]>>>(),module={exports:{} as any},realRequire=createRequire(import.meta.url);
- class Modal {open(){opened.push(this);}close(){this.onClose();}onClose(){}}
+ class Modal {modalEl={querySelector:()=>null,ownerDocument:{defaultView:{clearTimeout(){},removeEventListener(){}}}};inputEl={value:'',dispatchEvent(){}};open(){opened.push(this);}close(){this.onClose();}onClose(){}}
  class Suggest extends Modal {
   placeholder='';setPlaceholder(value:string){this.placeholder=value;}
   getSuggestions(query:string){return (this as any).getItems().filter((item:any)=>item.id.includes(query)).map((item:any)=>({item}));}
   select(item:unknown){this.close();(this as any).onChooseItem(item);}
  }
- runInNewContext((await bundle).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{FuzzySuggestModal:Suggest,Modal,Notice:class{constructor(text:string){notices.push(text);}}}:realRequire(id),AbortController,queueMicrotask});
+ runInNewContext((await bundle).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{FuzzySuggestModal:Suggest,Modal,Notice:class{constructor(text:string){notices.push(text);}}}:realRequire(id),AbortController,Event,queueMicrotask});
  const app={},project={id:'project'},first={id:'first-thread',projectId:'project'},second={id:'second-thread',projectId:'project'};
  const host={projects:()=>[project],projectLabel:()=>'',threads:async()=>[first,second],runs:async(_project:unknown,thread:typeof first,signal:AbortSignal)=>{reads.push({thread:thread.id,signal});const work=deferred<any[]>();pending.set(thread.id,work);return work.promise;},attach:async()=>{throw Error('No import requested');}};
  module.exports.openRunImport(app,'Synthetic.md',host);opened.at(-1).select(project);await drain();const picker=opened.at(-1);
@@ -149,4 +150,39 @@ test('a unique typed thread match prepares one cancellable run read that selecti
  picker.select(second);await drain();assert.equal(reads.length,2,'selection joins the completed read');assert.equal(opened.at(-1).placeholder,'Choose a T3 response');
  assert.ok(!notices.some(text=>text.startsWith('Import T3 run:')));
  module.exports.openRunImport(app,'Synthetic.md',host);opened.at(-1).select(project);await drain();const cancelled=opened.at(-1);cancelled.getSuggestions('first');await drain();cancelled.close();await drain();assert.equal(reads.at(-1)!.signal.aborted,true);pending.get(first.id)!.reject(Error('Cancelled obsolete read'));await drain();assert.ok(!notices.some(text=>text.startsWith('Import T3 run:')));
+});
+
+test('loading panes open immediately, keep typed searches, publish real rows, and cancel obsolete work',async()=>{
+ const opened:any[]=[],notices:string[]=[],module={exports:{} as any},realRequire=createRequire(import.meta.url),threadRead=deferred<any[]>(),runRead=deferred<any[]>();
+ const win={clearTimeout(){},removeEventListener(){},addEventListener(){},MutationObserver:class{observe(){}disconnect(){}}};
+ class Element {
+  value='';disabled=false;dataset:Record<string,string>={};ownerDocument={defaultView:win};events:string[]=[];text='';hidden=false;
+  querySelector(){return null;}querySelectorAll(){return [];}addClass(){}createDiv(){return new Element();}setText(value:string){this.text=value;}dispatchEvent(event:Event){this.events.push(event.type);}
+ }
+ class Modal {modalEl=new Element();inputEl=new Element();open(){opened.push(this);if(this instanceof Suggest)(this as any).onOpen();}close(){(this as any).onClose();}onOpen(){}onClose(){}}
+ class Suggest extends Modal {placeholder='';setPlaceholder(value:string){this.placeholder=value;}getSuggestions(){return [];}select(item:unknown){this.close();(this as any).onChooseItem(item);}}
+ runInNewContext((await bundle).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{FuzzySuggestModal:Suggest,Modal,Notice:class{constructor(text:string){notices.push(text);}}}:realRequire(id),AbortController,Event,queueMicrotask});
+ const app={},project={id:'project'},thread={id:'thread',projectId:'project'},run={messageId:'prompt',turnId:'run',turn:{turnId:'run',state:'completed'},status:'Completed',prompt:'Actual canonical prompt',createdAt:'2026-11-07'};
+ let signal:AbortSignal|undefined,progress!:(runs:any[])=>void,prepared=0;
+ const host={projects:()=>[project],projectLabel:()=>'',threads:async()=>threadRead.promise,runs:async(_project:unknown,_thread:unknown,abort:AbortSignal,update:(runs:any[])=>void)=>{signal=abort;progress=update;return runRead.promise;},prepareSelection:async()=>{prepared++;throw Error('Optional preparation failed');},attach:async()=>{throw Error('No import requested');}};
+ module.exports.openRunImport(app,'Synthetic.md',host);opened.at(-1).select(project);
+ const threads=opened.at(-1);assert.equal(threads.placeholder,'Choose the source T3 thread');assert.equal(threads.inputEl.disabled,false);assert.match(threads.emptyStateText,/Loading/);assert.equal(threads.getItems().length,0);
+ threads.inputEl.value='thread filter';threadRead.resolve([thread]);await drain();assert.equal(threads.inputEl.value,'thread filter');assert.equal(threads.getItems()[0],thread);
+ threads.select(thread);const runs=opened.at(-1);assert.equal(runs.placeholder,'Choose a T3 response');assert.equal(runs.inputEl.disabled,false);assert.match(runs.emptyStateText,/Loading/);await drain();
+ runs.inputEl.value='run filter';progress([run]);assert.equal(runs.inputEl.value,'run filter');assert.equal(runs.getItems()[0],run);
+ runs.select(run);await drain();const confirmation=opened.at(-1);assert.equal(confirmation.constructor.name,'ImportRunModal');assert.equal(signal?.aborted,true);assert.equal(prepared,1);
+ progress([{...run,messageId:'late'}]);runRead.reject(Error('Cancelled optional remainder'));await drain();assert.equal(opened.at(-1),confirmation);assert.ok(!notices.some(value=>value.startsWith('Import T3 run:')));
+ const another=deferred<any[]>();host.threads=async()=>another.promise;module.exports.openRunImport(app,'Synthetic.md',host);opened.at(-1).select(project);const pending=opened.at(-1);pending.close();await drain();another.resolve([thread]);await drain();assert.equal(opened.at(-1),pending,'late discovery cannot reopen a cancelled loading pane');
+});
+
+test('progressive row replacement keeps the selected run and cannot restore a selection into a changed query',async()=>{
+ const module={exports:{} as any},realRequire=createRequire(import.meta.url),selections:Array<[number,boolean]>=[];let observe!:()=>void,refreshes=0;
+ const selected={dataset:{t3ImportRun:'second'}},rows=[{dataset:{t3ImportRun:'third'}},selected,{dataset:{t3ImportRun:'first'}}];
+ const win={clearTimeout(){},removeEventListener(){},addEventListener(){},MutationObserver:class{constructor(callback:()=>void){observe=callback;}observe(){}disconnect(){}}};
+ const modal={ownerDocument:{defaultView:win},addClass(){},querySelector:()=>selected,querySelectorAll:()=>rows,createDiv:()=>({hidden:false,setText(){}})};
+ class Suggest {modalEl=modal;inputEl={value:'typed query',dispatchEvent(){refreshes++;}};chooser={setSelectedItem:(index:number,scroll:boolean)=>selections.push([index,scroll])};setPlaceholder(){}onOpen(){}onClose(){}}
+ runInNewContext((await bundle).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{FuzzySuggestModal:Suggest,Modal:Suggest}:realRequire(id),AbortController,Event,queueMicrotask});
+ const run={messageId:'second',turnId:'run',turn:{turnId:'run',state:'completed'},status:'Completed',prompt:'Canonical',createdAt:'2026-11-07'},picker=new module.exports.RunImportPicker({},[run],()=>assert.fail('Updates cannot select'),async()=>{});
+ picker.onOpen();picker.setRuns([{...run,messageId:'third'},run,{...run,messageId:'first'}],true);observe();assert.deepEqual(selections,[[1,false]]);assert.equal(picker.inputEl.value,'typed query');assert.equal(refreshes,1);
+ picker.setRuns([run]);picker.inputEl.value='changed query';observe();assert.equal(selections.length,1);picker.onClose();
 });

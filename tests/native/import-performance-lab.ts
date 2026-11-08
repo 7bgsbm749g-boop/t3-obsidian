@@ -28,6 +28,7 @@ interface Source {label:string;session:PairedSession;threadId:string;projectId:s
 export default class ImportPerformanceLab extends Plugin {
  private root='';private sources:Source[]=[];private projects:Project[]=[];
  private start=0;private action=0;private measured=new WeakSet<Element>();private source?:Source;
+ private rowsMeasured=new WeakSet<Element>();
  private paneStarts=new Map<string,{start:number;action:number;source?:string}>();
  private inputBoundaries=new WeakMap<Event,{start:number;action:number}>();
  private optimized=false;
@@ -106,11 +107,19 @@ export default class ImportPerformanceLab extends Plugin {
   const record=(element:Element,label:string)=>{
    if(this.measured.has(element))return;this.measured.add(element);
    const rows=document.querySelectorAll('.suggestion-item').length;
-   // Obsidian can create a modal in an earlier window key listener. Read the
-   // input boundary after all listeners have run, before the two paint frames.
-   requestAnimationFrame(()=>{const {start,source,action}=this.paneStarts.get(label)??{start:this.start,source:this.source?.label,action:this.action};requestAnimationFrame(()=>{if(element.isConnected)this.write({kind:'pane',source,action,placeholder:label,elapsedMs:performance.now()-start,rows,at:new Date().toISOString()});});});
+   // A read can begin during a typed filter. The pane belongs to the later
+   // explicit Enter, including when Obsidian handles it before our listener.
+   const stored=this.paneStarts.get(label),current=this.paneOrigin(),origin=stored&&stored.action>=current.action?stored:current;
+   this.paneStarts.set(label,origin);
+   requestAnimationFrame(()=>requestAnimationFrame(()=>{if(element.isConnected)this.write({kind:'pane',source:origin.source,action:origin.action,placeholder:label,elapsedMs:performance.now()-origin.start,rows,interactive:element instanceof HTMLInputElement?!element.disabled:undefined,at:new Date().toISOString()});}));
   };
-  if(input&&placeholder&&document.querySelector('.suggestion-item'))record(input,placeholder);
+  if(input&&placeholder&&!input.disabled){
+   record(input,placeholder);
+   if(document.querySelector('.suggestion-item')&&!this.rowsMeasured.has(input)){
+    this.rowsMeasured.add(input);const origin=this.paneStarts.get(placeholder)??this.paneOrigin(),rows=document.querySelectorAll('.suggestion-item').length;
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{if(input.isConnected)this.write({kind:'rows-ready',source:origin.source,action:origin.action,placeholder,elapsedMs:performance.now()-origin.start,rows});}));
+   }
+  }
   if(confirmation&&Array.from(confirmation.querySelectorAll('button')).some(button=>button.textContent==='Import response'))record(confirmation,'Import T3 run into this note');
   const frames=preview?Array.from(preview.querySelectorAll<HTMLElement>('.send-to-t3-html-result')):[];
   if(preview&&!preview.querySelector('.send-to-t3-run-preview-loading')&&!preview.textContent?.includes('Preview could not be loaded.')&&(preview.textContent?.trim()||frames.length)&&frames.every(frame=>frame.dataset.t3HtmlState==='ready'&&frame.dataset.t3HtmlPainted==='true'))record(preview,'Response preview');
@@ -155,13 +164,18 @@ export default class ImportPerformanceLab extends Plugin {
     projects:()=>this.projects,projectLabel:project=>project.title+(this.projects.filter(other=>other.title===project.title).length>1?' · '+project.id.slice(0,8):''),
     threads:(project,signal)=>timed('threads',()=>read(async access=>{threadApi=access.api;return this.optimized?readImportThreads(access,project.id,signal):projectThreads({threads:readThreadList(await access.api('/api/orchestration/shell'))},project.id);})),
     watchThreads:(project,changed)=>threadApi?.watchImportThreads?.(project.id,()=>{const threads=threadApi?.cachedImportThreads?.(project.id);if(threads)changed(threads);})??(()=>{}),
-    runs:(_project,thread,signal)=>timed('runs',async()=>{
-     const record=(runs:ReturnType<typeof importRuns>)=>{catalog=runs;this.write({kind:'run-catalog',source:source.label,threadId:thread.id,projectId:thread.projectId,runs:runs.map(run=>({runId:run.turnId,messageId:run.messageId,ordinal:run.turn?.ordinal}))});return runs;};
-     if(this.optimized)return record(await read(access=>readImportRuns(access,thread.id,thread.projectId,signal)));
+    runs:(_project,thread,signal,progress)=>timed('runs',async()=>{
+     const record=(runs:ReturnType<typeof importRuns>,partial=false)=>{catalog=runs;this.write({kind:'run-catalog',source:source.label,threadId:thread.id,projectId:thread.projectId,partial,runs:runs.map(run=>({runId:run.turnId,messageId:run.messageId,ordinal:run.turn?.ordinal}))});if(partial)progress?.(runs);return runs;};
+     if(this.optimized)return record(await read(access=>readImportRuns(access,thread.id,thread.projectId,signal,runs=>record(runs,true))));
      const snapshot=await read(access=>readInlineSnapshot(access,thread.id,thread.projectId,undefined,true,true));
      const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
      return record(importRuns(state).filter(availableImportRun).map(run=>({...run,preview:importRunPreview(state,run,session.environmentId,thread.id)})));
     }),
+    prepareSelection:async(project,thread,run)=>{
+     if(!this.htmlViews||!run.turnId)return;
+     run.preview??=await read(access=>readImportPreview(access,thread.id,project.id,run,session.environmentId));
+     const first=run.preview.html[0];if(first)await this.htmlViews.prefetch(first,document);
+    },
     preview:async(project,thread,run,el,child:Component,signal)=>{
      this.paneStarts.set('Response preview',this.paneOrigin());
      this.write({kind:'preview-source',source:source.label,threadId:thread.id,runId:run.turnId,messageId:run.messageId});
