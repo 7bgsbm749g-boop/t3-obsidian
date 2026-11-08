@@ -87,7 +87,7 @@ test('an imported answer seed waits for local recovery and reaches the first pre
   const h=fixture(),events:string[]=[];
   let restore!:(value:undefined)=>void;
   h.io.loadLocalCompletion=()=>new Promise(resolve=>restore=resolve);
-  const snapshot={thread:{id:h.binding.threadId,projectId:h.binding.projectId,messages:[]},snapshotSequence:1};
+  const snapshot={thread:{id:h.binding.threadId,projectId:h.binding.projectId,messages:[],activities:[]},snapshotSequence:1};
   const manager=new LocalResponseManager('test','vault',h.io,h.notes,undefined,()=>({
     seedImport:(value:unknown)=>{assert.equal(value,snapshot);events.push('seed');},tick:()=>events.push('tick'),
     update:()=>{},delivery:()=>{},reconnect:()=>{},suspend:()=>{},dispose:()=>{},
