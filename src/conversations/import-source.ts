@@ -77,8 +77,14 @@ export async function readImportRun(access:ThreadAccess,threadId:string,projectI
  // Paint the canonical answer read for this exact selection. Checked saving
  // still waits for a fresh authoritative read of the incomplete registration.
  const reusable=cached&&firstPageOnly&&selected.turnId===runId&&cached.snapshot.thread.id===threadId&&cached.snapshot.thread.projectId===projectId;
+ const answerIds=reusable?new Set(inlineTurnMessages(cached.state,runId).map(message=>message.id)):undefined;
  let snapshot=reusable
-  ? {...cached.snapshot,page:{hasMore:true}}
+  ? {...cached.snapshot,page:{hasMore:true},thread:{...cached.snapshot.thread,
+    // Initial presentation needs the exact selected root and final prose.
+    // Earlier progress arrives with the fresh selected history; it must not
+    // make the native editor parse hundreds of paragraphs before first paint.
+    messages:cached.snapshot.thread.messages.filter(message=>message.id===selected.messageId||answerIds!.has(message.id)),
+    activities:cached.snapshot.thread.activities.filter(activity=>activity.turnId===runId)}}
   : await readHistory(access,threadId,projectId,signal,preview||firstPageOnly,preview||firstPageOnly?undefined:runId);
  let state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
  // Older pages carry exact message/run bindings but may omit the recent-run

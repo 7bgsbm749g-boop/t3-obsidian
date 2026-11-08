@@ -8,12 +8,12 @@ const date=(n:number)=>new Date(Date.UTC(2026,0,1,0,n)).toISOString();
 const thread={id:'thread',projectId:'project',title:'Long conversation'};
 const run=(n:number)=>({id:'run-'+n,status:'completed',ordinal:n,userMessageId:'prompt-'+n,requestedAt:date(n),completedAt:date(n+0.5)});
 const message=(n:number,role:'user'|'assistant')=>({id:(role==='user'?'prompt-':'answer-')+n,role,runId:'run-'+n,text:role==='user'?'Original prompt '+n:'Complete answer '+n,streaming:false,createdAt:date(n+(role==='assistant'?0.5:0))});
-function fixture(){
+function fixture(progress=false){
  const paths:string[]=[];let reads=0;
  const api=t3Api(async(path,_payload,options)=>{
   paths.push(path);reads++;
   if(path==='/api/orchestration/shell')return {threads:[thread,{id:'other',projectId:'another'}]};
-  if(path.includes('/bounded?'))return {snapshotSequence:7,hasMoreHistory:true,historyCursor:'opaque / older',turnItemsOmitLocalVisible:true,projection:{thread,runs:[run(3)],messages:[message(3,'user'),message(3,'assistant')],turnItems:[],visibleTurnItems:[]}};
+  if(path.includes('/bounded?'))return {snapshotSequence:7,hasMoreHistory:true,historyCursor:'opaque / older',turnItemsOmitLocalVisible:true,projection:{thread,runs:[run(3)],messages:[message(3,'user'),...(progress?[{...message(3,'assistant'),id:'earlier-progress',text:'Earlier public progress. '.repeat(20_000),createdAt:date(3.2)}]:[]),message(3,'assistant')],turnItems:[],visibleTurnItems:[]}};
   assert.ok(path.includes('/history?cursor=opaque%20%2F%20older&view=conversation&deferWork=1'),'only documented bounded/history reads are permitted');
   assert.equal(options?.signal?.aborted??false,false);
   assert.equal(options?.compactImport,true,'history pages also discard unrelated JSON fields while streaming');
@@ -43,6 +43,13 @@ test('preview and first paint reuse the exact canonical selection while final sa
  assert.equal(result.snapshot.thread.turns?.['run-1'].state,'completed','the older exact selection can seed its completed import');
  assert.equal(result.state.messages.find(m=>m.id==='answer-1')?.text,'Complete answer 1');
  const history=importHistoryState(runs,result.state,'prompt-1');assert.equal(history.run?.status,'Completed');assert.equal(history.state.historyComplete,false);
+});
+
+test('first paint uses the exact final answer while the fresh read preserves all earlier progress',async()=>{
+ const {access}=fixture(true),runs=await readImportRuns(access,'thread','project'),selected=runs[0];
+ const first=await readImportRun(access,'thread','project','run-3',{selected,firstPageOnly:true});
+ assert.deepEqual(first.state.messages.map(message=>message.id),['prompt-3','answer-3']);assert.equal(first.state.messages.at(-1)?.text,'Complete answer 3');assert.equal(first.state.historyComplete,false);
+ const fresh=await readImportRun(access,'thread','project','run-3',{preview:true});assert.ok(fresh.state.messages.some(message=>message.id==='earlier-progress'&&message.text.length===500_000));assert.equal(fresh.state.historyComplete,true);
 });
 
 test('a new read performs authoritative requests instead of treating the preview cache as a final receipt',async()=>{
