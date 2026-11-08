@@ -12,6 +12,8 @@ import {responseTooLarge,type StreamReadFailure} from '../connection/t3-response
 import {signInRequired,type ResponseConnectionIssue} from '../connection/sign-in-state';
 import {delegatedWork} from '../conversations/inline-delegation';
 import {failedContinuations} from './failed-continuation';
+import {readImportRun} from '../conversations/import-source';
+import type {ThreadSnapshot} from '../connection/wire-types';
 
 export interface DirectInlineUpdate {request:ResponseRequest;messageId:string;sequence:number;body:string;displayedInputIds?:string[];turnId?:string;turnIds?:string[];phase?:'running'|'complete'|'interrupted'|'error';completionVerified?:boolean;questionsPending?:boolean;resume?:NonNullable<ResponseRequest['localResume']>&{prose:InlineThreadState['messages']};failure?:StreamReadFailure;checkpoint?:ReturnType<typeof inlineBindingCheckpoint>;questionActivities?:InlineActivity[]}
 type Watch=typeof watchThread;
@@ -48,7 +50,10 @@ export class DirectInlinePreview {
   private interruptionVerification?:Promise<void>;
   private nextInterruptionVerification=0;
   private connectionIssue?:ResponseConnectionIssue;
-  constructor(record:ResponseRecord,private access:()=>Promise<ThreadAccess>,private receive:(update:DirectInlineUpdate)=>void,private watch:Watch=watchThread,private clock:PreviewClock=displayClock,private connectionChanged?:(issue?:ResponseConnectionIssue)=>void){this.record=record;this.minimumSequence=record.state?.bindingCheckpoint?.sequence??0;this.update(record);}
+  private importedRead=false;
+  private nextImportedRead=0;
+  private importedSnapshot?:ThreadSnapshot;
+  constructor(record:ResponseRecord,private access:()=>Promise<ThreadAccess>,private receive:(update:DirectInlineUpdate)=>void,private watch:Watch=watchThread,private clock:PreviewClock=displayClock,private connectionChanged?:(issue?:ResponseConnectionIssue)=>void,private readImported=readImportRun){this.record=record;this.minimumSequence=record.state?.bindingCheckpoint?.sequence??0;this.update(record);}
   private connectionFailed(error:unknown){
     const issue:ResponseConnectionIssue={kind:signInRequired(error)?'sign-in-required':'reconnecting'};
     if(this.connectionIssue?.kind!==issue.kind){this.connectionIssue=issue;this.connectionChanged?.(issue);}
@@ -79,11 +84,44 @@ export class DirectInlinePreview {
     this.state=restoreInlineBindings(this.state,{starts:{[delivery.messageId]:delivery}});
     this.schedule(true);
   }
+  seedImport(snapshot:ThreadSnapshot){
+    const request=this.record.request,turn=request.importTurn;
+    if(!this.stopped&&turn?.state==='completed'&&snapshot.thread.id===request.threadId&&snapshot.thread.projectId===request.projectId&&snapshot.thread.turns?.[turn.turnId]?.messageId===request.messageId&&snapshot.thread.turns[turn.turnId]?.state==='completed'&&(snapshot.snapshotSequence??-1)>=this.minimumSequence)this.importedSnapshot=snapshot;
+  }
   tick(open:boolean){
     if(this.stopped||this.connectionIssue?.kind==='sign-in-required')return;
     const record=this.record;
     if(!open||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.state?.status==='conflict'){this.suspend();return;}
     if(this.monitor){if(this.interruptedTurnId)this.verifyInterruption();if(this.terminal&&(record.request.deviceCompletion||record.request.localOnly))this.verifyCompletion();return;}
+    if(record.request.importTurn?.state==='completed'&&!this.importedRead){
+      if(this.failure?.operation==='snapshot'||this.clock.now()<this.nextImportedRead)return;
+      const generation=++this.generation,abort=new AbortController(),request=record.request;
+      this.monitor={stop:()=>abort.abort()};
+      void this.access().then(async access=>{
+        try{
+          const seeded=this.importedSnapshot;this.importedSnapshot=undefined;
+          let result=seeded?{snapshot:seeded,state:applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:seeded}).state}:await this.readImported(access,request.threadId,request.projectId,request.importTurn!.turnId,{signal:abort.signal,firstPageOnly:true});
+          if(this.stopped||generation!==this.generation)return;
+          this.importedRead=true;
+          if(result.state.turns?.[request.importTurn!.turnId]?.state!=='completed'){this.monitor=undefined;this.tick(open);return;}
+          // The selected canonical run owns this import. A general thread
+          // snapshot can omit it and replace it with a later continuation.
+          this.item({kind:'snapshot',snapshot:result.snapshot},true);
+          if(result.state.historyComplete===false){
+            result=await this.readImported(access,request.threadId,request.projectId,request.importTurn!.turnId,{signal:abort.signal});
+            if(this.stopped||generation!==this.generation)return;
+            this.item({kind:'snapshot',snapshot:result.snapshot},true);
+          }
+        }finally{await access.close?.();}
+      }).catch(error=>{
+        if(this.stopped||generation!==this.generation)return;
+        logFailure('stream.direct.import-read',error,{bindingId:request.id});
+        this.monitor=undefined;this.importedRead=false;this.nextImportedRead=this.clock.now()+1000;
+        if(responseTooLarge(error)){this.failure={kind:'response-too-large',operation:'snapshot'};this.receive({request,messageId:this.messageId(),sequence:this.state.sequence??0,body:this.record.state?.body??'> **T3 · Working**',failure:this.failure,completionVerified:false});}
+        else this.connectionFailed(error);
+      });
+      return;
+    }
     const generation=++this.generation;
     this.monitor=this.watch(record.request.threadId,this.access,{
       item:item=>{if(!this.stopped&&this.generation===generation)this.item(item);},
@@ -92,7 +130,7 @@ export class DirectInlinePreview {
     },undefined,()=>({messageIds:[this.messageId(),...this.record.state?.steering?.map(input=>input.messageId)??[],...this.follows?.filter(item=>!item.dismissed).map(item=>`async-answer:${item.requestId}`)??[]],turnIds:this.turnIds}),{afterSequence:()=>this.state.sequence??0,pollImmediately:true,pollSnapshots:()=>this.state.protocolVersion!==2&&this.failure?.operation!=='snapshot'});
   }
   private messageId(){return this.record.state?.pendingMessageId??this.record.state?.messageId??this.record.request.messageId;}
-  private item(item:ThreadStreamItem){
+  private item(item:ThreadStreamItem,urgent=false){
     const request=this.record.request;
     if(item.kind==='synchronized')return;
     const sequence=item.kind==='snapshot'?item.snapshot?.snapshotSequence:item.event?.sequence;
@@ -101,7 +139,7 @@ export class DirectInlinePreview {
     if(item.kind==='event'&&item.event?.aggregateId!==undefined&&item.event.aggregateId!==request.threadId)return;
     if(this.connectionIssue){this.connectionIssue=undefined;this.connectionChanged?.();}
     const next=applyThreadItem(this.state,item).state;if(next===this.state)return;this.state=next;
-    this.schedule(item.kind==='event'&&((item.event?.type==='thread.run-updated'&&['completed','interrupted'].includes(item.event.payload?.status))||(item.event?.type==='thread.session-set'&&item.event.payload?.session?.status!=='running')||(item.event?.type==='thread.message-sent'&&item.event.payload?.streaming===false)));
+    this.schedule(urgent||item.kind==='event'&&((item.event?.type==='thread.run-updated'&&['completed','interrupted'].includes(item.event.payload?.status))||(item.event?.type==='thread.session-set'&&item.event.payload?.session?.status!=='running')||(item.event?.type==='thread.message-sent'&&item.event.payload?.streaming===false)));
   }
   private schedule(urgent=false){
     const elapsed=this.clock.now()-this.lastRender;
@@ -148,7 +186,7 @@ export class DirectInlinePreview {
     this.completionTurnId=turnId;
     const key=finalResponseKey(this.state,turnId);
     const exactStopped=this.state.protocolVersion===2&&phase==='interrupted'&&this.state.turns?.[turnId]?.state==='interrupted';
-    const terminal=phase==='complete'||phase==='interrupted',completionVerified=terminal&&(exactStopped||(this.state.protocolVersion===2?!!key&&key===this.verifiedKey:this.verifiedSequence>=(this.state.sequence??0)));
+    const terminal=phase==='complete'||phase==='interrupted',historyPending=request.importTurn?.state==='completed'&&this.state.historyComplete===false,completionVerified=terminal&&!historyPending&&(exactStopped||(this.state.protocolVersion===2?!!key&&key===this.verifiedKey:this.verifiedSequence>=(this.state.sequence??0)));
     this.terminal=terminal;
     const questionActivities=current.activities.filter(activity=>activity.kind.startsWith('user-input.')||activity.kind==='provider.user-input.respond.failed');
     const checkpoint=inlineBindingCheckpoint(this.state);
@@ -179,6 +217,7 @@ export class DirectInlinePreview {
   }
   private verifyCompletion(){
     if(this.verification||this.clock.now()<this.nextVerification||this.stopped)return;
+    if(this.record.request.importTurn?.state==='completed'&&this.state.historyComplete===false)return;
     const generation=this.generation,request=this.record.request,sequence=this.state.sequence??0;
     const turnId=this.completionTurnId!,key=finalResponseKey(this.state,turnId),state=this.state;
     if(state.protocolVersion===2&&(!key||key===this.verifiedKey||this.failure?.operation==='final-reply'&&this.failure.key===key))return;
@@ -214,6 +253,6 @@ export class DirectInlinePreview {
     this.verification=work;
   }
   reconnect(open:boolean){if(this.stopped)return;this.suspend();this.connectionIssue=undefined;this.connectionChanged?.();this.tick(open);}
-  suspend(){this.generation++;this.monitor?.stop();this.monitor=undefined;this.closeVerification?.();this.closeVerification=undefined;this.verification=undefined;this.interruptionVerification=undefined;this.nextInterruptionVerification=0;this.nextVerification=0;if(this.pending!==undefined)this.clock.cancel(this.pending);this.pending=undefined;this.lastRender=-Infinity;}
+  suspend(){this.generation++;this.monitor?.stop();this.monitor=undefined;this.importedRead=false;this.importedSnapshot=undefined;this.nextImportedRead=0;this.closeVerification?.();this.closeVerification=undefined;this.verification=undefined;this.interruptionVerification=undefined;this.nextInterruptionVerification=0;this.nextVerification=0;if(this.pending!==undefined)this.clock.cancel(this.pending);this.pending=undefined;this.lastRender=-Infinity;}
   dispose(){this.stopped=true;this.suspend();}
 }

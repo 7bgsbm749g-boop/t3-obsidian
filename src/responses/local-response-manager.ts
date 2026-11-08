@@ -16,6 +16,7 @@ import {interruptStoppedResponse} from './response-stop';
 import {completedSelectionDraft,validSteeringInput,type SteeringInput} from '../conversations/inline-steering';
 import type {ResponseConnectionIssue} from '../connection/sign-in-state';
 import type {LocalResponseSaveResult,LocalSavePendingReason} from './local-response-save';
+import type {ThreadSnapshot} from '../connection/wire-types';
 
 export interface LocalFinalNoteIO {
   read(path:string):Promise<string|undefined>;
@@ -73,7 +74,7 @@ export class LocalResponseManager {
     }).catch(error=>logFailure('response.local.final-restore',error,{bindingId:request.id})).finally(()=>{runtime.restoring=false;this.finish(runtime);});
     return runtime;
   }
-  async register(request:ResponseRequest){
+  async register(request:ResponseRequest,importedSnapshot?:ThreadSnapshot){
     if(this.closed||request.vaultId!==this.vaultId)throw Error('This response belongs to another vault.');
     const current=await this.io.readNote(request.notePath);if(current===undefined)throw Error('The response note is unavailable.');
     if(!localResponseRange(current,request.id,[request]))throw Error('The response block changed before registration.');
@@ -87,7 +88,7 @@ export class LocalResponseManager {
       if(saved!==after)throw Error('Save the response note before sending.');
       await this.io.saveLocalNote?.(request.notePath);
     }
-    const runtime=this.adopt(request);runtime.preview.tick(this.canFinishClosed(runtime)||this.io.isOpen(request.notePath));
+    const runtime=this.adopt(request);if(importedSnapshot)runtime.preview.seedImport?.(importedSnapshot);runtime.preview.tick(this.canFinishClosed(runtime)||this.io.isOpen(request.notePath));
   }
   delivered(id:string,delivery:InlineStartRequest){this.jobs.get(id)?.preview.delivery(delivery);}
   resume(){

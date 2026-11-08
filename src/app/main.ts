@@ -65,7 +65,7 @@ import {readInlineSnapshot,watchThread,type ThreadAccess} from '../conversations
 import {isRecoveryCommand} from '../responses/recovery-command';
 import {abortableRead,requestAborted} from '../connection/t3-api';
 import {mountToolGroups} from '../responses/response-tool-presentation';
-import {importRuns,importBindingId,importFollowId,type RunImportResult} from '../conversations/run-import';
+import {importRuns,importBindingId,importFollowId,type RunImportResult,type ImportRun} from '../conversations/run-import';
 import {renderRunImportPreview} from '../conversations/run-import-preview';
 import {findRunImport,runImportReceipt} from '../conversations/run-import-receipt';
 import {openRunImport,ImportStreamsModal} from '../conversations/run-import-ui';
@@ -1184,6 +1184,7 @@ export default class SendToT3 extends Plugin {
   openRunImport(file:TFile){
     if(this.stopped||this.busy)return;
     const insertion=this.noteSendInsertion(file);
+    const catalogs=new WeakMap<ImportRun,ImportRun[]>();
     const read=async<T>(project:Project,operation:(access:ThreadAccess,environmentId:string)=>Promise<T>)=>{
       const environmentId=this.connection(project).environmentId??await this.localInlineEnvironment(),access=await this.inlineThreadAccess(environmentId);
       try{return await operation(access,environmentId);}finally{await access.close?.();}
@@ -1191,12 +1192,12 @@ export default class SendToT3 extends Plugin {
     openRunImport(this.app,file.path,{
       projects:()=>this.projects(),projectLabel:project=>this.projectChoiceLabel(project),
       threads:(project,signal)=>read(project,async access=>this.availableModeThreads(file.path,project,await readImportThreads(access,project.id,signal))),
-      runs:(project,thread,signal)=>read(project,access=>readImportRuns(access,thread.id,project.id,signal)),
+      runs:async(project,thread,signal)=>{const runs=await read(project,access=>readImportRuns(access,thread.id,project.id,signal));for(const run of runs)catalogs.set(run,runs);return runs;},
       preview:async(project,thread,run,el,child,signal)=>{
         if(!run.preview&&run.turnId)run.preview=await read(project,(access,environmentId)=>readImportPreview(access,thread.id,project.id,run,environmentId,signal));
         if(!signal.aborted)await renderRunImportPreview(this.app,run,el,child,signal,this.htmlResults);
       },
-      attach:(project,thread,run,follow)=>this.importRun(file.path,project,thread.id,run.messageId,follow,insertion),
+      attach:(project,thread,run,follow)=>this.importRun(file.path,project,thread.id,run.messageId,follow,insertion,catalogs.get(run)),
     });
   }
   async openImportStreams(file:TFile){
@@ -1225,32 +1226,34 @@ export default class SendToT3 extends Plugin {
   }
 
   private async executeImportRead(_command:import('../responses/response-command').ResponseCommand,_target:ResponseStorageTarget):Promise<never>{throw Error('Legacy lease imports were retired. Imports read T3 directly.');}
-  private async readImportHistory(project:Project,threadId:string,messageId:string){
+  private async readImportHistory(project:Project,threadId:string,messageId:string,catalog?:ImportRun[]){
     if(this.stopped)throw Error('The plugin is disabled.');
     const connection=this.connection(project),environmentId=connection.environmentId??await this.localInlineEnvironment();
     const source={threadId,projectId:project.id,environmentId},access=await this.inlineThreadAccess(environmentId);
     let snapshot:ThreadSnapshot;
     let index:Awaited<ReturnType<typeof readImportRuns>>;
     try{
-      index=await readImportRuns(access,threadId,project.id);
+      index=catalog??await readImportRuns(access,threadId,project.id);
       const selected=index.find(run=>run.messageId===messageId);
       if(!selected?.turnId)throw Error('This response is no longer in the T3 run index.');
-      // Registration needs the exact run, root input and title. Its response
-      // feed retrieves the answer; unrelated tool pages must not delay the note.
+      // Register the exact root and complete answer once. The response feed
+      // reuses this snapshot while retrieving the selected history separately.
       snapshot=(await readImportRun(access,threadId,project.id,selected.turnId,{firstPageOnly:true})).snapshot;
+      const turn=snapshot.thread.turns?.[selected.turnId]??(snapshot.thread.latestTurn?.turnId===selected.turnId?snapshot.thread.latestTurn:undefined);
+      if(typeof turn?.messageId==='string'?turn.messageId!==messageId:!snapshot.thread.messages.some(message=>message.id===messageId&&message.role==='user'&&message.turnId===selected.turnId))throw Error('The selected run no longer belongs to this source prompt.');
     }finally{await access.close?.();}
     if(snapshot.thread.deletedAt||snapshot.thread.archivedAt)throw Error('This source thread is no longer available.');
     const selectedState=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
-    return {source,...importHistoryState(index,selectedState,messageId),title:String(snapshot.thread.title??'T3 response').slice(0,200)};
+    return {source,snapshot,...importHistoryState(index,selectedState,messageId),title:String(snapshot.thread.title??'T3 response').slice(0,200)};
   }
   /** Attach without sending input, then use the imported thread for later sends. */
-  async importRun(notePath:string,project:Project,threadId:string,messageId:string,follow=false,insertion?:CursorInsertion|null):Promise<RunImportResult>{
+  async importRun(notePath:string,project:Project,threadId:string,messageId:string,follow=false,insertion?:CursorInsertion|null,catalog?:ImportRun[]):Promise<RunImportResult>{
     if(this.stopped||this.busy||!this.deviceInline)throw Error('Obsidian is unavailable or sending another request.');
     this.busy=true;
     try{
 
       await this.assertNoteMode(notePath,{...this.connection(project),projectId:project.id,threadId});
-      const history=await this.readImportHistory(project,threadId,messageId),run=history.run??importRuns(history.state).find(run=>run.messageId===messageId);
+      const history=await this.readImportHistory(project,threadId,messageId,catalog),run=history.run??importRuns(history.state).find(run=>run.messageId===messageId);
       if(!run||run.unavailable||!run.turnId||!run.turn)throw Error(run?.unavailable??'This response is no longer in the T3 history.');
       const document=await deviceNoteIO(this.app).readNote(notePath);if(document===undefined)throw Error('Destination note not found.');
       const previous=findRunImport(document,history.source,messageId);
@@ -1265,7 +1268,7 @@ export default class SendToT3 extends Plugin {
         const request:ResponseRequest={version:4,id,localOnly:true,nativeProjection:true,responseContainer:true,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath,threadId,messageId,projectId:project.id,threadEnvironmentId:history.source.environmentId,createdAt:run.createdAt,threadTitle:history.title,independent:true,importTurn:run.turn,initialInput:isT3MessageId(messageId)?{messageId,text:prompt.text,label:incomingLabel(prompt)}:undefined,initialHash:initialRegion(id).bodyHash,keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode,finalAnswerFormat:policy.finalAnswerFormat};
         const io=deviceNoteIO(this.app),receipt=runImportReceipt({version:1,bindingId:id,...history.source,messageId,runId:run.turnId});
         const inserted=await editorStream(request,notePath,{...io,updateNote:(path,change,allowed)=>io.updateNote(path,current=>{const next=change(current);return findRunImport(next,history.source,messageId)?next:next+(next.endsWith('\n')?'':'\n')+receipt+'\n';},allowed)},()=>!this.stopped,id,insertion??undefined);
-        await this.deviceInline.register(inserted);
+        await this.deviceInline.register(inserted,history.snapshot);
         bindingId=id;
       }
       await this.ensureNoteIdentity(notePath);

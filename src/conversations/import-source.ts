@@ -66,7 +66,7 @@ export async function readImportRun(access:ThreadAccess,threadId:string,projectI
   let result:WireSnapshot|undefined,after:number|undefined;
   do{
     requestAborted(signal);
-    const query=new URLSearchParams();if(preview)query.set('preview','1');if(after!==undefined)query.set('afterOrdinal',String(after));
+    const query=new URLSearchParams();if(preview)query.set('preview','1');if(firstPageOnly&&!preview)query.set('view','answer');if(after!==undefined)query.set('afterOrdinal',String(after));
     const suffix=query.toString();
     let value:unknown;
     try{value=await abortableRead(access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}/import-runs/${encodeURIComponent(runId)}${suffix?'?'+suffix:''}`,undefined,{signal}),signal);}
@@ -76,7 +76,7 @@ export async function readImportRun(access:ThreadAccess,threadId:string,projectI
       return {snapshot,state:applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state};
     }
     if(!isRecord(value)||!Number.isSafeInteger(value.snapshotSequence))throw Error('T3 returned an invalid import snapshot.');
-    const raw=readRawSnapshot({snapshotSequence:value.snapshotSequence,hasMoreHistory:firstPageOnly&&value.nextOrdinal!==null,projection:value});
+    const raw=readRawSnapshot({snapshotSequence:value.snapshotSequence,hasMoreHistory:value.hasMoreHistory===true||firstPageOnly&&value.nextOrdinal!==null,projection:value});
     if(!('projection' in raw)||raw.projection.thread.id!==threadId||raw.projection.thread.projectId!==projectId||raw.projection.runs.length!==1||raw.projection.runs[0].id!==runId)throw Error('T3 returned another response for this import.');
     if(!result)result=raw;
     else result={...result,projection:{...result.projection,messages:[...result.projection.messages,...raw.projection.messages],turnItems:[...result.projection.turnItems??[],...raw.projection.turnItems??[]]}};

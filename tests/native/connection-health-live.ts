@@ -9,8 +9,11 @@ import {requireEvidenceDirectory} from '../../scripts/evidence-paths.mjs';
 
 async function main(){
  const evidence=await requireEvidenceDirectory(process.argv[2]??'','Private evidence directory required.');await mkdir(evidence,{recursive:true});
- const settings=JSON.parse(await readFile('/home/ubuntu/vaults/QLO2/.obsidian/plugins/send-to-t3-code/data.json','utf8')),paired=settings.paired.find((c:any)=>c.environmentId==='3630e7fa-f1df-4631-b5a2-6086ddaf28a1');
- const cli='/home/ubuntu/.local/bin/t3',base='/home/ubuntu/.t3',issued=JSON.parse(execFileSync(cli,['auth','session','issue','--base-dir',base,'--ttl','5m','--label','connection-health-read-only-validation','--json','--scope','filesystem:read'],{encoding:'utf8'}));
+ const [settingsPath,cli,base,vaultRoot,environmentId]=process.argv.slice(3);
+ if(!settingsPath||!cli||!base||!vaultRoot||!environmentId)throw Error('Supply private settings, CLI, T3 home, vault root and environment ID arguments.');
+ const settings=JSON.parse(await readFile(settingsPath,'utf8')),paired=settings.paired.find((c:any)=>c.environmentId===environmentId);
+ if(!paired)throw Error('The requested paired environment is not configured.');
+ const issued=JSON.parse(execFileSync(cli,['auth','session','issue','--base-dir',base,'--ttl','5m','--label','connection-health-read-only-validation','--json','--scope','filesystem:read'],{encoding:'utf8'}));
  let drop=false;const held:Array<()=>void>=[];
  const socket=(url:string)=>{
   const ws=new WebSocket(url);
@@ -27,8 +30,8 @@ async function main(){
  };
  let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined,fresh:Awaited<ReturnType<typeof connectT3Rpc>>|undefined;
  try{
-  const api=await environmentApi({transport:'direct',host:'direct',executable:'',url:paired.url,environmentId:paired.environmentId},{url:paired.url,environmentId:paired.environmentId,token:issued.token,expiresAt:Date.parse(issued.expiresAt)});
-  rpc=await connectT3Rpc(api,paired.url,socket);const payload={cwd:'/home/ubuntu/vaults/QLO2',relativePath:'.obsidian/t3-code/vault-identity.json'};
+  const api=await environmentApi({transport:'direct',host:'direct',executable:'',url:paired.url,environmentId:paired.environmentId},{url:paired.url,environmentId:paired.environmentId,token:issued.token,expiresAt:Date.parse(issued.expiresAt)},globalThis.fetch);
+  rpc=await connectT3Rpc(api,paired.url,socket);const payload={cwd:vaultRoot,relativePath:'.obsidian/t3-code/vault-identity.json'};
   const start=performance.now();await rpc.call('projects.readFile',payload);const initialReadMs=performance.now()-start;
   drop=true;const delayedAt=performance.now();let settled=false;
   const delayed=rpc.call('projects.readFile',payload).then(value=>{settled=true;return value;});

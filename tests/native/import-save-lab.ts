@@ -45,7 +45,7 @@ export default class ImportSaveLab extends Plugin {
       syncReady:()=>syncReady,receiveCoordinated:record=>native.receive(record),receiveDirect:update=>native.stream(update),localCompleted:(id,note)=>native.localCompleted(id,note),
       completionFailed:error=>write('SAVE-ERROR.json',{error:String(error)}),
       access:async()=>({origin:'https://synthetic.invalid',api:async(route,payload)=>{completionReads.push({route,itemId:expectRecord(payload).itemId});if(route!=='/api/orchestration/turn-item')throw Error('Unexpected synthetic request.');return {id:'synthetic-final-item',threadId:source.threadId,runId:turnId,messageId:'synthetic-answer',type:'assistant_message',text:marker,streaming:false,status:'completed',updatedAt:at};}}),
-    },deviceFinalNoteIO(this.app,()=>true),Date.now,(record,access,receive)=>new DirectInlinePreview(record,access,receive,(_thread,_access,callbacks)=>{queueMicrotask(()=>callbacks.item({kind:'snapshot',snapshot}));return {stop:()=>{}};}));
+    },deviceFinalNoteIO(this.app,()=>true),Date.now,(record,access,receive)=>new DirectInlinePreview(record,access,receive,(_thread,_access,callbacks)=>{queueMicrotask(()=>callbacks.item({kind:'snapshot',snapshot}));return {stop:()=>{}};},undefined,undefined,async()=>({snapshot,state:applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state})));
     this.register(()=>local.dispose());this.registerInterval(window.setInterval(()=>{native.refresh();local.tick();},100));
     let dialog:ImportRunModal|undefined,dialogSaveChecked=false,followChecked=false;
     subject.deviceInline={register:(request:any)=>local.register(request),waitForSave:async(id:string)=>{
