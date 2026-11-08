@@ -40,6 +40,14 @@ export default class ImportPerformanceLab extends Plugin {
   if(!fs.existsSync(path.join(this.root,'ISOLATED-NATIVE-LAB')))throw Error('Use an isolated vault.');
   const config=JSON.parse(fs.readFileSync(path.join(this.root,'LAB.json'),'utf8'));
   this.write({kind:'runtime',obsidianVersion:apiVersion,userAgent:navigator.userAgent});
+  for(const entryType of ['longtask','resource']){
+   const observer=new PerformanceObserver(list=>{for(const entry of list.getEntries()){
+    if(entryType==='resource'){
+     const url=new URL(entry.name);if(!url.pathname.includes('/orchestration/'))continue;
+     this.write({kind:'resource',route:url.pathname,startTime:entry.startTime,elapsedMs:entry.duration});
+    }else this.write({kind:'longtask',startTime:entry.startTime,elapsedMs:entry.duration});
+   }});observer.observe({type:entryType,buffered:true});this.register(()=>observer.disconnect());
+  }
   this.sources=config.sources;this.optimized=config.optimized===true;
   // These names are generated only by this guarded private lab. Retain their
   // ownership across reloads so the cleanup command removes every trial.
@@ -101,7 +109,7 @@ export default class ImportPerformanceLab extends Plugin {
    const api=this.accesses.get(session.environmentId);if(!api)throw Error('Wait for the isolated lab setup.');
    this.projects=this.catalogs.get(session.environmentId)!;
    let notePath:string;do{notePath=`Import-${source.label}-${++this.trial}.md`;}while(this.app.vault.getFileByPath(notePath));this.notes.add(notePath);const file=await this.app.vault.create(notePath,'# Imported run\n\nOrdinary text before.\n\n');const leaf=this.app.workspace.getLeaf(false);await leaf.openFile(file);await leaf.setViewState({type:'markdown',state:{file:notePath,mode:'source',source:false}});
-   const timed=async<T>(step:string,work:()=>Promise<T>)=>{const start=performance.now();try{const result=await work();this.write({kind:'read',source:source.label,step,elapsedMs:performance.now()-start});return result;}catch(error){this.write({kind:'failure',source:source.label,step,elapsedMs:performance.now()-start,error:String(error)});throw error;}};
+   const timed=async<T>(step:string,work:()=>Promise<T>)=>{const start=performance.now();try{const result=await work();this.write({kind:'read',source:source.label,step,startTime:start,elapsedMs:performance.now()-start});return result;}catch(error){this.write({kind:'failure',source:source.label,step,startTime:start,elapsedMs:performance.now()-start,error:String(error)});throw error;}};
    this.start=performance.now();this.action++;
    let catalog:ReturnType<typeof importRuns>|undefined;
    openRunImport(this.app,notePath,{

@@ -78,11 +78,15 @@ test('run preview dwell, stale work, search names and modal cleanup share one li
  const module={exports:{} as any},realRequire=createRequire(import.meta.url);
  runInNewContext((await bundle).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Component,FuzzySuggestModal:Suggest,Modal:Suggest,setIcon(){}}:realRequire(id),AbortController,queueMicrotask,
   setTimeout:(callback:()=>void)=>{timers.set(++timer,callback);return timer;},clearTimeout:(id:number)=>timers.delete(id)});
- const base={messageId:'first',turnId:'turn',turn:{turnId:'turn',state:'completed'},status:'Completed',prompt:'A searchable title '.repeat(30),createdAt:'2026-11-04'};
+ const base={messageId:'first',turnId:'turn',turn:{turnId:'turn',state:'completed'},status:'Completed',prompt:'A searchable title '.repeat(30)+'Unique search suffix',createdAt:'2026-11-04'};
  const late=deferred<void>(),requests:any[]=[],picked:any[]=[];
  const picker=new module.exports.RunImportPicker({},[base,{...base,messageId:'second'},{...base,status:'Unavailable'},{...base,unavailable:'New reason'}],(run:any)=>picked.push(run),async(run:any,el:any,child:any,signal:any)=>{requests.push({run,el,child,signal});if(requests.length===1)await late.promise;});
  picker.onOpen();assert.equal(picker.getItems().length,2);assert.equal(picker.getItemText(base),base.prompt.trimEnd());
  const first=new Element(),second=new Element();first.ownerDocument=second.ownerDocument=modal.ownerDocument;picker.renderSuggestion({item:base},first);picker.renderSuggestion({item:{...base,messageId:'second'}},second);
+ assert.equal(first.children[0].children[1].text.length,360);assert.ok(first.children[0].children[1].text.endsWith('…'));
+ assert.ok(picker.getItemText(base).endsWith('Unique search suffix'),'search retains text beyond the visible title');
+ const changed={...base,prompt:'Old prompt'};assert.equal(picker.getItemText(changed),'Old prompt');changed.prompt='New\n prompt';assert.equal(picker.getItemText(changed),'New prompt');
+ const emoji={...base,prompt:'a'.repeat(358)+'😀 tail'},emojiRow=new Element();emojiRow.ownerDocument=modal.ownerDocument;picker.renderSuggestion({item:emoji},emojiRow);assert.equal(emojiRow.children[0].children[1].text,'a'.repeat(358)+'…','short titles never split a surrogate pair');
  first.events.pointerenter();assert.equal(requests.length,1);assert.equal(first.classes.has('is-previewing'),false);
  second.events.pointerenter();assert.equal(requests.length,2);assert.equal(requests[0].signal.aborted,true);assert.equal(unloads,1);
  for(const callback of [...timers.values()])callback();assert.equal(first.classes.has('is-previewing'),false);assert.equal(second.classes.has('is-previewing'),true);

@@ -21,17 +21,24 @@ export class RunImportPicker extends FuzzySuggestModal<ImportRun>{
   private observer?:MutationObserver;
   private closed=false;
   private keyboardPreview=false;
+  private names=new WeakMap<ImportRun,{prompt:string;name:string}>();
   constructor(app:App,private runs:ImportRun[],private choose:(run:ImportRun)=>void,private preview:(run:ImportRun,el:HTMLElement,child:Component,signal:AbortSignal)=>Promise<void>,private exited?:()=>void){
     super(app);this.setPlaceholder('Choose a T3 response');this.emptyStateText='No available runs.';
   }
   getItems(){return this.runs.filter(availableImportRun);}
-  getItemText(run:ImportRun){return run.prompt.replace(/\s+/g,' ').trim();}
+  getItemText(run:ImportRun){
+    const cached=this.names.get(run);if(cached?.prompt===run.prompt)return cached.name;
+    const name=run.prompt.replace(/\s+/g,' ').trim();this.names.set(run,{prompt:run.prompt,name});return name;
+  }
   renderSuggestion(match:FuzzyMatch<ImportRun>,el:HTMLElement){
     const run=match.item;el.dataset.t3ImportRun=run.messageId;el.addClass('send-to-t3-run-row');
     const heading=el.createDiv({cls:'send-to-t3-run-heading'}),icon=heading.createSpan({cls:'send-to-t3-run-status',attr:{'aria-label':run.status,'title':run.status}});
     icon.dataset.status=run.status;
     if(run.status!=='Running')setIcon(icon,run.status==='Completed'?'check':run.status==='Failed'?'x':'pause');
-    heading.createSpan({cls:'send-to-t3-run-name',text:this.getItemText(run)});
+    // The picker searches the complete prompt. Its two-line row needs only a
+    // short title, including in the native accessibility tree.
+    const name=this.getItemText(run),title=name.length>360?name.slice(0,359).replace(/[\uD800-\uDBFF]$/,'')+'…':name;
+    heading.createSpan({cls:'send-to-t3-run-name',text:title});
     el.addEventListener('pointerenter',()=>{if(!this.keyboardPreview)this.prepare(run,el);});
     el.addEventListener('pointermove',event=>{if(event.movementX||event.movementY){this.keyboardPreview=false;this.prepare(run,el);}});
     el.addEventListener('pointerleave',()=>{if(!this.keyboardPreview)this.exitTimer=el.ownerDocument.defaultView!.setTimeout(()=>this.clear(),140);});
