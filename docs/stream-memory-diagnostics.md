@@ -19,6 +19,11 @@ do not ask the user to export or copy logs. Use bounded reads/tails when examini
 large histories. Segment boundaries are transfer units, not deletion or retention
 limits. Older segments remain available.
 
+On desktop, log routing prefers the explicitly local route or a connected machine
+with the same path platform. It waits for that route rather than choosing a remote
+machine just because it connected first. Changing the destination copies retained
+history incrementally and preserves the previous files.
+
 The plugin uses existing authenticated T3 Connect file RPCs. It adds no filesystem
 or process imports, server endpoint, privileged bridge or background daemon.
 Nothing is written to notes, `data.json`, or the synced vault. During a connection

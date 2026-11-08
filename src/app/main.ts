@@ -76,6 +76,7 @@ import {continueQuestionAnswer} from '../interaction/question-continuation';
 import {validateNoteCommand,validateAgentCommand,type NoteCommand,type NoteCommandResult} from '../notes/note-command';
 import {isFolderCommand,executeFolderCommand,type FolderCommand} from '../projects/folder-command';
 import {configureDiagnostics,logEvent,logFailure,EventJournal,diagnosticPreferences,diagnosticCategory,connectionDiagnosticPolicy,type DiagnosticCategory} from './diagnostics';
+import {diagnosticMachine} from './diagnostic-machine';
 import {DiagnosticArchive} from './diagnostic-archive';
 import {streamMemory} from './stream-memory-diagnostics';
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from '../connection/cloud';
@@ -1807,7 +1808,7 @@ export default class SendToT3 extends Plugin {
   private syncDiagnosticLogFiles(){
     if(!this.diagnosticArchive)return;
     const local=this.settings.paired.find(connection=>localRoute(connection))?.environmentId;
-    const environmentId=local??this.commandHosts.keys().next().value;if(!environmentId)return;
+    const environmentId=diagnosticMachine([...this.commandHosts].map(([environmentId,entry])=>({environmentId,workspaceRoot:entry.host.route.workspaceRoot})),this.localVaultPath(),local);if(!environmentId)return;
     const entry=this.commandHosts.get(environmentId);if(!entry||entry.rpc.closed)return;
     const workspaceRoot=entry.host.route.workspaceRoot,directory=`.t3-obsidian/diagnostics/${this.settings.vaultId}/${this.deviceId}`;
     void this.diagnosticArchive?.sync(connectDiagnosticFiles(entry.rpc,workspaceRoot),{environmentId,workspaceRoot,directory}).catch(()=>{});

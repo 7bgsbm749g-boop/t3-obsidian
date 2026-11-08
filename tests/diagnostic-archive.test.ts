@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {indexedDB,IDBKeyRange as Range} from 'fake-indexeddb';
+import {diagnosticMachine} from '../src/app/diagnostic-machine';
 import {DiagnosticArchive} from '../src/app/diagnostic-archive';
 import {EventJournal,connectionDiagnosticPolicy,type DiagnosticEvent} from '../src/app/diagnostics';
 import {connectDiagnosticFiles} from '../src/notes/connect-command-files';
@@ -40,4 +41,25 @@ test('diagnostic transport writes plain large UTF-8 JSONL and keeps its separate
  const f=await fixture(),text=JSON.stringify({bodyLength:2,example:'漢'.repeat(12000)})+'\n';await f.files.write(f.target.directory+'/test.jsonl',text);assert.equal(f.data.get(f.target.directory+'/test.jsonl'),text);assert.equal(f.data.size,1);
  for(const path of ['../bad','.t3-obsidian/clients/private','.t3-obsidian/diagnostics/../bad'])await assert.rejects(f.files.write(path,'x'),/path/);
  await f.archive.close();
+});
+test('a late earlier event cannot be acknowledged by an older in-flight page snapshot',async()=>{
+ const f=await fixture();f.archive.record(f.event(32));await f.archive.settle();f.hook(()=>f.archive.record(f.event(1)));
+ await f.archive.sync(f.files,f.target);f.advance();await f.archive.sync(f.files,f.target);
+ assert.deepEqual(events(f.data).map(event=>event.sequence),[1,32]);await f.archive.close();
+});
+
+test('desktop log routing waits for a matching machine instead of following remote connection race order',()=>{
+ const machines=[{environmentId:'windows',workspaceRoot:'C:\\Users\\fixture\\scratch'},{environmentId:'vps',workspaceRoot:'/home/fixture/scratch'}];
+ assert.equal(diagnosticMachine(machines,'/vault'),'vps');assert.equal(diagnosticMachine(machines,'C:\\Vault'),'windows');
+ assert.equal(diagnosticMachine(machines.slice(0,1),'/vault'),undefined);
+ assert.equal(diagnosticMachine(machines,undefined),'windows');assert.equal(diagnosticMachine(machines,'/vault','explicit-local'),'explicit-local');
+});
+test('a changed machine automatically receives retained history already acknowledged at the old destination',async()=>{
+ const f=await fixture();for(let i=1;i<=200;i++)f.archive.record(f.event(i));await f.archive.settle();
+ for(let i=0;i<3;i++){f.advance();await f.archive.sync(f.files,f.target);}assert.equal(events(f.data).length,200);await f.archive.close();
+ const archive=new DiagnosticArchive('vault','device',f.open,()=>Date.parse('2027-01-01T00:00:00Z')+f.writes*5001);
+ const next={...f.target,environmentId:'new-machine',directory:f.target.directory+'-new'};
+ for(let i=0;i<3;i++)await archive.sync(f.files,next);
+ const copied=events(new Map([...f.data].filter(([name])=>name.startsWith(next.directory+'/'))));assert.equal(copied.length,200);
+ assert.equal(events(new Map([...f.data].filter(([name])=>name.startsWith(f.target.directory+'/')))).length,200);await archive.close();
 });
