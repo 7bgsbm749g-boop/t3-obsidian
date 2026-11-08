@@ -9,6 +9,7 @@ import type {ResponseRequest} from './response-model';
 import type {ResponseRecord} from './response-record';
 import type {InlineStartRequest} from '../conversations/inline-thread';
 import type {DeviceResponseIO} from './device-local-responses';
+import {streamMemory} from '../app/stream-memory-diagnostics';
 import {logEvent,logFailure,diagnosticEnabled} from '../app/diagnostics';
 import {SharedThreadStreams} from '../conversations/shared-thread-stream';
 import type {ResponseStopReceipt} from './response-stop-receipt';
@@ -82,6 +83,7 @@ export class LocalResponseManager {
       const same=runtime.update?.completionVerified&&update.completionVerified&&runtime.update.turnId===update.turnId&&runtime.update.messageId===update.messageId&&runtime.update.body===update.body&&runtime.update.phase===update.phase&&runtime.update.questionsPending===update.questionsPending;
       if(!same)runtime.update=update;this.io.receiveDirect?.(update);
       runtime.record.state={...runtime.record.state!,...update.resume,body:update.body,status:update.phase==='error'?'error':update.phase??'running',turnId:update.turnId,bindingCheckpoint:update.checkpoint};
+      streamMemory.sample('sample',()=>{const status=this.sources.status();return {bindingId:request.id,threadId:request.threadId,turnId:update.turnId,bodyLength:update.body.length,sourceCount:status.sources,readerCount:status.readers,openingCount:status.opening,queuedCount:status.queued,canonicalReadCount:status.canonicalReads,cacheCharacters:status.cacheCharacters,attachmentCount:this.jobs.size,saveWorkerCount:this.finalWorkers.size,saveQueueCount:this.finalQueues.size};});
       if(update.questionActivities)this.io.localQuestions?.(update);
       if(update.completionVerified&&['complete','interrupted'].includes(update.phase??'')){
         if(!same)runtime.retained=this.io.retainLocalFinal?.(update).catch(error=>logFailure('response.local.final-cache',error,{bindingId:request.id}));
@@ -299,6 +301,7 @@ export class LocalResponseManager {
       if(runtime.request.localStage)await this.io.localEditSaved?.(runtime.request,document).catch(error=>logFailure('response.edit.receipt',error,{bindingId:runtime.request.id}));
       await this.settle(runtime,true);
     }
+    streamMemory.sample('save',()=>({documentLength:document.length,attachmentCount:changes.length,elapsedMs:Date.now()-started,saveWorkerCount:this.finalWorkers.size,saveQueueCount:this.finalQueues.size}));
     if(diagnosticEnabled('response.save.verified'))logEvent('response.save.verified',{noteAlias:contentHash(path),bindingIds:changes.map(change=>change.runtime.request.id),attachments:changes.length,elapsedMs:Date.now()-started});
   }
   status(id:string):ResponseStopReceipt|undefined{

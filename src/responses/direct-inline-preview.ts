@@ -7,6 +7,7 @@ import {mergeProse,observeIncoming,steeringBoundary} from '../conversations/inli
 import {completionTime,finalAnswerFormat,intermediateMode} from './response-presentation';
 import {watchThread,readInlineSnapshot,type ThreadAccess,type ThreadStreamItem} from '../conversations/thread-stream';
 import {logEvent,logFailure,diagnosticEnabled} from '../app/diagnostics';
+import {streamMemory} from '../app/stream-memory-diagnostics';
 import {checkFinalResponse,finalResponseKey} from './final-response';
 import {responseTooLarge,type StreamReadFailure} from '../connection/t3-response-limits';
 import {signInRequired,type ResponseConnectionIssue} from '../connection/sign-in-state';
@@ -161,6 +162,7 @@ export class DirectInlinePreview {
     if((request.deviceCompletion||request.localOnly)&&terminal&&!completionVerified)this.verifyCompletion();
     if(this.interruptedTurnId)this.verifyInterruption();
     if(diagnosticEnabled('response.render.batch')&&this.clock.now()-this.lastRenderDiagnostic>=1000){this.lastRenderDiagnostic=this.clock.now();logEvent('response.render.batch',{bindingId:request.id,threadId:request.threadId,turnId,sequence:this.state.sequence,phase,bodyLength:body.length,messageCount:this.state.messages.length,activityCount:this.state.activities.length,receivedToRenderMs:this.lastRenderDiagnostic-this.receivedAt,renderMs:this.lastRenderDiagnostic-renderStarted});}
+    streamMemory.sample('sample',()=>({bindingId:request.id,threadId:request.threadId,turnId,bodyLength:body.length,messageCount:this.state.messages.length,activityCount:this.state.activities.length,proseCount:this.prose.length,turnCount:this.turnIds.length,pendingRenderCount:this.pending===undefined?0:1,verificationCount:Number(!!this.verification)+Number(!!this.interruptionVerification),renderMs:this.clock.now()-renderStarted}));
     return true;
   }
   private verifyInterruption(){
@@ -228,5 +230,5 @@ export class DirectInlinePreview {
   }
   reconnect(open:boolean){if(this.stopped)return;logEvent('stream.direct.reset',{...this.diagnosticContext(),cause:'requested-reconnect',open});this.suspend();this.connectionIssue=undefined;this.connectionChanged?.();this.tick(open);}
   suspend(){this.generation++;this.monitor?.stop();this.monitor=undefined;this.closeVerification?.();this.closeVerification=undefined;this.verification=undefined;this.interruptionVerification=undefined;this.nextInterruptionVerification=0;this.nextVerification=0;if(this.pending!==undefined)this.clock.cancel(this.pending);this.pending=undefined;this.lastRender=-Infinity;}
-  dispose(){this.stopped=true;this.suspend();this.state={messages:[],activities:[]};this.prose=[];this.turnIds=[];this.follows=[];this.incoming=[];this.verifiedInterruptions.clear();this.record={...this.record,request:{...this.record.request,localResume:undefined},state:undefined};}
+  dispose(){streamMemory.sample('end',()=>({bindingId:this.record.request.id,threadId:this.record.request.threadId,messageCount:this.state.messages.length,activityCount:this.state.activities.length}));this.stopped=true;this.suspend();this.state={messages:[],activities:[]};this.prose=[];this.turnIds=[];this.follows=[];this.incoming=[];this.verifiedInterruptions.clear();this.record={...this.record,request:{...this.record.request,localResume:undefined},state:undefined};streamMemory.sample('dispose',()=>({bindingId:this.record.request.id,messageCount:0,activityCount:0}));}
 }
