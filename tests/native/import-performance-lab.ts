@@ -10,7 +10,7 @@ import {environmentApi,type PairedSession} from '../../src/connection/direct';
 import {openRunImport} from '../../src/conversations/run-import-ui';
 import {readInlineSnapshot,type ThreadAccess} from '../../src/conversations/thread-stream';
 import {applyThreadItem,inlineTurnMessages,quoteResponse} from '../../src/conversations/inline-thread';
-import {availableImportRun,importRuns,importRunPreview} from '../../src/conversations/run-import';
+import {availableImportRun,importRuns,importRunPreview,type ImportRun} from '../../src/conversations/run-import';
 import {projectThreads} from '../../src/conversations/thread-target';
 import {readThreadList,readWireProjects} from '../../src/connection/wire-readers';
 import type {Project} from '../../src/app/bridge';
@@ -38,6 +38,7 @@ export default class ImportPerformanceLab extends Plugin {
  private catalogs=new Map<string,Project[]>();
  private local?:DeviceResponseManager;
  private notes=new Set<string>();private trial=0;
+ private synthetic=false;private syntheticRelease?:()=>void;private syntheticCancels=new Set<()=>void>();
  private importing?:{start:number;action:number;source:string;view:MarkdownView;expected?:string;bindingId?:string;measured?:boolean};
  private write(value:unknown){fs.appendFileSync(path.join(this.root,'PANES.ndjson'),JSON.stringify(value)+'\n');}
  private captureInput(event:Event){
@@ -50,7 +51,7 @@ export default class ImportPerformanceLab extends Plugin {
   // Obsidian can invoke a chooser before the lab's window listener. Reuse
   // that exact trusted event, including across listener microtask checkpoints.
   const event=window.event;if(event?.isTrusted&&['keydown','pointerdown'].includes(event.type))this.captureInput(event);
-  return {start:this.start,action:this.action,source:this.source?.label};
+  return {start:this.start,action:this.action,source:this.synthetic?'synthetic-delay':this.source?.label};
  }
  async onload(){
   this.root=path.dirname((this.app.vault.adapter as any).getFullPath(''));
@@ -94,11 +95,41 @@ export default class ImportPerformanceLab extends Plugin {
   this.register(()=>{window.removeEventListener('pointerdown',capture,true);window.removeEventListener('keydown',capture,true);document.removeEventListener('pointermove',hover,true);});
   const observer=new MutationObserver(()=>this.measure());observer.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','aria-label','data-t3-html-state','data-t3-html-painted']});this.register(()=>observer.disconnect());
   for(const [index,source] of this.sources.entries())this.addCommand({id:'source-'+index,name:'Measure import '+index,callback:()=>void this.show(source)});
+  this.addCommand({id:'delayed-picker',name:'Measure delayed import cancellation',callback:()=>this.showDelayed()});
+  this.registerDomEvent(window,'keydown',event=>{if(event.isTrusted&&event.key==='F6'&&this.syntheticRelease){event.preventDefault();event.stopImmediatePropagation();this.syntheticRelease();}},true);
+  this.register(()=>{for(const cancel of [...this.syntheticCancels])cancel();this.syntheticRelease=undefined;});
+  this.registerDomEvent(window,'message',event=>{if(event.data?.jsonrpc==='2.0'&&['t3/notifications/preview-ready','t3/notifications/preview-painted'].includes(event.data.method))this.write({kind:'html-frame',source:this.source?.label,startTime:performance.now(),phase:event.data.method});});
   this.addCommand({id:'cleanup',name:'Delete owned import test notes',callback:()=>void (async()=>{this.local?.dispose();for(const file of this.app.vault.getMarkdownFiles())if(/^(?:Reference|Virtual|Import-(?:vps-0|vps-1|vps-largest-run|laptop-largest(?:-run)?)-\d+)\.md$/.test(file.path))this.notes.add(file.path);for(const leaf of this.app.workspace.getLeavesOfType('markdown'))if(this.notes.has((leaf.view as MarkdownView).file?.path??''))leaf.detach();for(const path of this.notes){const file=this.app.vault.getFileByPath(path);if(file)await this.app.vault.delete(file);}this.write({kind:'cleanup',deletedNotes:[...this.notes],remainingOwnedNotes:[...this.notes].filter(path=>this.app.vault.getFileByPath(path))});})()});
   this.app.workspace.onLayoutReady(()=>void (async()=>{
    for(const source of this.sources){const session=source.session;if(this.accesses.has(session.environmentId))continue;const api=await environmentApi({transport:'direct',host:'direct',executable:'',url:session.url,environmentId:session.environmentId},session);this.accesses.set(session.environmentId,api);this.catalogs.set(session.environmentId,readWireProjects(await api('/api/orchestration/shell')));}
    this.write({kind:'setup-ready',environments:this.accesses.size});
   })().catch(error=>this.write({kind:'setup-failed',error:String(error)})));
+ }
+ private showDelayed(){
+  this.synthetic=true;this.importing=undefined;this.start=performance.now();this.action++;
+  const project:Project={id:'synthetic-project',title:'Synthetic delayed source',workspaceRoot:''},thread={id:'synthetic-thread',projectId:project.id,title:'Synthetic thread',status:'Idle' as const,updatedAt:new Date().toISOString()};
+  const runs:ImportRun[]=[1,2,3].map(ordinal=>({messageId:'synthetic-prompt-'+ordinal,turnId:'synthetic-run-'+ordinal,prompt:'Synthetic response '+ordinal,status:'Completed',createdAt:thread.updatedAt,turn:{turnId:'synthetic-run-'+ordinal,messageId:'synthetic-prompt-'+ordinal,state:'completed',ordinal}}));
+  const held=<T>(stage:string,signal:AbortSignal|undefined,advance:()=>T|undefined)=>new Promise<T>((resolve,reject)=>{
+   const start=performance.now();let settled=false;
+   const clean=()=>{this.syntheticCancels.delete(cancel);signal?.removeEventListener('abort',cancel);if(this.syntheticRelease===release)this.syntheticRelease=undefined;};
+   const cancel=()=>{if(settled)return;settled=true;clean();this.write({kind:'synthetic-cancelled',stage,elapsedMs:performance.now()-start});reject(Error('Synthetic read explicitly cancelled.'));};
+   const release=()=>{
+    if(settled)return;const value=advance();this.write({kind:'synthetic-release',stage,elapsedMs:performance.now()-start});
+    if(value!==undefined){settled=true;clean();resolve(value);}
+    requestAnimationFrame(()=>requestAnimationFrame(()=>this.write({kind:'synthetic-visible',stage,query:document.querySelector<HTMLInputElement>('.prompt-input')?.value,selected:document.querySelector<HTMLElement>('.suggestion-item.is-selected')?.dataset.t3ImportRun})));
+   };
+   this.syntheticRelease=release;this.syntheticCancels.add(cancel);signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)cancel();
+   this.write({kind:'synthetic-pending',stage,startTime:start});
+  });
+  openRunImport(this.app,'Synthetic cancellation check.md',{
+   projects:()=>[project],projectLabel:value=>value.title,
+   threads:(_project,signal)=>held('threads',signal,()=>[thread]),
+   runs:(_project,_thread,signal,progress)=>{let releases=0;return held('runs',signal,()=>{if(++releases<3){progress?.(runs.slice(0,releases+1));return;}return runs;});},
+   preview:async(_project,_thread,run,element)=>{element.setText(run.prompt+' · synthetic preview');},
+   prepareSelection:async()=>{this.write({kind:'synthetic-selection-prepared'});},
+   attach:async()=>{this.write({kind:'synthetic-unexpected-import'});throw Error('This synthetic check never writes a note or dispatches a T3 command.');},
+  });
+  this.write({kind:'synthetic-ready',releaseKey:'F6',timers:false,noteCreated:false});
  }
  private measure(){
   const input=document.querySelector<HTMLInputElement>('.prompt-input'),placeholder=input?.placeholder;
@@ -138,6 +169,7 @@ export default class ImportPerformanceLab extends Plugin {
   }
  }
  private async show(source:Source){
+  this.synthetic=false;
   this.source=source;
   try{
    const session=source.session,connection={transport:'direct' as const,host:'direct',executable:'',url:session.url,environmentId:session.environmentId};

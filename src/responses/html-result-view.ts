@@ -150,7 +150,12 @@ export class HtmlResultViews {
       loading=(async()=>{
       try{
         const html=await this.store.get(reference);if(disposed||this.stopped||current!==generation)return;
-        const next=doc.win.createEl('iframe');next.title=reference.title;next.setAttribute('sandbox',options.passive?'allow-scripts':'allow-scripts allow-forms');next.referrerPolicy='no-referrer';next.loading=options.passive?'eager':'lazy';next.className='send-to-t3-html-frame';
+        const next=doc.win.createEl('iframe');next.title=reference.title;next.setAttribute('sandbox',options.passive?'allow-scripts':'allow-scripts allow-forms');next.referrerPolicy='no-referrer';
+        const box=root.isConnected?root.getBoundingClientRect():undefined;
+        // A selected visible result must not wait for the browser's lazy-frame
+        // scheduling window. Off-screen results still defer their runtimes.
+        const visible=box&&box.width>0&&box.height>0&&box.bottom>0&&box.top<win.innerHeight&&box.right>0&&box.left<win.innerWidth;
+        next.loading=options.passive||visible?'eager':'lazy';next.className='send-to-t3-html-frame';
         if(options.passive){next.inert=true;next.tabIndex=-1;}
         const theme=themeFor(doc);next.style.colorScheme=theme.appearance;
         blob=win.URL.createObjectURL(new win.Blob([this.prepare(html,doc)],{type:'text/html;charset=utf-8'}));

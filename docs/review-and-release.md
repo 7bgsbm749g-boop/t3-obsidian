@@ -33,8 +33,10 @@ provided by Obsidian; plugin copy buttons and custom link suggestions were
 removed. Note, property, folder and job event emissions were removed. Reply
 streaming and explicit following remain.
 Clerk account requests use Obsidian `requestUrl`. The T3 browser transport keeps
-abort, redirect rejection and incremental body limits, which `requestUrl` does
-not expose. It uses the main window's fetch explicitly. UI listeners and timers
+abort, redirect rejection and incremental body reads, which `requestUrl` does
+not expose. Import reads discard unrelated fields while streaming and have no
+response-size or elapsed-time rejection. Explicit cancellation still applies.
+It uses the main window's fetch explicitly. UI listeners and timers
 belong to their workspace document, including popouts.
 
 The temporary response height guard uses an invisible, noninteractive sibling

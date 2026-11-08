@@ -18,7 +18,7 @@ async function production(){
 // unchanged; browser iframe execution still belongs to the native HTML lab.
 class Element {
  children:Element[]=[];parent?:Element;dataset:Record<string,string>={};attrs:Record<string,string>={};events:Record<string,()=>void>={};
- style={height:'',colorScheme:''};className='';hidden=false;disabled=false;clientWidth=728;contentWindow={postMessage(){}};private text='';
+ style={height:'',colorScheme:''};className='';hidden=false;disabled=false;clientWidth=728;loading='';contentWindow={postMessage(){}};private text='';
  classList={add:(_name:string)=>{},remove:(_name:string)=>{},contains:()=>false,toggle:()=>{}};
  get parentElement(){return this.parent;}
  get isConnected(){return false;}
@@ -68,6 +68,16 @@ test('disposing during selected HTML preparation prevents late document preparat
  const module=await production(),document=documentFixture();let finish!:(html:string)=>void;
  const views=new module.HtmlResultViews({},{get:()=>new Promise<string>(resolve=>{finish=resolve;}),dispose(){}}),pending=views.prefetch(reference,document.doc);views.dispose();finish(page);await pending;
  assert.equal(document.parses,0);assert.equal(document.blobs.size,0);
+});
+
+test('visible HTML frames start eagerly while off-screen and unattached result runtimes stay lazy',async()=>{
+ const module=await production();
+ for(const [position,connected,eager] of [[100,true,true],[1000,true,false],[100,false,false]] as const){
+  const receiver=device(module),document=documentFixture();document.doc.defaultView.innerHeight=800;document.doc.defaultView.innerWidth=1200;
+  const views=new module.HtmlResultViews({},receiver.store),mounted=views.mount(reference,document.doc),root=mounted.root as Element;
+  Object.defineProperty(root,'isConnected',{value:connected});Object.assign(root,{getBoundingClientRect:()=>({top:position,bottom:position+200,height:200,width:728,left:0,right:728})});
+  await loaded(root);assert.equal(root.find('iframe')!.loading,eager?'eager':'lazy');views.dispose();
+ }
 });
 
 test('a cold receiver shows a compact connection state and recovers once after host access returns',async()=>{
