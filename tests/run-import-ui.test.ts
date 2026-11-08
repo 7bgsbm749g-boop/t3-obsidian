@@ -6,7 +6,7 @@ import {createRequire} from 'node:module';
 import type {RunImportResult} from '../src/conversations/run-import';
 
 const bundle=build({stdin:{contents:"export {ImportRunModal,RunImportPicker,openRunImport} from './src/conversations/run-import-ui';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
-const drain=async()=>{for(let i=0;i<4;i++)await Promise.resolve();};
+const drain=()=>new Promise<void>(resolve=>setImmediate(resolve));
 function deferred<T>(){let resolve!:(value:T)=>void,reject!:(error:Error)=>void;const promise=new Promise<T>((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
 async function fixture(attach:(follow:boolean)=>Promise<RunImportResult>){
   const buttons:any[]=[],toggles:any[]=[],notices:Array<{text:string;duration:number}>=[];
@@ -127,4 +127,26 @@ test('a thread picker receives fresh rows without losing its filter or choosing 
  picker.close();await drain();assert.equal(stops,1);update([fresh]);assert.equal(inputEvents.length,1);
  module.exports.openRunImport(app,'Synthetic.md',host);opened.at(-1).select(project);await drain();const abandoned=opened.at(-1),late=update;
  module.exports.openRunImport(app,'Synthetic.md',host);assert.equal(stops,2);late([fresh]);assert.equal(inputEvents.length,1);assert.equal(abandoned.inputEl.value,'typed filter');
+});
+
+test('a unique typed thread match prepares one cancellable run read that selection joins',async()=>{
+ const opened:any[]=[],notices:string[]=[],reads:Array<{thread:string;signal:AbortSignal}>=[],pending=new Map<string,ReturnType<typeof deferred<any[]>>>(),module={exports:{} as any},realRequire=createRequire(import.meta.url);
+ class Modal {open(){opened.push(this);}close(){this.onClose();}onClose(){}}
+ class Suggest extends Modal {
+  placeholder='';setPlaceholder(value:string){this.placeholder=value;}
+  getSuggestions(query:string){return (this as any).getItems().filter((item:any)=>item.id.includes(query)).map((item:any)=>({item}));}
+  select(item:unknown){this.close();(this as any).onChooseItem(item);}
+ }
+ runInNewContext((await bundle).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{FuzzySuggestModal:Suggest,Modal,Notice:class{constructor(text:string){notices.push(text);}}}:realRequire(id),AbortController,queueMicrotask});
+ const app={},project={id:'project'},first={id:'first-thread',projectId:'project'},second={id:'second-thread',projectId:'project'};
+ const host={projects:()=>[project],projectLabel:()=>'',threads:async()=>[first,second],runs:async(_project:unknown,thread:typeof first,signal:AbortSignal)=>{reads.push({thread:thread.id,signal});const work=deferred<any[]>();pending.set(thread.id,work);return work.promise;},attach:async()=>{throw Error('No import requested');}};
+ module.exports.openRunImport(app,'Synthetic.md',host);opened.at(-1).select(project);await drain();const picker=opened.at(-1);
+ picker.getSuggestions('');picker.getSuggestions('thread');await drain();assert.equal(reads.length,0,'empty and ambiguous filters do no history work');
+ picker.getSuggestions('first');await drain();picker.getSuggestions('first-thread');await drain();assert.equal(reads.length,1);assert.equal(reads[0].signal.aborted,false);
+ picker.getSuggestions('second');await drain();assert.equal(reads[0].signal.aborted,true);assert.equal(reads.length,2);
+ pending.get(first.id)!.resolve([]);await drain();assert.equal(opened.at(-1),picker,'an obsolete result cannot open a picker');
+ pending.get(second.id)!.resolve([]);await drain();assert.equal(opened.at(-1),picker,'preparation alone cannot select a thread');
+ picker.select(second);await drain();assert.equal(reads.length,2,'selection joins the completed read');assert.equal(opened.at(-1).placeholder,'Choose a T3 response');
+ assert.ok(!notices.some(text=>text.startsWith('Import T3 run:')));
+ module.exports.openRunImport(app,'Synthetic.md',host);opened.at(-1).select(project);await drain();const cancelled=opened.at(-1);cancelled.getSuggestions('first');await drain();cancelled.close();await drain();assert.equal(reads.at(-1)!.signal.aborted,true);pending.get(first.id)!.reject(Error('Cancelled obsolete read'));await drain();assert.ok(!notices.some(text=>text.startsWith('Import T3 run:')));
 });

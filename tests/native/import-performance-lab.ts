@@ -18,6 +18,7 @@ import {renderRunImportPreview} from '../../src/conversations/run-import-preview
 import {readImportThreads,readImportRuns,readImportPreview} from '../../src/conversations/import-source';
 import {HtmlResultStore} from '../../src/responses/html-result-store';
 import {HtmlResultViews} from '../../src/responses/html-result-view';
+import {configureDiagnostics,EventJournal} from '../../src/app/diagnostics';
 
 const fs=require('node:fs'),path=require('node:path');
 interface Source {label:string;session:PairedSession;threadId:string;projectId:string;runId?:string}
@@ -54,6 +55,9 @@ export default class ImportPerformanceLab extends Plugin {
   this.root=path.dirname((this.app.vault.adapter as any).getFullPath(''));
   if(!fs.existsSync(path.join(this.root,'ISOLATED-NATIVE-LAB')))throw Error('Use an isolated vault.');
   const config=JSON.parse(fs.readFileSync(path.join(this.root,'LAB.json'),'utf8'));
+  const journal=new EventJournal({load:async()=>undefined,save:async()=>{},id:()=>this.manifest.id,context:{deviceId:'isolated-import-performance'}}),record=journal.record.bind(journal);
+  journal.record=(event,fields={},level='info')=>{if(event==='import.index.cache')this.write({kind:'index-cache',...fields});return record(event,fields,level);};
+  configureDiagnostics(journal);this.register(()=>configureDiagnostics());
   this.write({kind:'runtime',obsidianVersion:apiVersion,userAgent:navigator.userAgent});
   for(const entryType of ['longtask','resource']){
    const observer=new PerformanceObserver(list=>{for(const entry of list.getEntries()){
