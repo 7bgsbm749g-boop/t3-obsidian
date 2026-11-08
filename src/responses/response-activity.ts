@@ -13,8 +13,7 @@ export function responseActivityLabel(state:InlineThreadState,turnId:string):str
 
 }
 
-export function responseActivityRow(label='Thinking',icon='brain'):string {
+export function responseActivityRow(label='Thinking'):string {
   const escaped=text(label).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-  const glyph=/^[a-z0-9-]+$/.test(icon)?icon:'brain';
-  return `<span class="send-to-t3-response-activity" role="status" aria-live="polite"><span data-t3-tool-icon="${glyph}" aria-hidden="true"></span><span>${escaped}</span> <span class="send-to-t3-inline-spinner" aria-label="Loading"></span></span>`;
+  return `<span class="send-to-t3-response-activity" role="status" aria-live="polite"><span data-t3-tool-icon="brain" aria-hidden="true"></span><span>${escaped}</span> <span class="send-to-t3-inline-spinner" aria-label="Loading"></span></span>`;
 }

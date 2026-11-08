@@ -40,7 +40,7 @@ test('unfinished Markdown stays literal until a complete block boundary and is f
   message.streaming=false;assert.doesNotMatch(renderInlineTurn(state,'turn','thread','running','collapse'),/stream-tail/);
 });
 
-test('command history stays separate from the live label across calls and thinking',()=>{
+test('consecutive calls become one collapsed history group; the current batch appears once at the bottom',()=>{
   const message=(id:string,time:number,text:string,role='assistant')=>({id,role,text,turnId:'turn',streaming:false,createdAt:new Date(time*1000).toISOString()});
   const state:InlineThreadState={messages:[message('before',1,'Before.'),message('middle',5,'Between batches.')],activities:[
     a('one',2,'tool.completed',{toolCallId:'one',data:{command:'npm test',output:'first output'}}),
@@ -52,8 +52,8 @@ test('command history stays separate from the live label across calls and thinki
   for(const mode of ['keep','collapse','remove'] as const){
     const body=renderInlineTurn(state,'turn','thread','running',mode);
     assert.equal(body.match(/data-t3-tool-id="three"/g)?.length,1);
-    assert.match(body,/<span class="send-to-t3-response-activity"[^\n]+<span>Running npm<\/span>/);
-    assert.match(body,mode==='collapse'?/^> <span class="send-to-t3-response-activity"/m:/^<span class="send-to-t3-response-activity"/m);
+    assert.match(body,/<details class="send-to-t3-response-activity"[^\n]+<span>Running npm<\/span>/);
+    assert.match(body,mode==='collapse'?/^> <details class="send-to-t3-response-activity"/m:/^<details class="send-to-t3-response-activity"/m);
     assert.match(body,/data-t3-tool-id="three"[^>]+data-t3-tool-status="completed"[^\n]+Ran npm/);
     if(mode!=='remove'){assert.match(body,/<details class="send-to-t3-tool-group"[^>]*><summary>[^\n]*<span>Ran 2 commands<\/span><\/summary>/);assert.equal(body.match(/first output/g)?.length,1);}
     const stopped=stoppedResponseBody(body);assert.doesNotMatch(stopped,/data-t3-live-tool|response-activity|inline-spinner/);assert.match(stopped,/build passed/);
@@ -85,7 +85,7 @@ test('failure and stop outcomes stay visible and stop clears every running call 
   for(const status of ['declined','stopped']){
     state.activities=[{...failedCall,payload:{...failedCall.payload,status}}];
     assert.equal(responseActivityLabel(state,'turn'),`${status==='declined'?'Declined':'Stopped'} ls`);
-    const row=renderInlineTurn(state,'turn','thread','running','collapse');assert.match(row,/class="send-to-t3-response-activity"/);assert.match(row,new RegExp(status==='declined'?'Declined ls':'Stopped ls'));
+    const row=renderInlineTurn(state,'turn','thread','running','collapse').split('data-t3-live-tool')[1];assert.doesNotMatch(row,/inline-spinner/);
   }
   const example='```html\n'+body+'\n```';assert.equal(stoppedResponseBody(example),example);
 });
@@ -111,7 +111,7 @@ test('alternating thoughts and tools share one stable batch through live, histor
   assert.equal(live.match(/data-t3-tool-group=/g)?.length,1);assert.equal(live.match(/class="send-to-t3-thought"/g)?.length,2);
   assert.ok(live.indexOf('Summary first')<live.indexOf('first result')&&live.indexOf('first result')<live.indexOf('Summary second')&&live.indexOf('Summary second')<live.indexOf('data-t3-tool-id="two"'));
   assert.doesNotMatch(live,/\[!t3-thought\]/);assert.match(live,/data-t3-tool-summary="Ran 2 commands · 2 thoughts"/);
-  const stopped=stoppedResponseBody(live);assert.match(stopped,/Ran 2 commands · 2 thoughts/);assert.match(stopped,/Summary second/);assert.doesNotMatch(stopped,/inline-spinner|data-t3-live-tool/);
+  const stopped=stoppedResponseBody(live);assert.match(stopped,/Ran 2 commands · 2 thoughts · stopped/);assert.match(stopped,/Summary second/);assert.doesNotMatch(stopped,/inline-spinner|data-t3-live-tool/);
   state.messages.push(thought('third',5));
   const history=renderInlineTurn(state,'turn','thread','running','collapse');assert.equal(history.match(/data-t3-tool-group=/g)?.length,1);assert.match(history,/<span>Ran 2 commands · 3 thoughts<\/span>/);
 });
@@ -135,26 +135,5 @@ test('legacy thoughts without ordinals do not replace the earliest batch identit
     const identity=responseToolGroups(state,['turn'])[0].id;
     if(first==='thought')addTool(2);else addThought(2);
     assert.equal(responseToolGroups(state,['turn'])[0].id,identity);
-  }
-});
-
-
-test('a trailing command summary never disappears when a new call takes over the status line',()=>{
-  for(const mode of ['collapse','keep','remove'] as const){
-    const state:InlineThreadState={messages:[{id:'paragraph',turnId:'turn',role:'assistant',text:'Latest paragraph.',streaming:false,createdAt:new Date(1000).toISOString()}],activities:[a('first',2,'tool.completed',{toolCallId:'first',data:{command:'pwd',output:'kept result'}})]};
-    const first=renderInlineTurn(state,'turn','thread','running',mode);
-    const group=responseToolGroups(state,['turn'])[0].id;
-    state.messages.push({id:'thought',turnId:'turn',role:'reasoning',text:'Next step.',streaming:true,createdAt:new Date(3000).toISOString()});
-    const thinking=renderInlineTurn(state,'turn','thread','running',mode);
-    state.activities.push(a('second',4,'tool.started',{toolCallId:'second',data:{command:'ls'}}));
-    const next=renderInlineTurn(state,'turn','thread','running',mode);
-    for(const text of [first,thinking,next]){
-      assert.equal(text.match(/class="send-to-t3-tool-group"/g)?.length,1);
-      assert.equal(text.match(/class="send-to-t3-response-activity"/g)?.length,1);
-      assert.ok(text.includes(`data-t3-tool-group="${group.replaceAll('&','&amp;').replaceAll('"','&quot;')}"`));
-      assert.equal(text.match(/kept result/g)?.length,1);
-      assert.ok(text.indexOf('Latest paragraph.')<text.indexOf('class="send-to-t3-tool-group"'));
-    }
-    assert.match(thinking,/<span>Thinking<\/span>/);assert.match(next,/<span>Running ls<\/span>/);
   }
 });

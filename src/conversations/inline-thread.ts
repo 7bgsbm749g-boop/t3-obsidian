@@ -579,13 +579,11 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     !state.messages.some(message=>message.turnId===turnId&&Date.parse(message.createdAt??'')>Date.parse(latestEmission.createdAt??''))&&
     (!currentTool||Date.parse(currentTool.tool.createdAt??'')<=Date.parse(latestEmission.createdAt??''))?latestEmission:undefined;
   if(currentEmission)currentTool=undefined;
-  // Keep command history in place as the live label changes. Moving the same
-  // batch into and out of the activity row removes a row on every new call.
-  const historyGroups=toolGroups;
+  const historyGroups=toolGroups.filter(group=>group!==currentTool?.group);
   const workRows=historyGroups.map(group=>({createdAt:group.createdAt,sequence:group.sequence??0,body:renderResponseToolGroup(group),hasThoughts:!!group.thoughts?.length}));
   const historyRows=[...workRows,
     ...timelineEmissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
-  const bottom=spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Sending',currentTool?.tool.icon)}`:'';
+  const bottom=spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??(currentTool?renderResponseToolGroup(currentTool.group,currentTool):responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Sending'))}`:'';
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
   const followupIndex=phase!=='complete'&&transcript?.preserveHistory?segments.reduce((last,segment,index)=>segment.role==='user'?index:last,-1):-1;
@@ -638,7 +636,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const status=handoffError||errorStatus||approvals;
     return fold+(htmlBodies.length?'\n\n'+htmlBodies.map(value=>value.body).join('\n\n'):'')+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
   }
-  const toolHistory=(retain||phase!=='complete'?historyRows:[]).map(item=>item.body).join('\n\n');
+  const toolHistory=(retain?historyRows:phase!=='complete'?[...workRows.filter(item=>item.hasThoughts),...timelineEmissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence):[]).map(item=>item.body).join('\n\n');
   if(phase==='complete')return (retain&&tasks?tasks+'\n\n':'')+input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
   const status=handoffError?'\n\n'+handoffError:errorStatus?'\n\n'+errorStatus:approvals?'\n\n'+approvals:'';
   const contents=[input.trimEnd(),prose].filter(Boolean).join('\n\n');

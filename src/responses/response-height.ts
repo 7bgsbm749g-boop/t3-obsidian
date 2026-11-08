@@ -37,11 +37,10 @@ export class ResponseHeightGuard {
   begin(display:string,changes?:ChangeDesc){
     const cm=(this.view.editor as {cm?:EditorView})?.cm,window=this.view.contentEl?.ownerDocument.defaultView;
     if(this.view.getMode()==='preview'||!cm?.contentDOM?.style||!cm.scrollDOM?.style||!window){this.clear();return;}
-    // Source length is not rendered height: a completed command status or a
-    // shorter activity label can remove bytes without removing a single row.
-    // Hold through those native redraws too. Real compaction releases its old
-    // floor below once the smaller widget is measured and parsing settles;
-    // removing the active fold still clears the guard immediately.
+    // Compaction/removal deliberately shortens the projection. Its old height
+    // must be allowed to disappear, including when the viewport is now past
+    // the new document end. Holding that geometry can leave empty scroll space.
+    if(changes&&changes.newLength<changes.length){this.clear();return;}
     if(this.guard&&(this.guard.cm!==cm||this.guard.file!==this.view.file||this.guard.mode!==this.mode()))this.clear();
     const content=cm.contentDOM,scroller=cm.scrollDOM;
     const keys=(this.guard?.keys??this.folds(scroller).map(fold=>this.key(fold)).filter((key):key is string=>!!key&&key.endsWith(':active')))

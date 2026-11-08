@@ -6,7 +6,6 @@ import {installResponsePresentation} from '../../src/responses/response-presenta
 import {installStreamBlockControls} from '../../src/responses/stream-block-controls';
 import {installActivityShine} from '../../src/ui/activity-shine';
 import {responseHeightAttribute,responseHeightProperty} from '../../src/responses/response-height';
-import {renderInlineTurn,type InlineThreadState} from '../../src/conversations/inline-thread';
 const fs=require('node:fs/promises'),path=require('node:path');
 /** Synthetic setup and observation only. Activation and manual cancellation
  * require trusted native input. No Sync or external work is dispatched. */
@@ -21,7 +20,7 @@ export default class ScrollFollowLab extends Plugin {
     this.register(installResponsePresentation(document,setIcon));this.register(installActivityShine(document));this.register(()=>manager.dispose());
     this.register(installStreamBlockControls(this.app,document,setIcon,error=>void fs.writeFile(path.join(root,'error.json'),String(error))));
     this.app.workspace.onLayoutReady(()=>void(async()=>{
-      let config:{large?:boolean;prefix?:string;lines?:number;activity?:boolean;overflow?:boolean}={};try{config=JSON.parse(await fs.readFile(path.join(root,'case.json'),'utf8'));}catch(error:any){if(error.code!=='ENOENT')throw error;}
+      let config:{large?:boolean;prefix?:string;lines?:number}={};try{config=JSON.parse(await fs.readFile(path.join(root,'case.json'),'utf8'));}catch(error:any){if(error.code!=='ENOENT')throw error;}
       const prefix=config.large?Array.from({length:1000},(_,i)=>`${i%25===0?'## Section '+i+'\n\n':''}Reference paragraph ${i+1}. A synthetic design review describes navigation, spacing, typography, comparison cards, filters, and layout alternatives. `+'This text stays unchanged while the response grows. '.repeat(2)+'\n\n').join(''):'';
       const id=crypto.randomUUID(),file=this.app.vault.getFileByPath('Virtual.md')!,saved=`${config.prefix??'# Scroll follow fixture'}\n\n${prefix}${responseAnchor(id)}\n\n${config.large?'\n\n':'Ordinary after.\n'}`;
       await this.app.vault.modify(file,saved);
@@ -29,19 +28,7 @@ export default class ScrollFollowLab extends Plugin {
       await leaf.setViewState({type:'markdown',state:{file:file.path,mode:'source',source:false}});
       let lines=config.lines??(config.large?1200:35),revision=0;
       const record:any={coordinated:true,owner:'fixture',epoch:1,revision:1,expiresAt:Number.MAX_SAFE_INTEGER,request:{version:3,id,vaultId:'fixture',host:{environmentId:'fixture',workspaceRoot:(this.app.vault.adapter as any).getFullPath(''),directory:'.obsidian/fixture'},notePath:file.path,threadId:'fixture-thread',messageId:id,projectId:'fixture-project',threadEnvironmentId:'fixture',initialHash:'initial',createdAt:new Date().toISOString()},state:{accepted:true,notePath:file.path,status:'running',hashes:[],body:'',updatedAt:''}};
-      let activity='command';
-      const update=async()=>{
-        record.revision++;
-        const prose=Array.from({length:lines},(_,i)=>`Paragraph ${i+1}. ${config.large?'Synthetic streamed design detail. The layout uses a navigation panel, comparison cards, visible actions, balanced spacing, and distinct sections to test long wrapped paragraphs.':'Synthetic streaming text.'}`).join('\n\n');
-        const text=prose+(config.overflow?'\n\n```text\n'+('unbroken-token-'.repeat(50))+'\n```\n\n| Column | Column |\n| --- | --- |\n| '+('long-cell-'.repeat(50))+' | Value |':'');
-        if(config.activity){
-          const state:InlineThreadState={messages:[{id:'paragraph',turnId:'turn',role:'assistant',streaming:false,text,createdAt:'2026-01-01T00:00:01Z'}],activities:[{id:'first',turnId:'turn',kind:'tool.completed',summary:'Tool',createdAt:'2026-01-01T00:00:02Z',sequence:2,payload:{toolCallId:'first',data:{command:'pwd',output:'Synthetic result'}}}]};
-          if(activity==='thinking')state.messages.push({id:'thought',turnId:'turn',role:'reasoning',text:'Synthetic thought',streaming:true,createdAt:'2026-01-01T00:00:03Z'});
-          if(activity==='next')state.activities.push({id:'next',turnId:'turn',kind:'tool.started',summary:'Tool',createdAt:'2026-01-01T00:00:04Z',sequence:4,payload:{toolCallId:'next',data:{command:'ls'}}});
-          record.state.body=renderInlineTurn(state,'turn','fixture','running','collapse');
-        }else record.state.body=`> [!t3-progress]+ Scroll follow · Working ${revision} <span class="send-to-t3-fold-key" data-t3-fold="fixture:active"></span>\n>\n`+text.split('\n').map(line=>'> '+line).join('\n');
-        await manager.receive(record);
-      };
+      const update=async()=>{record.revision++;record.state.body=`> [!t3-progress]+ Scroll follow · Working ${revision} <span class="send-to-t3-fold-key" data-t3-fold="fixture:active"></span>\n>\n`+Array.from({length:lines},(_,i)=>`> Paragraph ${i+1}. ${config.large?'Synthetic streamed design detail. The layout uses a navigation panel, comparison cards, visible actions, balanced spacing, and distinct sections to test long wrapped paragraphs.':'Synthetic streaming text.'}\n>\n`).join('');await manager.receive(record);};
       await update();
       const snapshots:any[]=[],events:any[]=[];
       const observe=(kind:string,extra:any={})=>{
@@ -60,9 +47,7 @@ export default class ScrollFollowLab extends Plugin {
         observe(label);snapshots.push({label,appVersion:require('obsidian').apiVersion,mode:view.getMode(),documentLength:cm?.state.doc.length,cursorLine:cm?.state.doc.lineAt(cm.state.selection.main.head).text,focused:cm?.hasFocus,
           activeElement:(document.activeElement as HTMLElement)?.className,scrollTop:scroller?.scrollTop,scrollHeight:scroller?.scrollHeight,clientHeight:scroller?.clientHeight,
           heightGuard:cm?.contentDOM.hasAttribute(responseHeightAttribute),heightFloor:cm?.scrollDOM.style.getPropertyValue(responseHeightProperty),scrolledToBottom:cm?.viewState?.scrolledToBottom,
-          scroller:rect(scroller),fold:rect(fold),buttons,activity:rect(fold?.querySelector('.send-to-t3-response-activity')??null),footer:rect(fold?.querySelector('.send-to-t3-stream-footer')??null),groups:fold?.querySelectorAll('details.send-to-t3-tool-group').length,
-          horizontalOverflow:Array.from(scroller?.querySelectorAll('.callout, .callout-content, pre, .table-wrapper')??[]).filter((el:any)=>el.scrollWidth>el.clientWidth+1).map((el:any)=>({className:el.className,scrollWidth:el.scrollWidth,clientWidth:el.clientWidth,overflowX:getComputedStyle(el).overflowX})),
-          savedUnchanged:view.getViewData()===saved,diskUnchanged:await this.app.vault.read(file)===saved,selection:cm?.state.selection.toJSON()});
+          scroller:rect(scroller),fold:rect(fold),buttons,savedUnchanged:view.getViewData()===saved,diskUnchanged:await this.app.vault.read(file)===saved,selection:cm?.state.selection.toJSON()});
         await fs.writeFile(path.join(root,'scroll-follow.json'),JSON.stringify(snapshots,null,2));
         await fs.writeFile(path.join(root,'events.json'),JSON.stringify(events,null,2));
         const image=await require('@electron/remote').getCurrentWebContents().capturePage();await fs.writeFile(path.join(root,`snapshot-${snapshots.length}.png`),image.toPNG());
@@ -76,7 +61,6 @@ export default class ScrollFollowLab extends Plugin {
           finished=true;await fs.writeFile(path.join(root,'cleanup.json'),JSON.stringify({temporaryNotePaths:['Virtual.md','Reference.md'],remainingMarkdown:this.app.vault.getMarkdownFiles().map(item=>item.path),createdT3Threads:[]},null,2));return;
         }
         if(command.kind==='grow'||command.kind==='reflow'){lines=Math.max(0,Math.min(2500,lines+(command.lines??15)));if(command.kind==='reflow')revision++;observe('before-growth');await update();observe('after-growth');}
-        if(command.kind==='activity'){activity=command.activity;observe('before-activity');await update();observe('after-activity');}
         if(command.kind==='burst'){for(let i=0;i<Math.min(12,command.count??8);i++){lines=Math.min(2500,lines+(command.lines??2));observe('before-burst-growth',{index:i});await update();observe('after-burst-growth',{index:i});await new Promise(resolve=>setTimeout(resolve,Math.max(25,command.interval??120)));}}
         if(command.kind==='mode'){await leaf.setViewState({type:'markdown',state:{file:file.path,mode:command.mode,source:false}});manager.refresh();}
         if(command.waitMs)await new Promise(resolve=>setTimeout(resolve,Math.min(5000,command.waitMs)));

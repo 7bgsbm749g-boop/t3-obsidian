@@ -12,7 +12,7 @@ import {installStreamStopControls} from './stream-stop-control';
 export function installStreamBlockControls(app:App,root:Document,icon:(element:HTMLElement,name:string)=>void,onError:(error:unknown)=>void,onSignIn:()=>void=()=>{},onStop?:(id:string,view:MarkdownView)=>Promise<void>):()=>void {
   const {setInterval,clearInterval}=clockForDocument(root);
   const stopDrag=installResponseDrag(app,root,icon,onError);
-  const owned=new Map<HTMLElement,{close:HTMLElement;follow:HTMLElement;signIn:HTMLButtonElement;reading:boolean;fold:HTMLElement;footer?:HTMLElement}>();
+  const owned=new Map<HTMLElement,{close:HTMLElement;follow:HTMLElement;signIn:HTMLButtonElement;reading:boolean;fold:HTMLElement}>();
   const watched=new Set<Element>();
   let queued=false,disposed=false;
   const key=(fold:Element)=>fold.querySelector<HTMLElement>(':scope > .callout-title .send-to-t3-fold-key')?.dataset.t3Fold;
@@ -69,7 +69,7 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
         follow.addEventListener('click',toggle);
         follow.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' ')toggle(event);});
       }
-      if(controls.fold!==fold){controls.footer?.classList.remove('send-to-t3-stream-footer');controls.fold.style.removeProperty('--send-to-t3-stream-footer-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');controls.fold=fold;}
+      if(controls.fold!==fold){controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');controls.fold=fold;}
       const id=key(fold),view=viewFor(fold);
       // This is only a visibility hint. Use the compact native document for
       // it; the click handler above rechecks canonical saved bytes before any
@@ -84,32 +84,23 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
       const label=state?.active?'Stop following response':'Follow response';
       controls.follow.setAttribute('aria-label',label);controls.follow.setAttribute('title',label);controls.follow.setAttribute('aria-pressed',String(!!state?.active));
       const bottom=!controls.follow.hidden;
-      // Share the final activity line instead of adding another line beneath
-      // it. Native Markdown wraps a status span in a paragraph.
-      const content=fold.querySelector<HTMLElement>(':scope > .callout-content');
-      const last=content?.lastElementChild as HTMLElement|null|undefined;
-      const footer=bottom&&last&&(last.matches('.send-to-t3-response-activity, .send-to-t3-context')||last.querySelector('.send-to-t3-response-activity, .send-to-t3-context'))?last:undefined;
-      if(controls.footer!==footer){controls.footer?.classList.remove('send-to-t3-stream-footer');controls.footer=footer;}
-      footer?.classList.add('send-to-t3-stream-footer');
       actions.classList.toggle('send-to-t3-stream-actions-bottom',bottom);
       actions.classList.toggle('send-to-t3-stream-actions-active',!!state?.active);
       const heading=fold.querySelector<HTMLElement>(':scope > .callout-title'),parent=(actions.offsetParent as HTMLElement|null)??fold;
       if(heading){
-        // Reserve horizontal space before measuring the shared activity line.
-        // Panels without a final status line retain a separate footer.
+        // Follow has its own footer, including while off. Close and sign-in
+        // stay at the header, with space reserved before measuring its title.
         const toolbar=actions.getBoundingClientRect(),width=bottom?0:toolbar.width;
         fold.style.setProperty('--send-to-t3-stream-actions-space',`${width>0?width+8:0}px`);
-        fold.style.setProperty('--send-to-t3-stream-actions-footer',`${bottom&&!footer?toolbar.height+8:0}px`);
-        fold.style.setProperty('--send-to-t3-stream-footer-space',`${bottom?toolbar.width+8:0}px`);
+        fold.style.setProperty('--send-to-t3-stream-actions-footer',`${bottom?toolbar.height+8:0}px`);
         const header=heading.getBoundingClientRect(),box=fold.getBoundingClientRect(),container=parent.getBoundingClientRect(),edge=header.top+header.height/2-box.top;
-        const row=footer?.getBoundingClientRect();
         actions.style.setProperty('--send-to-t3-stream-top-center',`${header.top+header.height/2-container.top-parent.clientTop}px`);
-        actions.style.setProperty('--send-to-t3-stream-bottom-center',`${(row?row.top+row.height/2:box.bottom-(bottom?toolbar.height/2+4:edge))-container.top-parent.clientTop}px`);
+        actions.style.setProperty('--send-to-t3-stream-bottom-center',`${box.bottom-(bottom?toolbar.height/2+4:edge)-container.top-parent.clientTop}px`);
       }
       if(!watched.has(fold)){resize?.observe(fold);watched.add(fold);}
     }
     for(const element of watched)if(!element.isConnected){resize?.unobserve(element);watched.delete(element);}
-    for(const [actions,controls] of owned)if(!live.has(actions)){controls.close.remove();controls.follow.remove();controls.signIn.remove();controls.footer?.classList.remove('send-to-t3-stream-footer');controls.fold.style.removeProperty('--send-to-t3-stream-footer-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading){actions.parentElement?.classList.remove('send-to-t3-has-reading-actions');actions.remove();}actions.closest('.cm-embed-block')?.classList.remove('send-to-t3-stream-collapsed');owned.delete(actions);}
+    for(const [actions,controls] of owned)if(!live.has(actions)){controls.close.remove();controls.follow.remove();controls.signIn.remove();controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading){actions.parentElement?.classList.remove('send-to-t3-has-reading-actions');actions.remove();}actions.closest('.cm-embed-block')?.classList.remove('send-to-t3-stream-collapsed');owned.delete(actions);}
   };
   const schedule=()=>{if(!queued&&!disposed){queued=true;queueMicrotask(refresh);}};
   const resize=typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(schedule);
@@ -129,5 +120,5 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
   root.addEventListener(responseScrollChanged,schedule);
   const observer=new MutationObserver(records=>{if(records.some(record=>record.type==='childList'||record.target.instanceOf(Element)&&record.target.matches('.callout[data-callout="t3-progress"]')&&((record.oldValue??'').split(/\s+/).includes('is-collapsed')!==record.target.classList.contains('is-collapsed'))))schedule();});observer.observe(root.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class'],attributeOldValue:true});
   const timer=setInterval(refresh,1000);refresh();
-  return ()=>{disposed=true;stopControls();stopDrag();observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener(responseScrollChanged,schedule);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('mousedown',pointer,true);root.removeEventListener('click',click,true);for(const [actions,controls] of owned){controls.close.remove();controls.follow.remove();controls.signIn.remove();controls.footer?.classList.remove('send-to-t3-stream-footer');controls.fold.style.removeProperty('--send-to-t3-stream-footer-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading){actions.parentElement?.classList.remove('send-to-t3-has-reading-actions');actions.remove();}actions.closest('.cm-embed-block')?.classList.remove('send-to-t3-stream-collapsed');}owned.clear();};
+  return ()=>{disposed=true;stopControls();stopDrag();observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener(responseScrollChanged,schedule);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('mousedown',pointer,true);root.removeEventListener('click',click,true);for(const [actions,controls] of owned){controls.close.remove();controls.follow.remove();controls.signIn.remove();controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading){actions.parentElement?.classList.remove('send-to-t3-has-reading-actions');actions.remove();}actions.closest('.cm-embed-block')?.classList.remove('send-to-t3-stream-collapsed');}owned.clear();};
 }

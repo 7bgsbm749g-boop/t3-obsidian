@@ -311,39 +311,7 @@ body .send-to-t3-destination-actions button[hidden] { display: none; }
   padding: 0.35em 0.5em;
   padding-block-end: calc(0.35em + var(--send-to-t3-stream-actions-footer));
   margin: 0.7em 0;
-  min-width: 0;
-  max-width: 100%;
-  overflow-x: clip;
-  overflow-wrap: anywhere;
 }
-/* Native callout content and code blocks default to horizontal scrolling.
-   Streamed output must wrap within the box, including long unbroken tokens. */
-.callout[data-callout="t3-progress"] .callout-content {
-  min-width: 0;
-  max-width: 100%;
-  overflow-x: hidden;
-}
-.callout[data-callout="t3-progress"] pre,
-.callout[data-callout="t3-progress"] code {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.callout[data-callout="t3-progress"] pre,
-.callout[data-callout="t3-progress"] .table-wrapper { overflow-x: hidden; }
-.callout[data-callout="t3-progress"] table { width: 100%; table-layout: fixed; }
-.callout[data-callout="t3-progress"] img,
-.callout[data-callout="t3-progress"] video,
-.callout[data-callout="t3-progress"] svg { max-width: 100%; }
-.callout[data-callout="t3-progress"] .send-to-t3-stream-footer {
-  display: flex;
-  align-items: center;
-  min-height: 28px;
-  margin-block-end: 0;
-  padding-inline-end: var(--send-to-t3-stream-footer-space, 32px);
-}
-.send-to-t3-stream-footer > .send-to-t3-response-activity { margin: 0; min-width: 0; }
-.send-to-t3-stream-footer [data-t3-tool-icon],
-.send-to-t3-stream-footer .send-to-t3-inline-spinner { flex-shrink: 0; }
 .callout[data-callout="t3-progress"] > .callout-title {
   font-size: var(--h6-size);
   font-weight: var(--h6-weight, 600);
