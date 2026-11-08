@@ -81,6 +81,7 @@ import {clearVaultDiagnostics} from './disabled-diagnostics';
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from '../connection/cloud';
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from '../connection/native-account';
 import {pair,readDirect,commandId,environmentApi,endpoint,type PairedConnection,type PairedSession} from '../connection/direct';
+import {RouteAuthorizationCache,verifyOrchestrationRead} from '../connection/route-authorization';
 import {environmentAccess} from '../connection/environment-access';
 import {setIcon, App, FileSystemAdapter, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type SettingDefinition,type SettingDefinitionItem,type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, MarkdownRenderer,  requestUrl } from 'obsidian';
 import { Buffer } from 'buffer/';
@@ -201,7 +202,7 @@ export default class SendToT3 extends Plugin {
   private projectCreateModal?:ProjectCreateModal;
   private commandHosts=new Map<string,{host:ConnectCommandHost;rpc:Awaited<ReturnType<typeof connectT3Rpc>>;files:CommandFiles}>();
   private commandProjects=new Map<string,Project>();
-  private verifiedConnections=new Map<string,{work:Promise<void>;until:number}>();
+  private verifiedConnections=new RouteAuthorizationCache<Awaited<ReturnType<typeof environmentApi>>>();
   private commandSerial:Promise<void>=Promise.resolve();
   private noteEdits?:CheckedNoteEdits;
   private threadDisplays?:ThreadDisplays;
@@ -1181,6 +1182,12 @@ export default class SendToT3 extends Plugin {
       new ExistingThreadModal(this.app,threads,thread=>this.sendNote(file,thread.id,projectKey(project),false,overrideKey,resolve?.(),insertion),undefined,undefined,back).open();
     }catch(error){if(back)throw error;new Notice(`T3 Code: ${message(error)}`,10000);}
   }
+  private prepareImportAccess(){
+    const environments=[...new Set(this.settings.paired.map(connection=>connection.environmentId))].slice(0,4);
+    void forEachBounded(environments,2,async environmentId=>{
+      try{const access=await this.inlineThreadAccess(environmentId);await access.close?.();}catch{/* Selection reports a current route failure. */}
+    });
+  }
   openRunImport(file:TFile){
     if(this.stopped||this.busy)return;
     const insertion=this.noteSendInsertion(file);
@@ -1189,6 +1196,7 @@ export default class SendToT3 extends Plugin {
       const environmentId=this.connection(project).environmentId??await this.localInlineEnvironment(),access=await this.inlineThreadAccess(environmentId);
       try{return await operation(access,environmentId);}finally{await access.close?.();}
     };
+    this.prepareImportAccess();
     openRunImport(this.app,file.path,{
       projects:()=>this.projects(),projectLabel:project=>this.projectChoiceLabel(project),
       threads:(project,signal)=>read(project,async access=>this.availableModeThreads(file.path,project,await readImportThreads(access,project.id,signal))),
@@ -1238,7 +1246,7 @@ export default class SendToT3 extends Plugin {
       if(!selected?.turnId)throw Error('This response is no longer in the T3 run index.');
       // Register the exact root and complete answer once. The response feed
       // reuses this snapshot while retrieving the selected history separately.
-      snapshot=(await readImportRun(access,threadId,project.id,selected.turnId,{firstPageOnly:true})).snapshot;
+      snapshot=(await readImportRun(access,threadId,project.id,selected.turnId,{firstPageOnly:true,selected})).snapshot;
       const turn=snapshot.thread.turns?.[selected.turnId]??(snapshot.thread.latestTurn?.turnId===selected.turnId?snapshot.thread.latestTurn:undefined);
       if(typeof turn?.messageId==='string'?turn.messageId!==messageId:!snapshot.thread.messages.some(message=>message.id===messageId&&message.role==='user'&&message.turnId===selected.turnId))throw Error('The selected run no longer belongs to this source prompt.');
     }finally{await access.close?.();}
@@ -1629,18 +1637,15 @@ export default class SendToT3 extends Plugin {
   private async pairedThreadAccess(paired:PairedConnection,forceRefresh=false):Promise<ThreadAccess>{
     const environmentId=paired.environmentId;
     const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId,connectionId:paired.id};
-    let session=await this.sessionFor(paired.id,forceRefresh),api=await environmentApi(connection,session);
+    let session=await this.sessionFor(paired.id,forceRefresh);
     // Verify authorization before exposing a candidate to sends or writes.
     // A failed open can try another endpoint for the same machine; the caller
     // operation is never part of this fallback.
     const key=JSON.stringify([paired.url,environmentId,session?.token,session?.expiresAt,session?.dpopKeyId]);
-    let verified=this.verifiedConnections.get(key);
-    if(forceRefresh||!verified||verified.until<=Date.now()){
-      const work=this.routeStatus.request(paired.id,()=>api('/api/orchestration/shell')).then(()=>{});verified={work,until:Date.now()+30_000};this.verifiedConnections.set(key,verified);
-      while(this.verifiedConnections.size>16)this.verifiedConnections.delete(this.verifiedConnections.keys().next().value!);
-      void work.catch(()=>{if(this.verifiedConnections.get(key)?.work===work)this.verifiedConnections.delete(key);});
-    }
-    await verified.work;
+    let api=await this.verifiedConnections.open(key,async()=>{
+      const candidate=await environmentApi(connection,session);
+      await this.routeStatus.request(paired.id,()=>verifyOrchestrationRead(candidate));return candidate;
+    },forceRefresh,(session?.expiresAt??0)-5000);
     if(!Platform.isMobile&&localRoute(paired))this.eventLocalEnvironmentId=environmentId;
     let renewing:Promise<void>|undefined;
     const routed:ThreadAccess['api']=async(path,payload,options)=>this.routeStatus.request(paired.id,async()=>{
@@ -1657,7 +1662,7 @@ export default class SendToT3 extends Plugin {
           }
           return await api(path,payload,options);
         }
-      }catch(error){this.routeFailures.set(paired.id,message(error));throw error;}
+      }catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403))this.verifiedConnections.delete(key);this.routeFailures.set(paired.id,message(error));throw error;}
     });
     routed.trackConnection=connection=>this.routeStatus.track(paired.id,connection);
     return {origin:endpoint(paired.url),get expiresAt(){return session?.expiresAt;},api:routed};

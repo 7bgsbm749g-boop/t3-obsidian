@@ -35,50 +35,51 @@ const completeV2=(h:ReturnType<typeof fixture>,sequence=2,text='Final reply')=>{
  thread.latestTurn={turnId:'turn',state:'completed',messageId:'prompt',assistantMessageId:'answer',completedAt:'2026-10-06T03:02:00.000Z'};thread.turns={turn:thread.latestTurn};thread.session={status:'ready',activeTurnId:null};return value;
 };
 const finalItem=(text='Final reply')=>({id:'opaque-item',threadId:'thread',runId:'turn',messageId:'answer',type:'assistant_message',text,streaming:false,status:'completed',updatedAt:'2026-10-06T03:01:00.000Z'});
-const importedRun=()=>({snapshotSequence:8,nextOrdinal:null,thread:{id:'thread',projectId:'project',title:'Selected old run'},runs:[{id:'turn',ordinal:1,userMessageId:'prompt',status:'completed',requestedAt:'2026-10-06T03:00:00Z',completedAt:'2026-10-06T03:02:00Z'}],messages:[{id:'prompt',runId:'turn',role:'user',text:'Selected prompt',streaming:false,createdAt:'2026-10-06T03:00:00Z'},{id:'answer',runId:'turn',role:'assistant',text:'Final reply',streaming:false,createdAt:'2026-10-06T03:01:00Z'}],turnItems:[{...finalItem(),ordinal:2}]});
+const importedRun=()=>({thread:{id:'thread',projectId:'project',title:'Selected old run'},runs:[{id:'turn',ordinal:1,userMessageId:'prompt',status:'completed',requestedAt:'2026-10-06T03:00:00Z',completedAt:'2026-10-06T03:02:00Z'}],messages:[{id:'prompt',runId:'turn',role:'user',text:'Selected prompt',streaming:false,createdAt:'2026-10-06T03:00:00Z'},{id:'answer',runId:'turn',role:'assistant',text:'Final reply',streaming:false,createdAt:'2026-10-06T03:01:00Z'}],turnItems:[{...finalItem(),ordinal:2}]});
+const stockImported=(hasMoreHistory=false)=>({snapshotSequence:8,hasMoreHistory,projection:importedRun()});
 
 test('a completed import reads and verifies only the selected canonical run without a later-thread snapshot',async()=>{
- const paths:string[]=[];const h=fixture(false,async path=>{paths.push(path);if(path.includes('/import-runs/turn'))return importedRun();assert.equal(path,'/api/orchestration/turn-item');return finalItem();});
+ const paths:string[]=[];const h=fixture(false,async path=>{paths.push(path);if(path.startsWith('/api/orchestration/threads/thread?'))return stockImported();assert.equal(path,'/api/orchestration/turn-item');return finalItem();});
  h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed',requestedAt:'2026-10-06T03:00:00Z'};
- h.preview.tick(true);await settle();assert.equal(h.streams.length,0);assert.ok(paths[0].endsWith('/import-runs/turn?view=answer'));assert.equal(h.updates.at(-1)?.completionVerified,true);assert.match(h.updates.at(-1)!.body,/Final reply/);assert.equal(h.updates.at(-1)!.turnId,'turn');h.preview.dispose();
+ h.preview.tick(true);await settle();assert.equal(h.streams.length,0);assert.ok(paths[0].includes('importRuns=true'));assert.equal(h.updates.at(-1)?.completionVerified,true);assert.match(h.updates.at(-1)!.body,/Final reply/);assert.equal(h.updates.at(-1)!.turnId,'turn');h.preview.dispose();
 });
 test('a completed import displays its complete answer while tool history loads and verifies only after that history arrives',async()=>{
  let release!:(value:unknown)=>void;let verifications=0;const h=fixture(false,async path=>{
-  if(path.includes('view=answer'))return {...importedRun(),hasMoreHistory:true};
-  if(path.includes('/import-runs/turn'))return new Promise(resolve=>{release=resolve;});
+  if(path.includes('importRuns=true'))return stockImported(true);
+  if(path.includes('importRunId=turn'))return new Promise(resolve=>{release=resolve;});
   assert.equal(path,'/api/orchestration/turn-item');verifications++;return finalItem();
  });h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed'};
  h.preview.tick(true);await settle();assert.match(h.updates.at(-1)!.body,/Final reply/);assert.equal(h.updates.at(-1)!.completionVerified,false);assert.equal(verifications,0);
- release(importedRun());await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(verifications,1);assert.equal(h.streams.length,0);h.preview.dispose();
+ release(stockImported());await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(verifications,1);assert.equal(h.streams.length,0);h.preview.dispose();
 });
 test('the registration snapshot displays an exact selected answer without downloading its conversation again',async()=>{
  let release!:(value:unknown)=>void;const paths:string[]=[];const h=fixture(false,async path=>{
-  paths.push(path);if(path.includes('/import-runs/turn'))return new Promise(resolve=>{release=resolve;});
+  paths.push(path);if(path.includes('importRunId=turn'))return new Promise(resolve=>{release=resolve;});
   assert.equal(path,'/api/orchestration/turn-item');return finalItem();
  });h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed'};
  h.preview.seedImport(readThreadSnapshot(normalizeV2Snapshot({snapshotSequence:8,hasMoreHistory:true,projection:importedRun()})));
- h.preview.tick(true);await settle();assert.match(h.updates.at(-1)!.body,/Final reply/);assert.equal(h.updates.at(-1)!.completionVerified,false);assert.equal(paths.length,1);assert.ok(!paths[0].includes('view=answer'));
- release(importedRun());await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(h.streams.length,0);h.preview.dispose();
+ h.preview.tick(true);await settle();assert.match(h.updates.at(-1)!.body,/Final reply/);assert.equal(h.updates.at(-1)!.completionVerified,false);assert.equal(paths.length,1);assert.ok(!paths[0].includes('importRuns=true'));
+ release(stockImported());await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(h.streams.length,0);h.preview.dispose();
 });
 test('a registration snapshot from another thread cannot replace the selected import',async()=>{
- const paths:string[]=[];const h=fixture(false,async path=>{paths.push(path);return path.includes('/import-runs/turn')?importedRun():finalItem();});
+ const paths:string[]=[];const h=fixture(false,async path=>{paths.push(path);return path.startsWith('/api/orchestration/threads/thread?')?stockImported():finalItem();});
  h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed'};
  const snapshot=readThreadSnapshot(normalizeV2Snapshot({snapshotSequence:8,projection:importedRun()}));snapshot.thread.id='other';
- h.preview.seedImport(snapshot);h.preview.tick(true);await settle();assert.ok(paths[0].includes('view=answer'));assert.match(h.updates.at(-1)!.body,/Final reply/);h.preview.dispose();
+ h.preview.seedImport(snapshot);h.preview.tick(true);await settle();assert.ok(paths[0].includes('importRuns=true'));assert.match(h.updates.at(-1)!.body,/Final reply/);h.preview.dispose();
 });
 test('a failed selected history read retries the selected run without adopting the general thread',async()=>{
  let failures=1;const paths:string[]=[];const h=fixture(false,async path=>{
-  paths.push(path);if(path.includes('view=answer'))return {...importedRun(),hasMoreHistory:true};
-  if(path.includes('/import-runs/turn')){if(failures-->0)throw Error('Temporary connection loss');return importedRun();}
+  paths.push(path);if(path.includes('importRuns=true'))return stockImported(true);
+  if(path.includes('importRunId=turn')){if(failures-->0)throw Error('Temporary connection loss');return stockImported();}
   assert.equal(path,'/api/orchestration/turn-item');return finalItem();
  });h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed'};
  h.preview.tick(true);await settle();assert.equal(h.updates.at(-1)!.completionVerified,false);
  h.preview.tick(true);await settle();assert.equal(h.streams.length,0);assert.equal(paths.length,2);
- h.clock.advance(1000);h.preview.tick(true);await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(h.streams.length,0);assert.equal(paths.filter(path=>path.includes('view=answer')).length,2);h.preview.dispose();
+ h.clock.advance(1000);h.preview.tick(true);await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(h.streams.length,0);assert.equal(paths.filter(path=>path.includes('importRuns=true')).length,2);h.preview.dispose();
 });
 test('stopping a completed import ignores a selected-run read that resolves later',async()=>{
  let release!:(value:unknown)=>void;const h=fixture(false,async()=>new Promise(resolve=>{release=resolve;}));h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed'};
- h.preview.tick(true);await settle();h.preview.dispose();release(importedRun());await settle();assert.deepEqual(h.updates,[]);assert.equal(h.streams.length,0);
+ h.preview.tick(true);await settle();h.preview.dispose();release(stockImported());await settle();assert.deepEqual(h.updates,[]);assert.equal(h.streams.length,0);
 });
 const settle=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
 

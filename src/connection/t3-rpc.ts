@@ -1,11 +1,9 @@
 import {isRecord,parseJson,toError,records} from '../shared/values';
 import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
-import {T3_RESPONSE_MAX_BYTES,T3ResponseTooLargeError} from './t3-response-limits';
-import {Buffer} from 'buffer/';
 import {T3_PROTOCOL_VERSION} from './orchestration-v2';
 import type {RouteConnection} from './route-status';
 
-export type T3Api=((path:string,payload?:unknown,options?:{signal?:AbortSignal})=>Promise<unknown>)&{trackConnection?:(connection:RouteConnection)=>void};
+export type T3Api=((path:string,payload?:unknown,options?:{signal?:AbortSignal;compactImport?:boolean})=>Promise<unknown>)&{trackConnection?:(connection:RouteConnection)=>void};
 export interface T3RpcConnection extends RouteConnection {call(tag:string,payload:unknown):Promise<unknown>;close():void}
 export type SocketFactory=(url:string)=>WebSocket;
 export interface RpcClock {now():number;timer(callback:()=>void,milliseconds:number):ReturnType<typeof setTimeout>;clear(timer:ReturnType<typeof setTimeout>):void}
@@ -43,7 +41,6 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
   socket.onmessage=event=>{
     try{
       if(typeof event.data!=='string')throw Error('T3 returned an incompatible response.');
-      if(Buffer.byteLength(event.data)>T3_RESPONSE_MAX_BYTES)throw new T3ResponseTooLargeError();
       const decoded=parseJson(event.data);const frames:unknown[]=Array.isArray(decoded)?decoded:[decoded];
       for(const frame of frames){
         if(closed)return;
@@ -56,7 +53,7 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
         if(isRecord(frame.exit)&&frame.exit._tag==='Success')task.resolve(frame.exit.value);
         else {const causes=isRecord(frame.exit)?frame.exit.cause:undefined;const cause=records(causes).find(x=>x._tag==='Fail')?.error,failure=isRecord(cause)?cause:undefined;const required=failure?.requiredPermission;const permission=typeof required==='string'&&['filesystem:read','filesystem:write','orchestration:read','orchestration:operate','settings:write','providers:manage'].includes(required)?required:undefined;task.reject(new T3RpcError(typeof failure?._tag==='string'?failure._tag:'RpcError',permission,task.method));}
       }
-    }catch(error){fail(error instanceof T3ResponseTooLargeError?error:Error('T3 returned an incompatible response.'));}
+    }catch{fail(Error('T3 returned an incompatible response.'));}
   };
   try{await ready;}catch(error){fail(error instanceof Error?error:Error(String(error)));throw toError(error);}
   const rpc=async(tag:string,payload:unknown):Promise<unknown>=>{

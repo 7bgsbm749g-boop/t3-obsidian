@@ -4,7 +4,6 @@ import {parseJson,isRecord} from '../shared/values';
 import {readThreadSnapshot,type ThreadSnapshot} from '../connection/wire-types';
 import {cancelTimeout as clearTimeout,scheduleTimeout as setTimeout} from '../shared/clock';
 import {logEvent,logFailure} from '../app/diagnostics';
-import {Buffer} from 'buffer/';
 import {contentHash} from '../responses/completion';
 import {applyThreadItem,turnForMessage,type InlineThreadState} from './inline-thread';
 import {T3_PROTOCOL_VERSION,normalizeV2StreamItem,normalizeV2Snapshot,normalizeV2TitleItem} from '../connection/orchestration-v2';
@@ -51,7 +50,7 @@ export async function readInlineEvents(access:ThreadAccess,threadId:string,after
     signal.addEventListener('abort',abort,{once:true});
     socket.onopen=()=>{if(signal.aborted){abort();return;}access.api.trackConnection?.({get closed(){return finished;}});socket.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,afterSequence,requestCompletionMarker:true,acceptBoundedSnapshot:true,acceptCompactTurnItems:true},headers:[]}));};
     socket.onmessage=message=>{try{
-      if(typeof message.data!=='string'||Buffer.byteLength(message.data)>16_000_000)throw Error('T3 stream frame is too large.');
+      if(typeof message.data!=='string')throw Error('T3 returned an incompatible stream frame.');
       const decoded=parseJson(message.data);
       for(const frame of Array.isArray(decoded)?decoded:[decoded]){
         if(!isRecord(frame))throw Error('Invalid T3 stream frame.');
@@ -147,7 +146,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       };
       openedSocket.onmessage=message=>{
         try{
-          if(typeof message.data!=='string'||Buffer.byteLength(message.data)>16_000_000)throw Error('T3 stream frame is too large.');
+          if(typeof message.data!=='string')throw Error('T3 returned an incompatible stream frame.');
           const decoded=parseJson(message.data),frames=Array.isArray(decoded)?decoded:[decoded];
           for(const frame of frames){
             if(!isRecord(frame))throw Error('Invalid T3 stream frame.');

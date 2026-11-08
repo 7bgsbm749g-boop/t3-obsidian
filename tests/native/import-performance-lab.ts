@@ -8,7 +8,7 @@ import {installResponsePresentation} from '../../src/responses/response-presenta
 import {updateResponseBindingData,responseBindingRequests} from '../../src/responses/response-binding-data';
 import {environmentApi,type PairedSession} from '../../src/connection/direct';
 import {openRunImport} from '../../src/conversations/run-import-ui';
-import {readInlineSnapshot} from '../../src/conversations/thread-stream';
+import {readInlineSnapshot,type ThreadAccess} from '../../src/conversations/thread-stream';
 import {applyThreadItem,inlineTurnMessages,quoteResponse} from '../../src/conversations/inline-thread';
 import {availableImportRun,importRuns,importRunPreview} from '../../src/conversations/run-import';
 import {projectThreads} from '../../src/conversations/thread-target';
@@ -28,6 +28,7 @@ export default class ImportPerformanceLab extends Plugin {
  private root='';private sources:Source[]=[];private projects:Project[]=[];
  private start=0;private action=0;private measured=new WeakSet<Element>();private source?:Source;
  private optimized=false;
+ private productionAccess=false;
  private htmlViews?:HtmlResultViews;
  private accesses=new Map<string,Awaited<ReturnType<typeof environmentApi>>>();
  private catalogs=new Map<string,Project[]>();
@@ -43,15 +44,16 @@ export default class ImportPerformanceLab extends Plugin {
   for(const entryType of ['longtask','resource']){
    const observer=new PerformanceObserver(list=>{for(const entry of list.getEntries()){
     if(entryType==='resource'){
-     const url=new URL(entry.name);if(!url.pathname.includes('/orchestration/'))continue;
+     const url=new URL(entry.name);if(!url.pathname.includes('/orchestration/')&&url.pathname!=='/api/auth/session')continue;
      this.write({kind:'resource',route:url.pathname,startTime:entry.startTime,elapsedMs:entry.duration});
     }else this.write({kind:'longtask',startTime:entry.startTime,elapsedMs:entry.duration});
    }});observer.observe({type:entryType,buffered:true});this.register(()=>observer.disconnect());
   }
   this.sources=config.sources;this.optimized=config.optimized===true;
+  this.productionAccess=config.productionAccess===true;
   // These names are generated only by this guarded private lab. Retain their
   // ownership across reloads so the cleanup command removes every trial.
-  for(const file of this.app.vault.getMarkdownFiles())if(/^(?:Reference|Virtual|Import-(?:vps-0|vps-1|vps-largest-run|laptop-largest)-\d+)\.md$/.test(file.path))this.notes.add(file.path);
+  for(const file of this.app.vault.getMarkdownFiles())if(/^(?:Reference|Virtual|Import-(?:vps-0|vps-1|vps-largest-run|laptop-largest(?:-run)?)-\d+)\.md$/.test(file.path))this.notes.add(file.path);
   const native=nativeResponses(this.app);this.register(()=>native.dispose());
   this.registerEditorExtension(hiddenInlineMarkerExtension());
   const {EditorState}=require('@codemirror/state');this.registerEditorExtension(EditorState.transactionFilter.of((tr:any)=>native.filter(tr)));
@@ -72,7 +74,7 @@ export default class ImportPerformanceLab extends Plugin {
   this.register(()=>{window.removeEventListener('pointerdown',capture,true);window.removeEventListener('keydown',capture,true);document.removeEventListener('pointerover',hover,true);});
   const observer=new MutationObserver(()=>this.measure());observer.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','aria-label','data-t3-html-state','data-t3-html-painted']});this.register(()=>observer.disconnect());
   for(const [index,source] of this.sources.entries())this.addCommand({id:'source-'+index,name:'Measure import '+index,callback:()=>void this.show(source)});
-  this.addCommand({id:'cleanup',name:'Delete owned import test notes',callback:()=>void (async()=>{this.local?.dispose();for(const file of this.app.vault.getMarkdownFiles())if(/^(?:Reference|Virtual|Import-(?:vps-0|vps-1|vps-largest-run|laptop-largest)-\d+)\.md$/.test(file.path))this.notes.add(file.path);for(const leaf of this.app.workspace.getLeavesOfType('markdown'))if(this.notes.has((leaf.view as MarkdownView).file?.path??''))leaf.detach();for(const path of this.notes){const file=this.app.vault.getFileByPath(path);if(file)await this.app.vault.delete(file);}this.write({kind:'cleanup',deletedNotes:[...this.notes],remainingOwnedNotes:[...this.notes].filter(path=>this.app.vault.getFileByPath(path))});})()});
+  this.addCommand({id:'cleanup',name:'Delete owned import test notes',callback:()=>void (async()=>{this.local?.dispose();for(const file of this.app.vault.getMarkdownFiles())if(/^(?:Reference|Virtual|Import-(?:vps-0|vps-1|vps-largest-run|laptop-largest(?:-run)?)-\d+)\.md$/.test(file.path))this.notes.add(file.path);for(const leaf of this.app.workspace.getLeavesOfType('markdown'))if(this.notes.has((leaf.view as MarkdownView).file?.path??''))leaf.detach();for(const path of this.notes){const file=this.app.vault.getFileByPath(path);if(file)await this.app.vault.delete(file);}this.write({kind:'cleanup',deletedNotes:[...this.notes],remainingOwnedNotes:[...this.notes].filter(path=>this.app.vault.getFileByPath(path))});})()});
   this.app.workspace.onLayoutReady(()=>void (async()=>{
    for(const source of this.sources){const session=source.session;if(this.accesses.has(session.environmentId))continue;const api=await environmentApi({transport:'direct',host:'direct',executable:'',url:session.url,environmentId:session.environmentId},session);this.accesses.set(session.environmentId,api);this.catalogs.set(session.environmentId,readWireProjects(await api('/api/orchestration/shell')));}
    this.write({kind:'setup-ready',environments:this.accesses.size});
@@ -107,25 +109,37 @@ export default class ImportPerformanceLab extends Plugin {
   try{
    const session=source.session,connection={transport:'direct' as const,host:'direct',executable:'',url:session.url,environmentId:session.environmentId};
    const api=this.accesses.get(session.environmentId);if(!api)throw Error('Wait for the isolated lab setup.');
+   // Include the real route selection, session lookup and authorization cache.
+   // This instance owns only the private fixture's read-only paired credential.
+   let routing:any;
+   if(this.productionAccess){
+    routing=new SendToT3(this.app,this.manifest);
+    const paired={id:'isolated-import-route',name:'Isolated import source',url:session.url,environmentId:session.environmentId,routeKind:session.url.startsWith('https:')?'https':'local'};
+    routing.settings={paired:[paired],directProjects:[],folderLinks:[],vaultId:'isolated-import-performance',responseBindings:{},noteThreads:[]};
+    routing.pairedSessions={[paired.id]:session};routing.routeOrder=[paired.id];
+   }
+   const accessFor=async():Promise<ThreadAccess>=>routing?await routing.inlineThreadAccess(session.environmentId):{origin:session.url,api};
+   const read=async<T>(work:(access:ThreadAccess)=>Promise<T>)=>{const access=await accessFor();try{return await work(access);}finally{await access.close?.();}};
    this.projects=this.catalogs.get(session.environmentId)!;
    let notePath:string;do{notePath=`Import-${source.label}-${++this.trial}.md`;}while(this.app.vault.getFileByPath(notePath));this.notes.add(notePath);const file=await this.app.vault.create(notePath,'# Imported run\n\nOrdinary text before.\n\n');const leaf=this.app.workspace.getLeaf(false);await leaf.openFile(file);await leaf.setViewState({type:'markdown',state:{file:notePath,mode:'source',source:false}});
    const timed=async<T>(step:string,work:()=>Promise<T>)=>{const start=performance.now();try{const result=await work();this.write({kind:'read',source:source.label,step,startTime:start,elapsedMs:performance.now()-start});return result;}catch(error){this.write({kind:'failure',source:source.label,step,startTime:start,elapsedMs:performance.now()-start,error:String(error)});throw error;}};
+   routing?.prepareImportAccess();
    this.start=performance.now();this.action++;
    let catalog:ReturnType<typeof importRuns>|undefined;
    openRunImport(this.app,notePath,{
     projects:()=>this.projects,projectLabel:project=>project.title+(this.projects.filter(other=>other.title===project.title).length>1?' · '+project.id.slice(0,8):''),
-    threads:(project,signal)=>timed('threads',async()=>this.optimized?readImportThreads({origin:session.url,api},project.id,signal):projectThreads({threads:readThreadList(await api('/api/orchestration/shell'))},project.id)),
+    threads:(project,signal)=>timed('threads',()=>read(async access=>this.optimized?readImportThreads(access,project.id,signal):projectThreads({threads:readThreadList(await access.api('/api/orchestration/shell'))},project.id))),
     runs:(_project,thread,signal)=>timed('runs',async()=>{
      const record=(runs:ReturnType<typeof importRuns>)=>{catalog=runs;this.write({kind:'run-catalog',source:source.label,threadId:thread.id,projectId:thread.projectId,runs:runs.map(run=>({runId:run.turnId,messageId:run.messageId,ordinal:run.turn?.ordinal}))});return runs;};
-     if(this.optimized)return record(await readImportRuns({origin:session.url,api},thread.id,thread.projectId,signal));
-     const snapshot=await readInlineSnapshot({origin:session.url,api},thread.id,thread.projectId,undefined,true,true);
+     if(this.optimized)return record(await read(access=>readImportRuns(access,thread.id,thread.projectId,signal)));
+     const snapshot=await read(access=>readInlineSnapshot(access,thread.id,thread.projectId,undefined,true,true));
      const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
      return record(importRuns(state).filter(availableImportRun).map(run=>({...run,preview:importRunPreview(state,run,session.environmentId,thread.id)})));
     }),
     preview:async(project,thread,run,el,child:Component,signal)=>{
      this.write({kind:'preview-source',source:source.label,threadId:thread.id,runId:run.turnId,messageId:run.messageId});
      if(this.optimized&&run.turnId&&!run.preview){
-      run.preview=await timed('preview-read',()=>readImportPreview({origin:session.url,api},thread.id,project.id,run,session.environmentId,signal));
+      run.preview=await timed('preview-read',()=>read(access=>readImportPreview(access,thread.id,project.id,run,session.environmentId,signal)));
      }
      await timed('preview-render',()=>renderRunImportPreview(this.app,run,el,child,signal,this.htmlViews));
     },
@@ -133,7 +147,7 @@ export default class ImportPerformanceLab extends Plugin {
      if(follow)throw Error('This lab does not dispatch future-run subscriptions.');
      this.local?.dispose();const native=nativeResponses(this.app),subject:any=new SendToT3(this.app,this.manifest);
      subject.settings={vaultId:'isolated-import-performance',inlineStreaming:{enabled:true},responseBindings:{},noteThreads:[]};
-     subject.connection=()=>connection;subject.inlineThreadAccess=async()=>({origin:session.url,api});
+     subject.connection=()=>connection;subject.inlineThreadAccess=accessFor;
      subject.localResponseTarget=async()=>({environmentId:session.environmentId,workspaceRoot:(this.app.vault.adapter as any).getFullPath(''),directory:'.obsidian/t3-code/inline/v1'});
      subject.save=async()=>this.saveData(subject.settings);
      const importing={start:this.start,action:this.action,source:source.label,view:leaf.view as MarkdownView,expected:undefined as string|undefined,bindingId:undefined as string|undefined};this.importing=importing;
@@ -143,7 +157,7 @@ export default class ImportPerformanceLab extends Plugin {
       ...deviceNoteIO(this.app),localFinalNotes:deviceFinalNoteIO(this.app,()=>true),localBindings:()=>responseBindingRequests(subject.settings.responseBindings),saveLocalBinding:async request=>{subject.settings.responseBindings=updateResponseBindingData(subject.settings.responseBindings,request,'isolated');},
       openedNotes:()=>this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file).map(view=>({path:view.file!.path,document:native.view(view)?.saved()??view.getViewData()})),
       syncReady:()=>true,receiveCoordinated:record=>{importing.bindingId=record.request.id;native.receive(record);},receiveDirect:update=>native.stream(update),localCompleted:(id,path)=>{native.localCompleted(id,path);void this.app.vault.read(this.app.vault.getFileByPath(path)!).then(document=>this.write({kind:'import-saved',source:source.label,elapsedMs:performance.now()-importing.start,ordinaryTextPreserved:document.includes('Ordinary text before.'),completeAnswerPreserved:!!importing.expected&&(document.includes(importing.expected)||document.includes(quoteResponse(importing.expected))),notePath:path}));},
-      completionFailed:error=>this.write({kind:'save-failed',error:String(error)}),access:async()=>({origin:session.url,api}),
+      completionFailed:error=>this.write({kind:'save-failed',error:String(error)}),access:accessFor,
      });this.local=local;subject.deviceInline=local;
      const result=await subject.importRun(notePath,project,thread.id,run.messageId,false,undefined,catalog);this.write({kind:'import-result',source:source.label,result,elapsedMs:performance.now()-importing.start});return result;
     },

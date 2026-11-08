@@ -36,15 +36,15 @@ async function fixture(){
 test('picker registration reuses its catalog and reads the complete selected answer once',async()=>{
  const h=await fixture(),paths:string[]=[];let closes=0;
  const canonical={snapshotSequence:5,nextOrdinal:null,hasMoreHistory:true,thread:{id:h.source.threadId,projectId:h.source.projectId,title:'Selected'},runs:[{id:'selected-run',ordinal:1,userMessageId:h.messageId,status:'completed',requestedAt:'2026-10-20T00:00:00Z'}],messages:[{id:h.messageId,role:'user',runId:'selected-run',text:'Fresh canonical prompt',streaming:false,createdAt:'2026-10-20T00:00:00Z'},{id:'answer',role:'assistant',runId:'selected-run',text:'Complete selected answer',streaming:false,createdAt:'2026-10-20T00:01:00Z'}],turnItems:[]};
- h.plugin.inlineThreadAccess=async()=>({origin:'https://synthetic',api:async(path:string)=>{paths.push(path);return canonical;},close:()=>{closes++;}});
+ h.plugin.inlineThreadAccess=async()=>({origin:'https://synthetic',api:async(path:string)=>{paths.push(path);return {snapshotSequence:canonical.snapshotSequence,hasMoreHistory:false,projection:canonical};},close:()=>{closes++;}});
  const catalog=[{messageId:h.messageId,turnId:'selected-run',turn:{turnId:'selected-run',messageId:h.messageId,state:'completed'},status:'Completed',prompt:'Cached prompt',createdAt:'2026-10-20T00:00:00Z'}];
  const history=await h.readHistory({id:h.source.projectId},h.source.threadId,h.messageId,catalog);
- assert.equal(paths.length,1);assert.ok(paths[0].endsWith('/import-runs/selected-run?view=answer'));assert.equal(closes,1);assert.equal(history.run.turnId,'selected-run');assert.equal(history.state.messages.find((message:any)=>message.id===h.messageId).text,'Fresh canonical prompt');assert.equal(history.state.messages.find((message:any)=>message.id==='answer').text,'Complete selected answer');
+ assert.equal(paths.length,1);assert.ok(paths[0].includes('importRuns=true'));assert.equal(closes,1);assert.equal(history.run.turnId,'selected-run');assert.equal(history.state.messages.find((message:any)=>message.id===h.messageId).text,'Fresh canonical prompt');assert.equal(history.state.messages.find((message:any)=>message.id==='answer').text,'Complete selected answer');
 });
 
 test('a stale picker root cannot import another canonical source prompt',async()=>{
  const h=await fixture();let closes=0;
- h.plugin.inlineThreadAccess=async()=>({origin:'https://synthetic',api:async()=>({snapshotSequence:5,nextOrdinal:null,hasMoreHistory:true,thread:{id:h.source.threadId,projectId:h.source.projectId,title:'Selected'},runs:[{id:'selected-run',ordinal:1,userMessageId:'different',status:'completed',requestedAt:'2026-10-20T00:00:00Z'}],messages:[{id:'different',role:'user',runId:'selected-run',text:'Another root',streaming:false}],turnItems:[]}),close:()=>{closes++;}});
+ h.plugin.inlineThreadAccess=async()=>({origin:'https://synthetic',api:async()=>({snapshotSequence:5,hasMoreHistory:false,projection:{thread:{id:h.source.threadId,projectId:h.source.projectId,title:'Selected'},runs:[{id:'selected-run',ordinal:1,userMessageId:'different',status:'completed',requestedAt:'2026-10-20T00:00:00Z'}],messages:[{id:'different',role:'user',runId:'selected-run',text:'Another root',streaming:false}],turnItems:[]}}),close:()=>{closes++;}});
  const catalog=[{messageId:h.messageId,turnId:'selected-run',turn:{turnId:'selected-run',messageId:h.messageId,state:'completed'},status:'Completed',prompt:'Cached prompt',createdAt:'2026-10-20T00:00:00Z'}];
  await assert.rejects(h.readHistory({id:h.source.projectId},h.source.threadId,h.messageId,catalog),/no longer belongs/);assert.equal(closes,1);assert.equal(h.registered.length,0);
 });

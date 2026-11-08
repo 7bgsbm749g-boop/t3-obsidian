@@ -1,7 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {connectT3Rpc,type RpcClock,type T3Api} from '../src/connection/t3-rpc';
-import {T3ResponseTooLargeError} from '../src/connection/t3-response-limits';
 
 const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 function fixture(){
@@ -25,9 +24,9 @@ test('elapsed time does not fail a silent open socket or its pending requests',a
  h.reply('1','late result');assert.equal(await pending,'late result');rpc.close();
 });
 
-test('unary final replies above the former limit work and oversized errors retain their size identity',async()=>{
+test('unary final replies above the former 4 MB and 8 MB limits remain readable',async()=>{
  const h=fixture(),rpc=await h.open();const accepted=rpc.call('orchestration.getTurnItem',{threadId:'thread',itemId:'item'});h.reply('1',{text:'x'.repeat(4_100_000)});const value=await accepted;assert.ok(value&&typeof value==='object'&&'text' in value&&typeof value.text==='string');assert.equal(value.text.length,4_100_000);
- const blocked=rpc.call('orchestration.getTurnItem',{threadId:'thread',itemId:'large'}),rejected=assert.rejects(blocked,T3ResponseTooLargeError);h.reply('2',{text:'x'.repeat(8_000_001)});await rejected;assert.equal(rpc.closed,true);assert.equal(h.timers.size,0);
+ const large=rpc.call('orchestration.getTurnItem',{threadId:'thread',itemId:'large'});h.reply('2',{text:'x'.repeat(8_000_001)});assert.equal((await large as {text:string}).text.length,8_000_001);assert.equal(rpc.closed,false);assert.equal(h.timers.size,0);rpc.close();
 });
 
 test('a slow request survives while independent requests finish and a real close fails pending work',async()=>{

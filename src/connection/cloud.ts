@@ -1,6 +1,5 @@
 import {browserFetch} from './browser-fetch';
 import {isRecord,parseJson} from '../shared/values';
-import {T3_RESPONSE_MAX_BYTES} from './t3-response-limits';
 import {Buffer} from 'buffer/';
 import {endpoint,descriptor,type PairedSession,type Fetcher} from './direct';
 import {proofKey,proof,thumbprint} from './dpop';
@@ -15,8 +14,7 @@ async function request(url:string,options:RequestInit={},fetcher:Fetcher=browser
  const ctrl=new AbortController();
  try{
   const r=await fetcher(url,{...options,credentials:'omit',redirect:'error',cache:'no-store',signal:ctrl.signal});
-  if(Number(r.headers.get('content-length')||0)>T3_RESPONSE_MAX_BYTES)throw new CloudError('response_too_large');
-  const text=await r.text();if(Buffer.byteLength(text)>T3_RESPONSE_MAX_BYTES)throw new CloudError('response_too_large');
+  const text=await r.text();
   let body:Record<string,unknown>;try{const parsed=parseJson(text);if(!isRecord(parsed))throw Error('Expected an object.');body=parsed;}catch{throw new CloudError('invalid_response',r.status);}
   if(!r.ok){const code=typeof body.error==='string'&&/^[a-z_]{1,60}$/.test(body.error)?body.error:'http_'+r.status;throw new CloudError(code,r.status);}
   return body;
