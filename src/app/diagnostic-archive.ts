@@ -42,7 +42,7 @@ export class DiagnosticArchive {
         const events=old?.events??[],exists=events.some(item=>item.sessionId===event.sessionId&&item.sequence===event.sequence);
         if(exists){this.counts=counts??{events:0,pages:0};return;}
         events.push(event);events.sort((a,b)=>a.sequence-b.sequence);
-        const revision=Math.max(old?.revision??0,event.sequence),value:Page={path:suffix,events,revision};
+        const revision=(old?.revision??0)+1,value:Page={path:suffix,events,revision};
         store.put(value,page);store.put({page,revision} satisfies Pending,this.prefix+'pending:'+suffix);
         this.counts={events:(counts?.events??0)+1,pages:(counts?.pages??0)+Number(!old)};store.put(this.counts,this.prefix+'counts');
       };
@@ -75,13 +75,35 @@ export class DiagnosticArchive {
    * outages leave every page on disk. Retry overwrites the same page path. */
   sync(files:CommandFiles,target:DiagnosticLogTarget){
     if(this.stopped||this.uploading||this.now()-this.uploadAt<UPLOAD_INTERVAL_MS)return this.uploading??Promise.resolve();
-    if(this.target&&(this.target.environmentId!==target.environmentId||this.target.workspaceRoot!==target.workspaceRoot))return Promise.resolve();
     this.target=target;this.uploadAt=this.now();
     const work=this.upload(files,target).catch(error=>{this.remoteError=this.error(error);throw error;}).finally(()=>{if(this.uploading===work)this.uploading=undefined;});
     this.uploading=work;void work.catch(()=>{});return work;
   }
+  /** A changed destination gets retained pages incrementally, not a whole-
+   * history read or a permanent replay on every normal plugin reload. */
+  private async prepareTarget(target:DiagnosticLogTarget){
+    const db=await this.db(),key=JSON.stringify(target),prefix=this.prefix+'page:';
+    await new Promise<void>((resolve,reject)=>{
+      const tx=db.transaction('devices','readwrite'),store=tx.objectStore('devices'),read=store.get(this.prefix+'target');
+      read.onsuccess=()=>{
+        const previous=read.result as {key:string;done:boolean;after?:IDBValidKey}|undefined;
+        if(previous?.key===key&&previous.done)return;
+        const state=previous?.key===key?previous:{key,done:false,after:undefined as IDBValidKey|undefined};
+        let count=0;const cursor=store.openCursor(IDBKeyRange.bound(state.after??prefix,prefix+'\uffff',state.after!==undefined));
+        cursor.onsuccess=()=>{
+          const item=cursor.result;
+          if(!item||count>=UPLOAD_PAGES){state.done=!item;store.put(state,this.prefix+'target');return;}
+          if(typeof item.key!=='string'){tx.abort();return;}
+          const page=item.value as Page;
+          store.put({page:item.key,revision:page.revision} satisfies Pending,this.prefix+'pending:'+page.path);
+          state.after=item.key;count++;item.continue();
+        };
+      };
+      tx.oncomplete=()=>resolve();tx.onabort=tx.onerror=()=>reject(Error('Cannot resume retained diagnostics for this T3 machine.'));
+    });
+  }
   private async upload(files:CommandFiles,target:DiagnosticLogTarget){
-    await this.settle();const pages=await this.pending();
+    await this.settle();await this.prepareTarget(target);const pages=await this.pending();
     for(const item of pages){
       if(this.stopped)return;
       await files.write(target.directory+'/'+item.page.path,item.page.events.map(event=>JSON.stringify(event)).join('\n')+'\n');
