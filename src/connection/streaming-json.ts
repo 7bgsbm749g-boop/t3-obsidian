@@ -6,6 +6,8 @@ interface Frame {kind:'object'|'array';path:Path;skip:boolean;state:'key'|'colon
 export class StreamingJson {
  private frames:Frame[]=[];private parts:string[]=[];private root=false;
  private string?:{key:boolean;keep:boolean;parts:string[]};
+ // eslint-disable-next-line no-control-regex -- JSON forbids these raw characters, including in discarded fields.
+ private special=/["\\\x00-\x1f]/g;
  private escape=false;private unicode=0;
  private primitive?:{keep:boolean;parts:string[]};
  private characters=0;
@@ -17,7 +19,7 @@ export class StreamingJson {
   const frame=this.frames.at(-1);let path:Path=[],skip=false;
   if(frame){
    if(frame.state!=='value')this.fail();
-   path=[...frame.path,frame.kind==='object'?frame.key!:frame.index];
+   path=frame.skip?frame.path:[...frame.path,frame.kind==='object'?frame.key!:frame.index];
    skip=frame.skip||this.omit(path);
    if(!skip){if(frame.count++)this.emit(',');if(frame.kind==='object')this.emit(JSON.stringify(frame.key)+':');}
    frame.state='after';
@@ -35,6 +37,7 @@ export class StreamingJson {
    if(string){
     const start=at;
     while(at<text.length){
+     if(!this.unicode&&!this.escape){this.special.lastIndex=at;const match=this.special.exec(text);if(!match){at=text.length;break;}at=match.index;}
      const char=text[at++],code=char.charCodeAt(0);
      if(this.unicode){if(!/[\da-f]/i.test(char))this.fail();this.unicode--;continue;}
      if(this.escape){this.escape=false;if(char==='u')this.unicode=4;else if(!'"\\/bfnrt'.includes(char))this.fail();continue;}
@@ -42,12 +45,12 @@ export class StreamingJson {
      if(char==='\\'){this.escape=true;continue;}
      if(char==='"'){
       const span=text.slice(start,at);
-      if(string.key){string.parts.push(span);const frame=this.frames.at(-1)!;try{const key:unknown=JSON.parse(string.parts.join(''));if(typeof key!=='string')this.fail();frame.key=key;}catch{this.fail();}frame.state='colon';}
+      if(string.key){const frame=this.frames.at(-1)!;if(string.keep){string.parts.push(span);try{const key:unknown=JSON.parse(string.parts.join(''));if(typeof key!=='string')this.fail();frame.key=key;}catch{this.fail();}}else frame.key='';frame.state='colon';}
       else if(string.keep)this.emit(span);
       this.string=undefined;break;
      }
     }
-    if(this.string){const span=text.slice(start,at);if(string.key)string.parts.push(span);else if(string.keep)this.emit(span);}
+    if(this.string){const span=text.slice(start,at);if(string.key){if(string.keep)string.parts.push(span);}else if(string.keep)this.emit(span);}
     continue;
    }
    if(this.primitive){
@@ -69,7 +72,7 @@ export class StreamingJson {
     this.frames.pop();if(!frame.skip)this.emit(char);continue;
    }
    if(char==='"'&&frame?.kind==='object'&&frame.state==='key'){
-    this.string={key:true,keep:false,parts:['"']};continue;
+    this.string={key:true,keep:!frame.skip,parts:frame.skip?[]:['"']};continue;
    }
    const value=this.begin();
    if(char==='{'||char==='['){

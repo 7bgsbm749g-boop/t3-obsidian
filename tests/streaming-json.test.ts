@@ -34,3 +34,10 @@ test('malformed kept and discarded JSON fails without exposing response contents
   assert.throws(()=>{parser.write(value);parser.finish();},error=>error instanceof Error&&!error.message.includes('secret'));
  }
 });
+
+test('discarded nested keys and values validate escapes at arbitrary chunk boundaries',()=>{
+ const value={projection:{thread:{id:'exact'},subagents:[{'large\\key\"🧠':{'nested\nkey':['a\\b',{'escaped':'\"x\"'}]}}],messages:[{text:'kept\nexact'}]}};
+ const encoded=JSON.stringify(value);
+ for(let size=1;size<encoded.length;size++){const parser=new StreamingJson(omitImportField);for(let at=0;at<encoded.length;at+=size)parser.write(encoded.slice(at,at+size));assert.deepEqual(parser.finish(),{projection:{thread:{id:'exact'},messages:[{text:'kept\nexact'}]}});}
+ for(const encoded of ['{\"projection\":{\"subagents\":[{\"bad\\q\":1}]}}','{\"projection\":{\"subagents\":[{\"bad\nkey\":1}]}}']){const parser=new StreamingJson(omitImportField);assert.throws(()=>{for(const char of encoded)parser.write(char);parser.finish();});}
+});
