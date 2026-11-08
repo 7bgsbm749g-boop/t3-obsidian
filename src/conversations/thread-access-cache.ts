@@ -45,6 +45,7 @@ export class ThreadAccessCache {
         // Stop helpers own their borrow, never the host's underlying session.
         close:reason=>access.trace?.('borrow-released',reason??'caller-closed'),
       }};
+      Object.defineProperty(entry.borrowed.api,'importCacheIdentity',{get:()=>this.entries.get(environmentId)?.access.api.importCacheIdentity});
       this.entries.set(environmentId,entry);this.blocked.delete(environmentId);return entry;
     });
     this.opening.set(environmentId,work);

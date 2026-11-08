@@ -1666,6 +1666,7 @@ export default class SendToT3 extends Plugin {
     });
     routed.trackConnection=connection=>this.routeStatus.track(paired.id,connection);
     routed.cachedImportThreads=projectId=>api.cachedImportThreads?.(projectId);
+    Object.defineProperty(routed,'importCacheIdentity',{get:()=>api.importCacheIdentity});
     return {origin:endpoint(paired.url),get expiresAt(){return session?.expiresAt;},api:routed};
   }
   private async localInlineEnvironment():Promise<string>{

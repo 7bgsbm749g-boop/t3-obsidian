@@ -5,8 +5,13 @@ import {readInlineSnapshot,type ThreadAccess} from './thread-stream';
 import type {ThreadSnapshot} from '../connection/wire-types';
 import {availableImportRun,importRuns,importRunPreview,type ImportRun} from './run-import';
 import {projectThreads,type ThreadChoice} from './thread-target';
+import {ImportIndexCache} from './import-index-cache';
+import {isRecord} from '../shared/values';
+import {T3HttpError} from './thread-access-cache';
+import {T3RpcError} from '../connection/t3-rpc';
 
 const histories=new WeakMap<ImportRun,{snapshot:ThreadSnapshot;state:InlineThreadState}>();
+const indexes=new ImportIndexCache();
 async function readHistory(access:ThreadAccess,threadId:string,projectId:string,signal?:AbortSignal,conversation=false,runId?:string){
  requestAborted(signal);
  const api=Object.assign((path:string,payload?:unknown)=>access.api(path,payload,{signal}),access.api);
@@ -23,9 +28,28 @@ export async function readImportThreads(access:ThreadAccess,projectId:string,sig
 }
 
 export async function readImportRuns(access:ThreadAccess,threadId:string,projectId:string,signal?:AbortSignal):Promise<ImportRun[]>{
+ requestAborted(signal);
+ let identity=access.api.importCacheIdentity;let head:unknown;
+ if(identity){
+  try{head=await abortableRead(access.api('/api/orchestration/import-head/'+encodeURIComponent(threadId),undefined,{signal}),signal);}
+  catch(error){
+   indexes.delete(identity,threadId);requestAborted(signal);
+   if(error instanceof T3HttpError&&(error.status===401||error.status===403)||error instanceof T3RpcError&&error.kind==='EnvironmentAuthorizationError')throw error;
+   // Older servers or an unavailable revision reader can still perform the
+   // ordinary canonical read. They never receive a custom HTTP endpoint.
+  }
+  if(access.api.importCacheIdentity!==identity){indexes.delete(identity,threadId);identity=access.api.importCacheIdentity;}
+ }
+ const revision=isRecord(head)&&typeof head.revision==='string'?head.revision:undefined;
+ if(identity&&revision&&isRecord(head)){
+  if(head.threadId!==threadId||head.projectId!==projectId)throw Error('Waiting for the requested T3 thread.');
+  const cached=indexes.read(identity,threadId,projectId,revision);if(cached){requestAborted(signal);return cached;}
+ }
  const snapshot=await readHistory(access,threadId,projectId,signal,true);
  const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
- return importRuns(state).filter(availableImportRun).map(run=>{histories.set(run,{snapshot,state});return run;});
+ const runs=importRuns(state).filter(availableImportRun).map(run=>{histories.set(run,{snapshot,state});return run;});
+ if(identity&&revision&&access.api.importCacheIdentity===identity)indexes.remember(identity,threadId,projectId,revision,runs,snapshot);
+ return runs;
 }
 
 export async function readImportRun(access:ThreadAccess,threadId:string,projectId:string,runId:string,options:{preview?:boolean;signal?:AbortSignal;firstPageOnly?:boolean;selected?:ImportRun}={}){

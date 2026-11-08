@@ -92,6 +92,22 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
   return async(path,payload,options)=>{
     requestAborted(options?.signal);
     const request:T3Api=(target,body)=>raw(target,body,options);
+    // Internal read key, fulfilled by the stock authenticated RPC. No custom
+    // HTTP endpoint or server build is involved.
+    if(path.startsWith('/api/orchestration/import-head/')){
+      const threadId=decodeURIComponent(path.slice('/api/orchestration/import-head/'.length)),signal=options?.signal;
+      let socket:WebSocket|undefined,rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined,closed=false;
+      const close=()=>{if(closed)return;closed=true;if(rpc)rpc.close();else try{socket?.close();}catch{/* The read owns only this socket. */}};
+      signal?.addEventListener('abort',close,{once:true});
+      try{
+        rpc=await abortableRead(connectT3Rpc(request,origin,url=>{requestAborted(signal);socket=makeSocket?makeSocket(url):new WebSocket(url);return socket;}),signal);
+        const result=await abortableRead(rpc.call('orchestration.getThreadFamily',{threadId}),signal);
+        const thread=readThreadList(result).find(thread=>thread.id===threadId);
+        if(!thread||typeof thread.projectId!=='string'||typeof thread.updatedAt!=='string'||!Number.isFinite(Date.parse(thread.updatedAt)))throw Error('T3 did not return the requested thread revision.');
+        const row=thread as typeof thread&{itemCount?:number;visibleItemCount?:number;latestVisibleMessage?:unknown};
+        return {threadId,projectId:thread.projectId,revision:JSON.stringify([thread.updatedAt,row.itemCount,row.visibleItemCount,thread.latestRunId,thread.activeRunId,thread.status,thread.pendingRuntimeRequest,thread.pendingBackgroundTasks,row.latestVisibleMessage])};
+      }finally{signal?.removeEventListener('abort',close);close();}
+    }
     if(path==='/api/orchestration/no-project'){
       const rpc=await connectT3Rpc(raw,origin,makeSocket);
       try{return await rpc.call('projects.ensureScratch',{});}finally{rpc.close();}

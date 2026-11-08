@@ -80,7 +80,7 @@ export default class ImportPerformanceLab extends Plugin {
    const session=source.session;
    return {origin:session.url,api:await environmentApi({transport:'direct',host:'direct',executable:'',url:session.url,environmentId},session)};
   },async url=>{const result=await fetch(url);return {status:result.status,mimeType:result.headers.get('content-type')??'',bytes:await result.arrayBuffer()};});
-  const views=new HtmlResultViews(this.app,store);this.htmlViews=views;this.register(()=>{views.dispose();store.dispose();pages.clear();});
+  const views=new HtmlResultViews(this.app,store);views.install(this);this.htmlViews=views;this.register(()=>{views.dispose();store.dispose();pages.clear();});
   const capture=(event:Event)=>this.captureInput(event);
   let hovered:Element|null=null;
   const hover=(event:PointerEvent)=>{const row=(event.target as Element).closest?.('[data-t3-import-run]')??null;if(event.isTrusted&&(event.movementX||event.movementY)&&row!==hovered){hovered=row;if(row)capture(event);}};
@@ -113,10 +113,15 @@ export default class ImportPerformanceLab extends Plugin {
   const importing=this.importing;
   const plain=(text:string)=>text.replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/[*_`>#]/g,'').replace(/\s+/g,' ').trim();
   const answerLine=importing?.expected?.split('\n').map(plain).find(Boolean)?.slice(0,100);
-  const painted=!!answerLine&&!document.querySelector('.modal')&&Array.from(importing?.view.contentEl.querySelectorAll<HTMLElement>('.cm-line,.callout-content p,.callout-content li,.callout-content h1,.callout-content h2,.callout-content h3')??[]).some(line=>{const box=line.getBoundingClientRect();return box.bottom>0&&box.top<innerHeight&&box.width>0&&box.height>0&&plain(line.textContent??'').includes(answerLine);});
+  const visible=(element:HTMLElement)=>{const box=element.getBoundingClientRect();return box.bottom>0&&box.top<innerHeight&&box.width>0&&box.height>0;};
+  const prosePainted=!!answerLine&&Array.from(importing?.view.contentEl.querySelectorAll<HTMLElement>('.cm-line,.callout-content p,.callout-content li,.callout-content h1,.callout-content h2,.callout-content h3')??[]).some(line=>visible(line)&&plain(line.textContent??'').includes(answerLine));
+  const htmlFrames=Array.from(importing?.view.contentEl.querySelectorAll<HTMLElement>('.send-to-t3-html-result')??[]).filter(visible);
+  const htmlReady=htmlFrames.every(frame=>frame.dataset.t3HtmlState==='ready'&&frame.dataset.t3HtmlPainted==='true');
+  const rawHtml=Array.from(importing?.view.contentEl.querySelectorAll<HTMLElement>('.cm-line.HyperMD-codeblock,pre code')??[]).some(line=>visible(line)&&(line.textContent??'').includes('"environmentId"')&&(line.textContent??'').includes('"attachmentId"'));
+  const painted=!document.querySelector('.modal')&&!rawHtml&&htmlReady&&(prosePainted||htmlFrames.length>0);
   const displayed=importing?.bindingId?nativeResponses(this.app).view(importing.view)?.responseBody(importing.bindingId):undefined;
   if(importing&&!importing.measured&&importing.expected&&painted&&displayed&&(displayed.includes(importing.expected)||displayed.includes(quoteResponse(importing.expected)))){
-   importing.measured=true;requestAnimationFrame(()=>requestAnimationFrame(()=>this.write({kind:'pane',source:importing.source,action:importing.action,placeholder:'Imported response',elapsedMs:performance.now()-importing.start,at:new Date().toISOString()})));
+   importing.measured=true;requestAnimationFrame(()=>requestAnimationFrame(()=>this.write({kind:'pane',source:importing.source,action:importing.action,placeholder:'Imported response',elapsedMs:performance.now()-importing.start,visibleHtmlFrames:htmlFrames.length,htmlPainted:htmlReady,at:new Date().toISOString()})));
   }
  }
  private async show(source:Source){

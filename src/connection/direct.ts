@@ -95,6 +95,7 @@ export async function environmentApi(c:Connection,s:PairedSession|undefined,fetc
   catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403))cache.delete(identity);throw error;}
  };
  routed.cachedImportThreads=projectId=>cache.read(identity,projectId);
+ routed.importCacheIdentity=cache.scope(identity);
  return routed;
 }
 interface CachedReadApi {work:Promise<AbortableT3Api>;controller:AbortController;users:number;settled:boolean;expires:number}

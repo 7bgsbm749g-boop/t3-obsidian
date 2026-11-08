@@ -16,6 +16,11 @@ test('metadata expires before its credential and has a finite retention lifetime
  now=5000;assert.equal(cache.read('short','project'),undefined);assert.ok(cache.read('long','project'));
  now=300_000;assert.equal(cache.read('long','project'),undefined);
 });
+test('opaque cache identities survive metadata refresh and change after access revocation',()=>{
+ const cache=new ThreadCatalogCache(()=>0),identity=cache.scope('credential');cache.remember('credential',shell,1_000_000);
+ assert.equal(cache.scope('credential'),identity);cache.remember('credential',shell,1_000_000);assert.equal(cache.scope('credential'),identity);
+ assert.notEqual(cache.scope('another credential'),identity);cache.delete('credential');assert.notEqual(cache.scope('credential'),identity);
+});
 test('discovery metadata is shared only by the same authenticated transport and identity',async()=>{
  const paths:string[]=[],url='https://catalog.example',session={token:'synthetic-first',url,environmentId:'machine',expiresAt:Date.now()+600_000};
  const fetcher=async(target:RequestInfo|URL)=>{const path=new URL(String(target)).pathname;paths.push(path);return new Response(JSON.stringify(path.endsWith('/environment')?{environmentId:'machine',label:'Fixture',orchestrationProtocolVersion:2}:shell));};
