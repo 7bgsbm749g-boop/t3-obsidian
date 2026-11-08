@@ -38,6 +38,15 @@ const finalItem=(text='Final reply')=>({id:'opaque-item',threadId:'thread',runId
 const importedRun=()=>({thread:{id:'thread',projectId:'project',title:'Selected old run'},runs:[{id:'turn',ordinal:1,userMessageId:'prompt',status:'completed',requestedAt:'2026-10-06T03:00:00Z',completedAt:'2026-10-06T03:02:00Z'}],messages:[{id:'prompt',runId:'turn',role:'user',text:'Selected prompt',streaming:false,createdAt:'2026-10-06T03:00:00Z'},{id:'answer',runId:'turn',role:'assistant',text:'Final reply',streaming:false,createdAt:'2026-10-06T03:01:00Z'}],turnItems:[{...finalItem(),ordinal:2}]});
 const stockImported=(hasMoreHistory=false)=>({snapshotSequence:8,hasMoreHistory,projection:importedRun()});
 
+test('a historical import verifies the exact final item when its old run timestamp is outside the bounded run table',async()=>{
+ const snapshot=stockImported(),p=snapshot.projection;delete (p.runs[0] as {completedAt?:string}).completedAt;
+ p.runs.push({id:'newer',ordinal:2,userMessageId:'later',status:'completed',requestedAt:'2026-10-06T04:00:00Z',completedAt:'2026-10-06T04:01:00Z'});
+ p.messages.push({id:'later',runId:'newer',role:'user',text:'Later prompt',streaming:false,createdAt:'2026-10-06T04:00:00Z'});
+ let verifications=0;const h=fixture(false,async path=>{if(path.startsWith('/api/orchestration/threads/thread?'))return snapshot;assert.equal(path,'/api/orchestration/turn-item');verifications++;return finalItem();});
+ h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed'};
+ h.preview.tick(true);await settle();assert.equal(verifications,1);assert.equal(h.updates.at(-1)?.completionVerified,true);assert.equal(h.streams.length,0);h.preview.dispose();
+});
+
 test('a completed import reads and verifies only the selected canonical run without a later-thread snapshot',async()=>{
  const paths:string[]=[];const h=fixture(false,async path=>{paths.push(path);if(path.startsWith('/api/orchestration/threads/thread?'))return stockImported();assert.equal(path,'/api/orchestration/turn-item');return finalItem();});
  h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed',requestedAt:'2026-10-06T03:00:00Z'};

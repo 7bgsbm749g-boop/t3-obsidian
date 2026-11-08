@@ -40,6 +40,7 @@ export class DirectInlinePreview {
   private verifiedSequence=-1;
   private verifiedKey?:string;
   private completionTurnId?:string;
+  private completionOptions(){return {historicalImport:this.record.request.importTurn?.state==='completed'};}
   private failure?:StreamReadFailure;
   private verification?:Promise<void>;
   private closeVerification?:()=>void;
@@ -184,7 +185,7 @@ export class DirectInlinePreview {
     const title=request.localOnly&&(phase==='complete'||phase==='interrupted')?request.threadTitle:this.state.title??request.threadTitle;
     const body=renderInlineTurn(current,turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,title,{startedAt:request.createdAt,finishedAt:phase==='complete'||phase==='interrupted'?completionTime(this.state,turnId):undefined},finalAnswerFormat(request.finalAnswerFormat));
     this.completionTurnId=turnId;
-    const key=finalResponseKey(this.state,turnId);
+    const key=finalResponseKey(this.state,turnId,this.completionOptions());
     const exactStopped=this.state.protocolVersion===2&&phase==='interrupted'&&this.state.turns?.[turnId]?.state==='interrupted';
     const terminal=phase==='complete'||phase==='interrupted',historyPending=request.importTurn?.state==='completed'&&this.state.historyComplete===false,completionVerified=terminal&&!historyPending&&(exactStopped||(this.state.protocolVersion===2?!!key&&key===this.verifiedKey:this.verifiedSequence>=(this.state.sequence??0)));
     this.terminal=terminal;
@@ -219,7 +220,7 @@ export class DirectInlinePreview {
     if(this.verification||this.clock.now()<this.nextVerification||this.stopped)return;
     if(this.record.request.importTurn?.state==='completed'&&this.state.historyComplete===false)return;
     const generation=this.generation,request=this.record.request,sequence=this.state.sequence??0;
-    const turnId=this.completionTurnId!,key=finalResponseKey(this.state,turnId),state=this.state;
+    const turnId=this.completionTurnId!,key=finalResponseKey(this.state,turnId,this.completionOptions()),state=this.state;
     if(state.protocolVersion===2&&(!key||key===this.verifiedKey||this.failure?.operation==='final-reply'&&this.failure.key===key))return;
     if(state.protocolVersion!==2&&this.failure)return;
     let access:ThreadAccess|undefined,closed=false,expired=false;
@@ -232,16 +233,16 @@ export class DirectInlinePreview {
         access=ready;
         try{
           if(expired||this.stopped||generation!==this.generation)throw Error('T3 completion verification cancelled.');
-          return await (state.protocolVersion===2?checkFinalResponse(ready,request.threadId,state,turnId):readInlineSnapshot(ready,request.threadId,request.projectId,{messageIds:[this.messageId()],turnIds:this.turnIds}));
+          return await (state.protocolVersion===2?checkFinalResponse(ready,request.threadId,state,turnId,this.completionOptions()):readInlineSnapshot(ready,request.threadId,request.projectId,{messageIds:[this.messageId()],turnIds:this.turnIds}));
         }finally{close();}
       }).then(result=>{
       if(this.stopped||generation!==this.generation)return;
       if(state.protocolVersion===2){
-        if(finalResponseKey(this.state,turnId)!==key)return;
+        if(finalResponseKey(this.state,turnId,this.completionOptions())!==key)return;
         const checked=result as Awaited<ReturnType<typeof checkFinalResponse>>;
         const final=inlineTurnMessages(checked.state,turnId).at(-1)!;
         this.state={...this.state,messages:this.state.messages.map(m=>m.id===final.id?final:m)};
-        this.verifiedKey=checked.verified?finalResponseKey(this.state,turnId):undefined;
+        this.verifiedKey=checked.verified?finalResponseKey(this.state,turnId,this.completionOptions()):undefined;
         if(checked.verified)this.failure=undefined;
       }else{
         if(!('thread' in result)||typeof result.snapshotSequence!=='number'||result.snapshotSequence<sequence)return;

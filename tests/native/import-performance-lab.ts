@@ -27,6 +27,8 @@ interface Source {label:string;session:PairedSession;threadId:string;projectId:s
 export default class ImportPerformanceLab extends Plugin {
  private root='';private sources:Source[]=[];private projects:Project[]=[];
  private start=0;private action=0;private measured=new WeakSet<Element>();private source?:Source;
+ private paneStarts=new Map<string,{start:number;action:number;source?:string}>();
+ private inputBoundaries=new WeakMap<Event,{start:number;action:number}>();
  private optimized=false;
  private productionAccess=false;
  private htmlViews?:HtmlResultViews;
@@ -36,6 +38,18 @@ export default class ImportPerformanceLab extends Plugin {
  private notes=new Set<string>();private trial=0;
  private importing?:{start:number;action:number;source:string;view:MarkdownView;expected?:string;bindingId?:string;measured?:boolean};
  private write(value:unknown){fs.appendFileSync(path.join(this.root,'PANES.ndjson'),JSON.stringify(value)+'\n');}
+ private captureInput(event:Event){
+  if(!event.isTrusted)return;
+  let boundary=this.inputBoundaries.get(event);
+  if(!boundary){boundary={start:event.timeStamp,action:++this.action};this.inputBoundaries.set(event,boundary);this.write({kind:'input',source:this.source?.label,action:boundary.action,startTime:boundary.start,event:event.type,key:event instanceof KeyboardEvent&&['ArrowDown','ArrowUp','Enter','Escape'].includes(event.key)?event.key:undefined});}
+  this.start=boundary.start;
+ }
+ private paneOrigin(){
+  // Obsidian can invoke a chooser before the lab's window listener. Reuse
+  // that exact trusted event, including across listener microtask checkpoints.
+  const event=window.event;if(event?.isTrusted&&['keydown','pointerdown'].includes(event.type))this.captureInput(event);
+  return {start:this.start,action:this.action,source:this.source?.label};
+ }
  async onload(){
   this.root=path.dirname((this.app.vault.adapter as any).getFullPath(''));
   if(!fs.existsSync(path.join(this.root,'ISOLATED-NATIVE-LAB')))throw Error('Use an isolated vault.');
@@ -67,11 +81,12 @@ export default class ImportPerformanceLab extends Plugin {
    return {origin:session.url,api:await environmentApi({transport:'direct',host:'direct',executable:'',url:session.url,environmentId},session)};
   },async url=>{const result=await fetch(url);return {status:result.status,mimeType:result.headers.get('content-type')??'',bytes:await result.arrayBuffer()};});
   const views=new HtmlResultViews(this.app,store);this.htmlViews=views;this.register(()=>{views.dispose();store.dispose();pages.clear();});
-  const capture=(event:Event)=>{if(event.isTrusted){this.start=performance.now();this.action++;this.write({kind:'input',source:this.source?.label,action:this.action,event:event.type,key:event instanceof KeyboardEvent&&['ArrowDown','ArrowUp','Enter','Escape'].includes(event.key)?event.key:undefined});}};
-  const hover=(event:PointerEvent)=>{const row=(event.target as Element).closest?.('[data-t3-import-run]');if(event.isTrusted&&row&&!row.contains(event.relatedTarget as Node|null))capture(event);};
+  const capture=(event:Event)=>this.captureInput(event);
+  let hovered:Element|null=null;
+  const hover=(event:PointerEvent)=>{const row=(event.target as Element).closest?.('[data-t3-import-run]')??null;if(event.isTrusted&&(event.movementX||event.movementY)&&row!==hovered){hovered=row;if(row)capture(event);}};
   window.addEventListener('pointerdown',capture,true);window.addEventListener('keydown',capture,true);
-  document.addEventListener('pointerover',hover,true);
-  this.register(()=>{window.removeEventListener('pointerdown',capture,true);window.removeEventListener('keydown',capture,true);document.removeEventListener('pointerover',hover,true);});
+  document.addEventListener('pointermove',hover,true);
+  this.register(()=>{window.removeEventListener('pointerdown',capture,true);window.removeEventListener('keydown',capture,true);document.removeEventListener('pointermove',hover,true);});
   const observer=new MutationObserver(()=>this.measure());observer.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','aria-label','data-t3-html-state','data-t3-html-painted']});this.register(()=>observer.disconnect());
   for(const [index,source] of this.sources.entries())this.addCommand({id:'source-'+index,name:'Measure import '+index,callback:()=>void this.show(source)});
   this.addCommand({id:'cleanup',name:'Delete owned import test notes',callback:()=>void (async()=>{this.local?.dispose();for(const file of this.app.vault.getMarkdownFiles())if(/^(?:Reference|Virtual|Import-(?:vps-0|vps-1|vps-largest-run|laptop-largest(?:-run)?)-\d+)\.md$/.test(file.path))this.notes.add(file.path);for(const leaf of this.app.workspace.getLeavesOfType('markdown'))if(this.notes.has((leaf.view as MarkdownView).file?.path??''))leaf.detach();for(const path of this.notes){const file=this.app.vault.getFileByPath(path);if(file)await this.app.vault.delete(file);}this.write({kind:'cleanup',deletedNotes:[...this.notes],remainingOwnedNotes:[...this.notes].filter(path=>this.app.vault.getFileByPath(path))});})()});
@@ -89,7 +104,7 @@ export default class ImportPerformanceLab extends Plugin {
    const rows=document.querySelectorAll('.suggestion-item').length;
    // Obsidian can create a modal in an earlier window key listener. Read the
    // input boundary after all listeners have run, before the two paint frames.
-   requestAnimationFrame(()=>{const start=this.start,source=this.source?.label,action=this.action;requestAnimationFrame(()=>{if(element.isConnected)this.write({kind:'pane',source,action,placeholder:label,elapsedMs:performance.now()-start,rows,at:new Date().toISOString()});});});
+   requestAnimationFrame(()=>{const {start,source,action}=this.paneStarts.get(label)??{start:this.start,source:this.source?.label,action:this.action};requestAnimationFrame(()=>{if(element.isConnected)this.write({kind:'pane',source,action,placeholder:label,elapsedMs:performance.now()-start,rows,at:new Date().toISOString()});});});
   };
   if(input&&placeholder&&document.querySelector('.suggestion-item'))record(input,placeholder);
   if(confirmation&&Array.from(confirmation.querySelectorAll('button')).some(button=>button.textContent==='Import response'))record(confirmation,'Import T3 run into this note');
@@ -122,7 +137,7 @@ export default class ImportPerformanceLab extends Plugin {
    const read=async<T>(work:(access:ThreadAccess)=>Promise<T>)=>{const access=await accessFor();try{return await work(access);}finally{await access.close?.();}};
    this.projects=this.catalogs.get(session.environmentId)!;
    let notePath:string;do{notePath=`Import-${source.label}-${++this.trial}.md`;}while(this.app.vault.getFileByPath(notePath));this.notes.add(notePath);const file=await this.app.vault.create(notePath,'# Imported run\n\nOrdinary text before.\n\n');const leaf=this.app.workspace.getLeaf(false);await leaf.openFile(file);await leaf.setViewState({type:'markdown',state:{file:notePath,mode:'source',source:false}});
-   const timed=async<T>(step:string,work:()=>Promise<T>)=>{const start=performance.now();try{const result=await work();this.write({kind:'read',source:source.label,step,startTime:start,elapsedMs:performance.now()-start});return result;}catch(error){this.write({kind:'failure',source:source.label,step,startTime:start,elapsedMs:performance.now()-start,error:String(error)});throw error;}};
+   const timed=async<T>(step:string,work:()=>Promise<T>)=>{const start=performance.now(),pane=step==='threads'?'Choose the source T3 thread':step==='runs'?'Choose a T3 response':undefined;if(pane)this.paneStarts.set(pane,this.paneOrigin());try{const result=await work();this.write({kind:'read',source:source.label,step,startTime:start,elapsedMs:performance.now()-start});return result;}catch(error){this.write({kind:'failure',source:source.label,step,startTime:start,elapsedMs:performance.now()-start,error:String(error)});throw error;}};
    routing?.prepareImportAccess();
    this.start=performance.now();this.action++;
    let catalog:ReturnType<typeof importRuns>|undefined;
@@ -137,6 +152,7 @@ export default class ImportPerformanceLab extends Plugin {
      return record(importRuns(state).filter(availableImportRun).map(run=>({...run,preview:importRunPreview(state,run,session.environmentId,thread.id)})));
     }),
     preview:async(project,thread,run,el,child:Component,signal)=>{
+     this.paneStarts.set('Response preview',this.paneOrigin());
      this.write({kind:'preview-source',source:source.label,threadId:thread.id,runId:run.turnId,messageId:run.messageId});
      if(this.optimized&&run.turnId&&!run.preview){
       run.preview=await timed('preview-read',()=>read(access=>readImportPreview(access,thread.id,project.id,run,session.environmentId,signal)));
