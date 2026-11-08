@@ -168,7 +168,7 @@
   forced-color-adjust: none;
 }
 /* Retain the pre-2.45.9 foreground paint; brighten only the moving highlight. */
-[data-t3-shine="true"] { --send-to-t3-shine-strength: 24%; }
+[data-t3-shine="true"] { --send-to-t3-shine-strength: 50%; }
 .theme-light [data-t3-shine="true"] { --send-to-t3-shine-strength: 12%; }
 :is(.nav-file-title, .nav-folder-title, .workspace-tab-header).is-active [data-t3-shine="true"],
 .mtb-title-current[data-t3-shine="true"],

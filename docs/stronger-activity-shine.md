@@ -1,14 +1,18 @@
 # Stronger activity text shine
 
-Active titles and response labels retain the foreground text fill from 2.45.8.
+Active titles and response labels use the existing text-shine painting method.
 The moving gradient now has a white core from 40% to 60% of its width, instead
 of a single peak mixed with the text colour. This strengthens the highlight
-without changing the paint between passes. The foreground transparency remains
-24% in dark themes and 12% in light themes, or 50% and 26% for selected titles.
+without replacing the ordinary text fill. The foreground transparency is
+50% in dark themes and 12% in light themes, or 50% and 26% for selected titles.
+Dark-theme activity labels and unselected titles now use the same 50% strength
+as selected titles, increased from 24%.
 
 The highlight keeps the existing 4.5 rem width and 2.2 second duration. Fonts,
-text layout, the circle's brightness and timing, and the hidden/offscreen pause
-behaviour retain their existing rules. Reduced motion and forced colours use
+text layout, circle timing, and the hidden/offscreen pause behaviour retain
+their existing rules. Circle highlights inherit 18% of the text-shine strength,
+so their default dark-theme white mix also increases from 4.32% to 9%; their
+overall opacity remains 72%. Reduced motion and forced colours use
 ordinary text. A CSS feature check leaves ordinary text visible when gradient
 text or colour mixing is unavailable.
 
@@ -16,8 +20,10 @@ text or colour mixing is unavailable.
 
 Run `npm run build` and `npm test`. Check real text painting in both themes,
 including selected and unselected titles, response headings and activity rows.
-Compare screenshots against 2.45.8 in the same document and coordinates, with
-the highlight outside the label; unchanged text must have identical pixels.
+Compare before-and-after screenshots in the same document and coordinates,
+including frames with the highlight outside the label. The strength parameter
+also controls foreground transparency, so record any glyph-edge differences
+between passes rather than assuming that ordinary dark text is pixel-identical.
 Check selected, unselected and custom-coloured labels in both themes. Compare
 highlight frames separately to verify increased brightness. Check that
 reduced motion shows ordinary text and that completion removes the effect.
