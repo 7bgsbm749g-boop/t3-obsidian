@@ -5,7 +5,7 @@ import {AgentSetup,type AgentProvider} from '../agents/setup';
 import {agentAssets,agentBundleHash} from '../agents/assets';
 import {AgentToolsSettings} from '../agents/settings';
 import {ConnectCommandHost,commandBase,type CommandFiles,type CommandRoute} from '../notes/connect-command-host';
-import {connectAgentFiles,connectCommandFiles} from '../notes/connect-command-files';
+import {connectAgentFiles,connectCommandFiles,connectDiagnosticFiles} from '../notes/connect-command-files';
 import {CheckedNoteEdits,isNoteEditCommand,checkedStageDraft,type EditSnapshot} from '../notes/checked-note-edits';
 import {connectT3Rpc} from '../connection/t3-rpc';
 import {ThreadDisplays,isThreadCommand,type ThreadDisplayResult} from '../conversations/thread-displays';
@@ -76,8 +76,8 @@ import {continueQuestionAnswer} from '../interaction/question-continuation';
 import {validateNoteCommand,validateAgentCommand,type NoteCommand,type NoteCommandResult} from '../notes/note-command';
 import {isFolderCommand,executeFolderCommand,type FolderCommand} from '../projects/folder-command';
 import {configureDiagnostics,logEvent,logFailure,EventJournal,diagnosticPreferences,diagnosticCategory,connectionDiagnosticPolicy,type DiagnosticCategory} from './diagnostics';
+import {DiagnosticArchive} from './diagnostic-archive';
 import {streamMemory} from './stream-memory-diagnostics';
-import {clearVaultDiagnostics} from './disabled-diagnostics';
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from '../connection/cloud';
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from '../connection/native-account';
 import {pair,readDirect,commandId,environmentApi,endpoint,type PairedConnection,type PairedSession} from '../connection/direct';
@@ -237,6 +237,7 @@ export default class SendToT3 extends Plugin {
   private noteCommandOpening?:Promise<void>;
   private eventLocalEnvironmentId?:string;
   diagnostics?:EventJournal;
+  diagnosticArchive?:DiagnosticArchive;
   diagnosticLogging=diagnosticPreferences(undefined);
   private diagnosticPreferenceKey(){return `t3-diagnostic-preferences-v1:${this.settings.vaultId}:${this.deviceId}`;}
   setDiagnosticLogging(category:DiagnosticCategory,enabled:boolean){
@@ -257,6 +258,7 @@ export default class SendToT3 extends Plugin {
   private recordSendFailure(request:Request|undefined,error:unknown,stage:string,startedAt:number){
     const derived=(part:string)=>{try{return request?commandId(request.id,part):undefined;}catch{return undefined;}};
     const failure:SendFailure={at:new Date().toISOString(),stage,elapsedMs:Math.max(0,Date.now()-startedAt),delivery:acceptedRequestThread(request)||request?.directPlan?.delivery||['delivery-evidence','local-confirmation'].includes(stage)?'accepted':['dispatch','startup-recovery'].includes(stage)?'unconfirmed':'not-started',...(request?{requestId:request.id,threadId:acceptedRequestThread(request)??request.threadId??derived('thread'),messageId:derived('message'),environmentId:request.connection.environmentId,bindingIds:(request.inlineBindings??(request.inlineHost?[request.inlineHost]:[])).map(binding=>binding.id)}:{}),error};
+    logEvent('response.send.failure',failure as unknown as Record<string,unknown>,'error');
     try{this.app.saveLocalStorage(this.failureKey(),appendSendFailure(this.app.loadLocalStorage(this.failureKey()),failure));}catch{new Notice('The send failed. The device could not save its failure log.',10000);}
   }
   private async failRequest(request:Request,error:unknown,stage:string,startedAt:number){
@@ -374,13 +376,11 @@ export default class SendToT3 extends Plugin {
     // General operation/chunk logging and synced log publication stay disabled.
     this.diagnosticLogging=diagnosticPreferences(this.app.loadLocalStorage(this.diagnosticPreferenceKey()));
     const diagnosticKey=`diagnostics:${this.settings.vaultId}:${this.deviceId}`;
-    this.diagnostics=new EventJournal({load:()=>deviceState(diagnosticKey),save:state=>deviceState(diagnosticKey,state),id:randomId,context:{deviceId:this.deviceId,pluginVersion:pluginManifest.version,platform:Platform.isMobile?'mobile':'desktop'}},{...connectionDiagnosticPolicy,retain:event=>diagnosticCategory(event)!==undefined,accept:event=>{const category=diagnosticCategory(event);return !!category&&this.diagnosticLogging[category];}});
+    this.diagnosticArchive=new DiagnosticArchive(this.settings.vaultId,this.deviceId);
+    this.diagnostics=new EventJournal({retain:event=>this.diagnosticArchive?.record(event),load:()=>deviceState(diagnosticKey),save:state=>deviceState(diagnosticKey,state),id:randomId,context:{deviceId:this.deviceId,pluginVersion:pluginManifest.version,platform:Platform.isMobile?'mobile':'desktop'}},{...connectionDiagnosticPolicy,retain:event=>diagnosticCategory(event)!==undefined,accept:event=>{const category=diagnosticCategory(event);return !!category&&this.diagnosticLogging[category];}});
     await this.diagnostics.load();configureDiagnostics(this.diagnostics);streamMemory.reset();
-    const adapter=this.app.vault?.adapter;
-    if(adapter&&typeof adapter.exists==='function'&&typeof adapter.remove==='function'){
-      try{await clearVaultDiagnostics(adapter,this.app.vault.configDir);}catch(error){new Notice(`Could not clear plugin logs: ${message(error)}`);}
-    }
-    this.addCommand({id:'export-diagnostics',name:'Export diagnostic log…',callback:()=>void this.exportDiagnostics().catch(error=>new Notice(message(error)))});
+    for(const failure of sendFailureLog(this.app.loadLocalStorage(this.failureKey()),pluginManifest.version,this.deviceId).failures)this.diagnosticArchive.record({at:failure.at,sequence:1,sessionId:`legacy-send-failure-${contentHash(JSON.stringify(failure))}`,deviceId:this.deviceId,event:'response.send.failure',level:'error',fields:failure as unknown as Record<string,unknown>});
+    this.addCommand({id:'export-diagnostics',name:'View diagnostic log files',callback:()=>void this.exportDiagnostics().catch(error=>new Notice(message(error)))});
     if(typeof window!=='undefined'&&typeof window.addEventListener==='function'){
       const root=workspaceDocument(this.app);this.registerDomEvent(root,'visibilitychange',()=>logEvent('connection.client-state',{cause:'visibilitychange',visibility:root.visibilityState}));
       for(const event of ['online','offline'] as const)this.registerDomEvent(window,event,()=>logEvent('connection.client-state',{cause:event}));
@@ -842,10 +842,10 @@ export default class SendToT3 extends Plugin {
       if(input.kind==='diagnostic-settings'){
         const previous={...this.diagnosticLogging};
         for(const [category,enabled] of Object.entries(input.diagnosticPreferences??{}))this.setDiagnosticLogging(category as DiagnosticCategory,enabled);
-        return {...result,diagnosticSettings:{previous,enabled:{...this.diagnosticLogging}}};
+        return {...result,diagnosticSettings:{previous,enabled:{...this.diagnosticLogging}},diagnosticLog:this.diagnosticArchive?.status()};
       }
       if(input.kind==='send-failure-log')return {...result,failureLog:this.diagnosticLog(input.since)};
-      return input.kind==='client-status'?{...result,commandServer:{transport:'t3-connect',connected:this.commandHosts.size},connectionRecovery:this.connectionRecovery?.status(),codeRangeCache:markdownCodeCacheStatus(),responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app),legacyRepliesRetired:true}:result;
+      return input.kind==='client-status'?{...result,diagnosticLog:this.diagnosticArchive?.status(),commandServer:{transport:'t3-connect',connected:this.commandHosts.size},connectionRecovery:this.connectionRecovery?.status(),codeRangeCache:markdownCodeCacheStatus(),responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app),legacyRepliesRetired:true}:result;
     }
     if(isResponseCommand(input)){
       const command=validateResponseCommand(input);
@@ -1801,7 +1801,16 @@ export default class SendToT3 extends Plugin {
     // Each host coalesces its own tick. An offline machine must not hold the
     // ready clients behind a global poll promise. The registration cap bounds
     // these independent channels; command dispatch remains serialized.
+    this.syncDiagnosticLogFiles();
     for(const [environmentId,entry] of this.commandHosts)void entry.host.tick().catch(async error=>{if(this.commandHosts.get(environmentId)!==entry)return;this.commandHosts.delete(environmentId);logFailure('commands.poll',error,{environmentId});await entry.host.dispose();entry.rpc.close();});
+  }
+  private syncDiagnosticLogFiles(){
+    if(!this.diagnosticArchive)return;
+    const local=this.settings.paired.find(connection=>localRoute(connection))?.environmentId;
+    const environmentId=local??this.commandHosts.keys().next().value;if(!environmentId)return;
+    const entry=this.commandHosts.get(environmentId);if(!entry||entry.rpc.closed)return;
+    const workspaceRoot=entry.host.route.workspaceRoot,directory=`.t3-obsidian/diagnostics/${this.settings.vaultId}/${this.deviceId}`;
+    void this.diagnosticArchive?.sync(connectDiagnosticFiles(entry.rpc,workspaceRoot),{environmentId,workspaceRoot,directory}).catch(()=>{});
   }
   private async startThreadDisplays(){
     if(this.threadDisplays||this.stopped)return;if(this.threadDisplayOpening)return this.threadDisplayOpening;
@@ -2112,10 +2121,12 @@ export default class SendToT3 extends Plugin {
     finally{this.busy=false;}
   }
   async exportDiagnostics(){
-    const modal=new Modal(this.app);modal.titleEl.setText('Diagnostic log');
-    const log=this.diagnosticLog();
-    modal.contentEl.createEl('p',{text:'The last 64 send failures and enabled connection, Follow, response or streaming memory events on this device. Events are limited to 512 records, 256 KB and seven days. Message text and credentials are excluded.'});
-    const field=modal.contentEl.createEl('textarea',{cls:'send-to-t3-failure-log'});field.readOnly=true;field.value=JSON.stringify(log,null,2);
+    this.memoryCheckpoint('manual');await this.diagnosticArchive?.settle();this.syncDiagnosticLogFiles();
+    const modal=new Modal(this.app);modal.titleEl.setText('Diagnostic log files');
+    const status=this.diagnosticArchive?.status();
+    modal.contentEl.createEl('p',{text:'Logs are saved automatically as ordinary JSONL files on the connected T3 machine. Agents can read these files without an export. All recorded history is retained until you delete it. Only the recent preview and transfer batches are bounded.'});
+    modal.contentEl.createEl('p',{text:status?.workspaceRoot&&status.directory?`${status.workspaceRoot}/${status.directory}`:'Waiting for the local T3 connection. Recorded events remain on this device until file delivery succeeds.'});
+    if(status?.localError||status?.fileError)modal.contentEl.createEl('p',{text:`Log write error: ${status.localError||status.fileError}`});
     modal.open();
   }
 
@@ -2813,7 +2824,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }
   }
-  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async monitorCompletions() {
     if(this.monitoring||this.stopped||this.busy)return;
     this.monitoring=true;try{await this.monitorSettlements();}finally{this.monitoring=false;}
@@ -2913,7 +2924,7 @@ export class T3Settings extends PluginSettingTab {
       {type:'page',name:'Connection',items:this.connectionDefinitions()},
       {type:'page',name:'Replies',items:this.replyPageDefinitions()},
       {type:'page',name:'Projects',items:[block('Linked folders and project files',['Vault connection','Connect vault','Change machine','Unlink','Codebase view','Open project files'],el=>this.projectsUI(el))]},
-      {type:'page',name:'Advanced',items:[block('Troubleshooting',['Send failure log','Diagnostic log','Connection logging','Follow logging','Response logging'],el=>this.advancedUI(el))]},
+      {type:'page',name:'Advanced',items:[block('Troubleshooting',['Diagnostic log files','Connection logging','Follow logging','Response logging','Streaming memory logging'],el=>this.advancedUI(el))]},
     ];
   }
   refresh(){this.update();}
@@ -3002,7 +3013,7 @@ export class T3Settings extends PluginSettingTab {
     new Setting(el).setName('Follow logging').setDesc('Record when auto-scroll starts, pauses, resumes or turns off on this device only. Off by default.').addToggle(toggle=>toggle.setValue(preferences.follow).onChange(enabled=>this.plugin.setDiagnosticLogging('follow',enabled)));
     new Setting(el).setName('Response logging').setDesc('Record response recovery, rendering and final-save decisions on this device only. Off by default.').addToggle(toggle=>toggle.setValue(preferences.response).onChange(enabled=>this.plugin.setDiagnosticLogging('response',enabled)));
     new Setting(el).setName('Streaming memory logging').setDesc('Sample browser JS heap and streaming counters on this device. Off by default; at most one activity sample per 5 seconds plus bounded lifecycle checkpoints. No message text, RSS or cgroup measurement.').addToggle(toggle=>toggle.setValue(preferences.memory).onChange(enabled=>this.plugin.setDiagnosticLogging('memory',enabled)));
-    new Setting(el).setName('Diagnostic log').setDesc('View send failures and enabled diagnostic events from this device. Nothing is synced.').addButton(button=>button.setButtonText('View log').onClick(()=>this.plugin.exportDiagnostics()));
+    new Setting(el).setName('Diagnostic log files').setDesc('Save diagnostic history automatically as agent-readable JSONL files on the connected T3 machine. No retention limit or export step.').addButton(button=>button.setButtonText('Show location').onClick(()=>this.plugin.exportDiagnostics()));
   }
 
   private replyPageDefinitions():SettingDefinitionItem[]{const fields=this.replyDefinitions();return [...fields.slice(0,-1),{type:'page',name:'Beta',desc:'Optional thread and note behavior.',items:[fields.at(-1)!]}];}

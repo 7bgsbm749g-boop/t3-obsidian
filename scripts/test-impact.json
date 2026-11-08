@@ -135,6 +135,9 @@
     ],
     "tests/stream-memory-diagnostics.test.ts": [
       "tests/native/stream-memory-lab.ts"
+    ],
+    "tests/diagnostic-archive.test.ts": [
+      "tests/native/stream-memory-lab.ts"
     ]
   }
 }
