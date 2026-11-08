@@ -46,3 +46,5 @@ Agents can prepare and submit checked note edits through the running plugin. Com
 ---
 
 Your chosen note content and attachments go to the connected T3 computer and its configured model provider. Optional agent setup writes the bundled MCP tools and changes the selected agent’s launch settings on that computer through the authenticated T3 connection, outside the vault. Obsidian does not run the helper or open an incoming command port. T3 and provider accounts or usage charges are separate from this free plugin. [Report an issue](https://github.com/7bgsbm749g-boop/t3-obsidian/issues) · [MIT license](LICENSE)
+
+Streaming RAM capture: [device-local streaming memory diagnostics](docs/stream-memory-diagnostics.md).

@@ -1,4 +1,6 @@
 import {isRecord,toError} from '../shared/values';
+import {editorCM} from '../shared/native-editor';
+import {streamMemory} from '../app/stream-memory-diagnostics';
 import {nativeMarkdownView} from '../shared/native-editor';
 import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import {contentHash} from './completion';
@@ -56,6 +58,13 @@ export class NativeResponseManager {
     this.refresh();
   }
   private records=new Map<string,ResponseRecord>();
+  memoryStatus(){
+    let documentLength=0;for(const view of this.views.keys())documentLength+=editorCM(view.editor)?.state.doc.length??0;
+    let retainedCharacters=0;for(const update of this.streams.values())retainedCharacters+=update.body.length;
+    for(const entry of this.cached.values())retainedCharacters+=entry.body.length;
+    const retention=this.retentionStatus();
+    return {viewCount:this.views.size,documentLength,streamCount:this.streams.size,previewCount:this.cached.size,retainedCharacters,recordCount:retention.records,proofCount:retention.proofs,proofCharacters:retention.proofCharacters,deviceProofCount:retention.deviceProofs,deviceProofCharacters:retention.deviceProofCharacters,pendingReadCount:this.reads.size,refreshQueuedCount:this.streamRefreshPaths.size,saveFenceCount:this.activeFinalSaves.size};
+  }
   retentionStatus(){return {records:this.records.size,completedIndexes:[...this.records.values()].filter(isCompletedLeaseIndex).length,proofs:this.proofs.size,proofCharacters:[...this.proofs.values()].reduce((total,proof)=>total+proof.document.length,0),deviceProofs:this.deviceCommits.size,deviceProofCharacters:[...this.deviceCommits.values()].reduce((total,item)=>total+item.proof.document.length,0)};}
   private titles=new Map<string,string>();
   private proofs=new Map<string,NativeCommitProof>();
@@ -453,7 +462,7 @@ export class NativeResponseManager {
       const fence=this.activeFinalSaves.get(file.path);if(fence)fence.invalid=true;
       void this.adoptSaved(view);
     },async()=>view.file===file?this.app.vault.read(file):undefined,incoming=>this.normalize(file.path,incoming),incoming=>this.completed(file.path,incoming,new Set(adapter.responseIds())),initial);
-    this.views.set(view,adapter);this.uninitializedViews.add(adapter);
+    this.views.set(view,adapter);streamMemory.sample('view-open',()=>this.memoryStatus());this.uninitializedViews.add(adapter);
     const fence=this.activeFinalSaves.get(file.path);if(fence)this.joinFinalSave(fence,adapter);
     return adapter;
   }
@@ -462,7 +471,7 @@ export class NativeResponseManager {
     const opened=new Set<string>();
     const live=new Set(this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView));
     for(const [view,warnings] of this.warnings)if(!live.has(view)){for(const element of warnings.values())element.remove();this.warnings.delete(view);}
-    for(const [view,adapter] of this.views)if(!live.has(view)||adapter.isDisposed()){if(!adapter.isDisposed())adapter.dispose(true);this.views.delete(view);}
+    for(const [view,adapter] of this.views)if(!live.has(view)||adapter.isDisposed()){if(!adapter.isDisposed())adapter.dispose(true);this.views.delete(view);streamMemory.sample('view-close',()=>this.memoryStatus());}
     for(const view of live){
       if(!view.file||typeof view.getViewData!=='function'||paths&&!paths.has(view.file.path))continue;
       const blocked=[...this.records.values()].filter(record=>!record.stopRequestedAt&&!record.state?.cleanupComplete&&record.state?.locationConflict?.includes(view.file!.path));
@@ -606,12 +615,12 @@ export class NativeResponseManager {
         if(panes.some(view=>!this.view(view)||!fence.members.get(this.view(view)!)?.ready))continue;
         fence.panes=new Map(panes.map(view=>[view,view.file]));fence.sealed=true;
         if(!this.finalSaveReady(path))throw Error('The native panes changed before final delivery.');
-        held=timed?performance.now():0;return release;
+        held=timed?performance.now():0;streamMemory.sample('save',()=>this.memoryStatus());return release;
       }
     }catch(error){release();throw error;}
   }
   prepare(path:string,before:string,after:string,ids:string[]){if(this.activeFinalSaves.has(path)&&!this.finalSaveReady(path))throw Error('The native panes changed before final delivery.');for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.prepareMaterialization(before,after,ids);}
   cancel(path:string){for(const [view,adapter] of this.views)if(view.file?.path===path)adapter.cancelMaterialization();}
   committed(path:string,saved:string,ids:string[]){for(const [view,adapter] of this.views)if(view.file?.path===path){if(this.uninitializedViews.has(adapter)){adapter.initializeDiskBaseline(saved,true);this.uninitializedViews.delete(adapter);}if(!adapter.acceptCommitted(saved,ids))throw Error('A native pane did not adopt the saved result.');}}
-  dispose(){this.savedAdoptions.clear();void this.flushPreviewCache();this.lifetime++;this.localStops.clear();this.stopReferences.clear();this.stopLoads.clear();this.stopFailures.clear();for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.connectionIssues.clear();this.proofs.clear();this.deviceCommits.clear();this.completionIdentities.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();}
+  dispose(){this.savedAdoptions.clear();void this.flushPreviewCache();this.lifetime++;this.localStops.clear();this.stopReferences.clear();this.stopLoads.clear();this.stopFailures.clear();for(const adapter of this.views.values())adapter.dispose();for(const warnings of this.warnings.values())for(const warning of warnings.values())warning.remove();this.warnings.clear();this.views.clear();this.records.clear();this.titles.clear();this.provisional.clear();this.streams.clear();this.connectionIssues.clear();this.proofs.clear();this.deviceCommits.clear();this.completionIdentities.clear();this.reads.clear();this.changedDuringRead.clear();this.relocations.clear();this.reconnecting.clear();streamMemory.sample('dispose',()=>this.memoryStatus());}
 }

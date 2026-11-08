@@ -31,7 +31,7 @@ test('connection and Follow switches gate the existing journal without enabling 
 
 test('response traces use the same journal and an independent default-off device switch',async()=>{
   const f=fixture(),preferences=diagnosticPreferences(undefined),other=diagnosticPreferences(undefined);Object.assign(f.io.context,{pluginVersion:'0.0.405'});
-  assert.deepEqual(preferences,{connection:false,follow:false,response:false});
+  assert.deepEqual(preferences,{connection:false,follow:false,response:false,memory:false});
   const j=new EventJournal(f.io,{...connectionDiagnosticPolicy,accept:event=>{const category=diagnosticCategory(event);return !!category&&preferences[category];}});
   configureDiagnostics(j);
   try{

@@ -1,4 +1,3 @@
-import * as cmView from '@codemirror/view';
 import {editorCM} from '../shared/native-editor';
 import type {MarkdownView} from 'obsidian';
 import type {ResponseProjection} from './native-response-projection';
@@ -144,23 +143,17 @@ export class ResponseScroll {
     this.frame=window.requestAnimationFrame(time=>{
       this.frame=undefined;if(this.following!==following)return;
       if(this.view.file!==this.file||!this.view.contentEl.isConnected||this.view.contentEl.getClientRects?.().length===0){this.pause('view-detached-or-hidden');return;}
-      const cm=editorCM(this.view.editor);
       const range=this.range(following.key);if(!range){this.stop(this.rangeLossReason(following));return;}
       const scroller=this.scroller();
       if(!scroller)return;
       const fold=Array.from(scroller.querySelectorAll<HTMLElement>('.callout[data-callout="t3-progress"]')).find(fold=>fold.querySelector<HTMLElement>(':scope > .callout-title .send-to-t3-fold-key')?.dataset.t3Fold===following.key);
       if(!fold){
         if(range.followPaused){this.pause('reconnecting');return;}
-        // CodeMirror can virtualize a block which was replaced during a stream
-        // update. Reveal its source end only if its estimated bottom overflows.
-        if(cm&&this.view.getMode()!=='preview'){
-          const end=Math.max(range.displayFrom,range.displayTo-1),box=scroller.getBoundingClientRect(),viewport=window.visualViewport;
-          const bottom=Math.min(box.top+scroller.clientTop+scroller.clientHeight,this.view.contentEl.getBoundingClientRect().bottom,viewport?viewport.offsetTop+viewport.height:Infinity);
-          if(cm.documentTop+cm.lineBlockAt(end).bottom*cm.scaleY>bottom-inset){
-            const {EditorView}=cmView;
-            cm.dispatch({effects:EditorView.scrollIntoView(end,{y:'nearest',yMargin:inset})});
-          }
-        }
+        // A parser estimate is not the box's bottom. Scrolling to that source
+        // position can jump far past the rendered content. The height guard
+        // restores a missing native viewport without scrolling; wait for real
+        // geometry before following again.
+        this.height.updated();
         return;
       }
       // A new native widget can start collapsed. Presentation restores the
