@@ -2,7 +2,6 @@ import {browserFetch} from './browser-fetch';
 import type {CreateThreadCommand,TurnStartCommand} from './send-contracts';
 import {isRecord,parseJson} from '../shared/values';
 import {readWireProjects,readThreadList,readMetadataSnapshot} from './wire-readers';
-import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import {T3_RESPONSE_MAX_BYTES,T3ResponseTooLargeError} from './t3-response-limits';
 import {Buffer} from 'buffer/';
 import {sha1} from '@noble/hashes/legacy';
@@ -42,7 +41,7 @@ export function pairingInput(address:string,code=''):{url:string;code:string}{
  u.hash='';u.pathname='/';return {url:endpoint(u.href),code:token};
 }
 export async function jsonHttp(url:string,options:RequestInit={},fetcher:Fetcher=browserFetch):Promise<unknown>{
- const controller=new AbortController(),cancel=()=>controller.abort(options.signal?.reason);const timer=setTimeout(()=>controller.abort(),30000);
+ const controller=new AbortController(),cancel=()=>controller.abort(options.signal?.reason);
  if(options.signal?.aborted)cancel();else options.signal?.addEventListener('abort',cancel,{once:true});
  try{
   requestAborted(controller.signal);
@@ -57,7 +56,7 @@ export async function jsonHttp(url:string,options:RequestInit={},fetcher:Fetcher
   else {body=await abortableRead(r.text(),controller.signal);if(Buffer.byteLength(body)>T3_RESPONSE_MAX_BYTES)throw new T3ResponseTooLargeError();}
   try{return parseJson(body);}catch{throw Error('T3 returned an invalid response; response contents withheld.');}
  }catch(e){requestAborted(options.signal??undefined);if(e instanceof Error && (e.message.startsWith('T3 ')||e.message.startsWith('Use ')))throw e;throw Object.assign(Error('Cannot reach T3 directly. Check its public address, network access, and that T3 is running. Nothing is queued.'),{cause:e});}
- finally{clearTimeout(timer);options.signal?.removeEventListener('abort',cancel);}
+ finally{options.signal?.removeEventListener('abort',cancel);}
 }
 export async function descriptor(url:string,fetcher?:Fetcher,signal?:AbortSignal){
  const d=await jsonHttp(endpoint(url)+'/.well-known/t3/environment',{signal},fetcher);

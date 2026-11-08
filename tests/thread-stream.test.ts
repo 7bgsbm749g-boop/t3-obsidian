@@ -5,6 +5,19 @@ import {T3ResponseTooLargeError} from '../src/connection/t3-response-limits';
 import {completedSetup,preparationItem} from './fixtures/worktree-setup';
 import {RouteStatus} from '../src/connection/route-status';
 
+test('a slow opening and a healthy long-lived subscription remain active until the caller stops',async t=>{
+ t.mock.timers.enable({apis:['setTimeout','Date']});const sockets:any[]=[],failures:Error[]=[],items:any[]=[];
+ const api=async()=>({ticket:'synthetic'});
+ const watcher=watchThread('thread',async()=>({origin:'https://fixture',api}),{item:item=>items.push(item),reconnecting:error=>failures.push(error)},()=>{const socket:any={send(){},close(){socket.onclose?.();}};sockets.push(socket);return socket;},undefined,{afterSequence:()=>0,pollSnapshots:false});
+ const settle=async()=>{for(let n=0;n<12;n++)await Promise.resolve();};
+ try{
+  await settle();t.mock.timers.tick(60_000);await settle();assert.equal(sockets.length,1);assert.deepEqual(failures,[]);
+  sockets[0].onopen();t.mock.timers.tick(10*60_000);await settle();assert.equal(sockets.length,1);assert.deepEqual(failures,[]);
+  sockets[0].onmessage({data:JSON.stringify({_tag:'Chunk',requestId:'1',values:[{kind:'synchronized'}]})});assert.equal(items.length,1);
+  watcher.stop();t.mock.timers.tick(60_000);await settle();assert.equal(sockets.length,1);
+ }finally{watcher.stop();t.mock.timers.reset();}
+});
+
 test('stream-only routes stay active until failure or stop, and reconnect with a fresh live lease',async t=>{
  t.mock.timers.enable({apis:['setTimeout','Date']});const status=new RouteStatus(),sockets:any[]=[];
  const api=Object.assign(async()=>({ticket:'synthetic'}),{trackConnection:(connection:any)=>status.track('stream-route',connection)});

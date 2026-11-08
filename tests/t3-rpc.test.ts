@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {connectT3Rpc,T3ConnectionTimeoutError,T3RequestTimeoutError,type RpcClock,type T3Api} from '../src/connection/t3-rpc';
+import {connectT3Rpc,type RpcClock,type T3Api} from '../src/connection/t3-rpc';
 import {T3ResponseTooLargeError} from '../src/connection/t3-response-limits';
 
 const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
@@ -18,18 +18,11 @@ function fixture(){
   return {open,advance,requests,emit,reply:(id:string,value:any)=>emit({_tag:'Exit',requestId:id,exit:{_tag:'Success',value}}),silent:()=>{pongs=false;},closes:()=>closes,timers};
 }
 
-test('route observers see an actual opened socket and lose active status after health failure',async()=>{
- const h=fixture(),seen:Array<{readonly closed:boolean;readonly error?:Error}>=[];
- assert.equal(seen.length,0);const rpc=await h.open(connection=>seen.push(connection));assert.equal(seen.length,1);assert.equal(seen[0].closed,false);
- h.silent();await h.advance(8000);assert.equal(seen[0].closed,true);assert.ok(seen[0].error instanceof T3ConnectionTimeoutError);assert.equal(rpc.closed,true);
-});
-
-test('a socket that appears open but drops every frame is confirmed dead before the old request deadline',async()=>{
-  const h=fixture(),rpc=await h.open();h.silent();
-  const pending=rpc.call('projects.readFile',{cwd:'/synthetic',relativePath:'small.json'});
-  const rejected=assert.rejects(pending,(e:any)=>e instanceof T3ConnectionTimeoutError&&e.rpcMethod==='projects.readFile'&&e.confirmed&&e.elapsedMs===8000&&e.pendingCount===1);
-  await flush();await h.advance(8000);await rejected;
-  assert.equal(rpc.closed,true);assert.equal(h.closes(),1);assert.equal(h.timers.size,0);
+test('elapsed time does not fail a silent open socket or its pending requests',async()=>{
+ const h=fixture(),seen:Array<{readonly closed:boolean}>=[],rpc=await h.open(connection=>seen.push(connection));h.silent();
+ const pending=rpc.call('projects.readFile',{});await flush();await h.advance(150_000);
+ assert.equal(rpc.closed,false);assert.equal(seen[0].closed,false);assert.equal(h.closes(),0);
+ h.reply('1','late result');assert.equal(await pending,'late result');rpc.close();
 });
 
 test('unary final replies above the former limit work and oversized errors retain their size identity',async()=>{
@@ -37,28 +30,12 @@ test('unary final replies above the former limit work and oversized errors retai
  const blocked=rpc.call('orchestration.getTurnItem',{threadId:'thread',itemId:'large'}),rejected=assert.rejects(blocked,T3ResponseTooLargeError);h.reply('2',{text:'x'.repeat(8_000_001)});await rejected;assert.equal(rpc.closed,true);assert.equal(h.timers.size,0);
 });
 
-test('slow file requests do not close a responding shared socket or cancel unrelated requests',async()=>{
-  const h=fixture(),rpc=await h.open();
-  const slow=rpc.call('projects.readFile',{relativePath:'slow.json'}),rejected=assert.rejects(slow,(e:any)=>e instanceof T3RequestTimeoutError&&e.rpcMethod==='projects.readFile');
-  await flush();const fast=rpc.call('projects.writeFile',{relativePath:'other.json',contents:'synthetic'});await flush();
-  h.reply('2',{saved:true});assert.deepEqual(await fast,{saved:true});
-  await h.advance(15_000);await rejected;assert.equal(rpc.closed,false);assert.equal(h.closes(),0);
-  const next=rpc.call('projects.readFile',{relativePath:'new.json'});await flush();h.reply('3','healthy');assert.equal(await next,'healthy');
-  rpc.close();assert.equal(h.timers.size,0);
-});
-
-test('an idle or suspended connection checks health before sending another operation and shares one probe',async()=>{
-  const h=fixture(),rpc=await h.open();h.silent();await h.advance(5000);
-  const first=rpc.call('projects.readFile',{}),second=rpc.call('projects.readFile',{});
-  const rejected=Promise.all([assert.rejects(first,T3ConnectionTimeoutError),assert.rejects(second,T3ConnectionTimeoutError)]);
-  await flush();assert.equal(h.requests.filter(x=>x._tag==='Ping').length,1);assert.equal(h.requests.filter(x=>x._tag==='Request').length,0);
-  await h.advance(3000);await rejected;assert.equal(h.closes(),1);
-});
-
-test('a valid concurrent reply proves health without a Pong and a late reply cannot reopen a failed socket',async()=>{
-  const h=fixture(),rpc=await h.open();h.silent();const pending=rpc.call('projects.readFile',{});await flush();await h.advance(5000);
-  h.reply('1','alive');assert.equal(await pending,'alive');assert.equal(rpc.closed,false);
-  await h.advance(8000);assert.equal(rpc.closed,true);h.reply('1','late');assert.equal(rpc.closed,true);assert.equal(h.closes(),1);
+test('a slow request survives while independent requests finish and a real close fails pending work',async()=>{
+ const h=fixture(),rpc=await h.open(),slow=rpc.call('projects.readFile',{});await flush();
+ const fast=rpc.call('projects.writeFile',{});await flush();h.reply('2',{saved:true});assert.deepEqual(await fast,{saved:true});
+ await h.advance(150_000);assert.equal(rpc.closed,false);h.reply('1','late');assert.equal(await slow,'late');
+ const stopped=rpc.call('projects.readFile',{});await flush();const rejected=assert.rejects(stopped,/closed/);rpc.close();await rejected;
+ assert.equal(rpc.closed,true);assert.equal(h.closes(),1);assert.equal(h.timers.size,0);
 });
 
 test('MCP provider permission failures remain actionable without closing the connection',async()=>{

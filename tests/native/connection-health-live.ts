@@ -1,9 +1,9 @@
-/** Bounded read-only test of the real T3 relay and a silently broken socket. */
+/** Read-only relay test: delayed frames stay valid; explicit close cancels. */
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
-import {connectT3Rpc,T3ConnectionTimeoutError} from '../../src/connection/t3-rpc';
+import {connectT3Rpc} from '../../src/connection/t3-rpc';
 import {environmentApi} from '../../src/connection/direct';
 import {requireEvidenceDirectory} from '../../scripts/evidence-paths.mjs';
 
@@ -11,11 +11,17 @@ async function main(){
  const evidence=await requireEvidenceDirectory(process.argv[2]??'','Private evidence directory required.');await mkdir(evidence,{recursive:true});
  const settings=JSON.parse(await readFile('/home/ubuntu/vaults/QLO2/.obsidian/plugins/send-to-t3-code/data.json','utf8')),paired=settings.paired.find((c:any)=>c.environmentId==='3630e7fa-f1df-4631-b5a2-6086ddaf28a1');
  const cli='/home/ubuntu/.local/bin/t3',base='/home/ubuntu/.t3',issued=JSON.parse(execFileSync(cli,['auth','session','issue','--base-dir',base,'--ttl','5m','--label','connection-health-read-only-validation','--json','--scope','filesystem:read'],{encoding:'utf8'}));
- let drop=false,pongs=0;
+ let drop=false;const held:Array<()=>void>=[];
  const socket=(url:string)=>{
   const ws=new WebSocket(url);
   return new Proxy(ws,{get:(target,key)=>{const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;},set:(target,key,value)=>{
-   if(key==='onmessage')target.onmessage=event=>{if(drop)return;try{const frames=JSON.parse(String(event.data));pongs+=(Array.isArray(frames)?frames:[frames]).filter((f:any)=>f._tag==='Pong').length;}catch{}value(event);};
+   if(key==='onmessage')target.onmessage=event=>{
+    if(!drop){value(event);return;}
+    const decoded=JSON.parse(String(event.data)),frames=Array.isArray(decoded)?decoded:[decoded];
+    const health=frames.filter(frame=>frame?._tag==='Ping'||frame?._tag==='Pong'),results=frames.filter(frame=>frame?._tag!=='Ping'&&frame?._tag!=='Pong');
+    if(health.length)value(new MessageEvent('message',{data:JSON.stringify(health)}));
+    if(results.length)held.push(()=>value(new MessageEvent('message',{data:JSON.stringify(results)})));
+   };
    else Reflect.set(target,key,value,target);return true;
   }});
  };
@@ -24,12 +30,15 @@ async function main(){
   const api=await environmentApi({transport:'direct',host:'direct',executable:'',url:paired.url,environmentId:paired.environmentId},{url:paired.url,environmentId:paired.environmentId,token:issued.token,expiresAt:Date.parse(issued.expiresAt)});
   rpc=await connectT3Rpc(api,paired.url,socket);const payload={cwd:'/home/ubuntu/vaults/QLO2',relativePath:'.obsidian/t3-code/vault-identity.json'};
   const start=performance.now();await rpc.call('projects.readFile',payload);const initialReadMs=performance.now()-start;
-  await new Promise(resolve=>setTimeout(resolve,5500));assert.ok(pongs>0,'The actual server must answer the client Ping.');
-  drop=true;const brokenAt=performance.now();let failure:T3ConnectionTimeoutError|undefined;
-  await assert.rejects(rpc.call('projects.readFile',payload),(error:any)=>{failure=error;return error instanceof T3ConnectionTimeoutError;});assert.equal(rpc.closed,true);
-  const confirmedDeadMs=performance.now()-brokenAt;
+  drop=true;const delayedAt=performance.now();let settled=false;
+  const delayed=rpc.call('projects.readFile',payload).then(value=>{settled=true;return value;});
+  const delayedMs=35_000;await new Promise(resolve=>setTimeout(resolve,delayedMs));
+  assert.equal(settled,false);assert.equal(rpc.closed,false);assert.ok(held.length>0,'Retain actual server frames for this owned socket.');
+  drop=false;for(const deliver of held.splice(0))deliver();await delayed;
+  const acceptedLateMs=performance.now()-delayedAt;
+  drop=true;const cancelled=assert.rejects(rpc.call('projects.readFile',payload),/closed/i);rpc.close();await cancelled;
   drop=false;fresh=await connectT3Rpc(api,paired.url);const freshAt=performance.now();await fresh.call('projects.readFile',payload);
-  const result={at:new Date().toISOString(),status:'passed',transport:'real authenticated relay file RPC; incoming frames discarded on this test socket only',initialReadMs,pongs,confirmedDeadMs,timeout:{kind:failure!.kind,method:failure!.rpcMethod,elapsedMs:failure!.elapsedMs,idleMs:failure!.idleMs},freshReadMs:performance.now()-freshAt,coverage:{realRelay:true,providerDispatch:false,nativeWindows:false,nativeMobile:false}};
+  const result={at:new Date().toISOString(),status:'passed',transport:'real authenticated relay file RPC; frames delayed on this test socket only',initialReadMs,acceptedLateMs,explicitCloseCancelled:true,freshReadMs:performance.now()-freshAt,coverage:{realRelay:true,providerDispatch:false,nativeWindows:false,nativeMobile:false}};
   await writeFile(join(evidence,'real-relay-health.json'),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
  }finally{rpc?.close();fresh?.close();execFileSync(cli,['auth','session','revoke','--base-dir',base,issued.sessionId],{stdio:'pipe'});}
 }

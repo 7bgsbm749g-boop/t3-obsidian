@@ -34,3 +34,14 @@ test('declared oversized HTTP bodies are rejected before acquiring a reader',asy
   const fetcher=async()=>({ok:true,headers:new Headers({'content-length':'8000001'}),body:{getReader:()=>{read=true;throw Error('Unexpected read');}}});
   await assert.rejects(jsonHttp('https://t3.example/api/test',{},fetcher as any),/response exceeds 8 MB/);assert.equal(read,false);
 });
+
+
+test('a slow HTTP response remains cancellable and is accepted after the former deadline',async context=>{
+ context.mock.timers.enable({apis:['setTimeout']});
+ let reply!:(response:Response)=>void,signal:AbortSignal|undefined;
+ const work=jsonHttp('https://fixture/api/test',{},async(_url,options)=>{signal=options?.signal as AbortSignal;return new Promise(resolve=>{reply=resolve;});});
+ context.mock.timers.tick(300_000);assert.equal(signal?.aborted,false);
+ reply(new Response('{"complete":true}'));assert.deepEqual(await work,{complete:true});
+ const cancel=new AbortController();const stopped=jsonHttp('https://fixture/api/test',{signal:cancel.signal},()=>new Promise(()=>{}));
+ cancel.abort(Error('User cancelled'));await assert.rejects(stopped,/User cancelled/);
+});

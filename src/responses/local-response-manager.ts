@@ -188,15 +188,15 @@ export class LocalResponseManager {
     if(!this.canFinishClosed(runtime)&&!this.io.isOpen(runtime.request.notePath))return {saved:false,reason:'note-closed'};
     return {saved:false,reason:runtime.pendingSave??'saving'};
   }
-  /** Imports report success only after the checked note write. The bounded
-   * wait leaves the registered response running when Sync or verification waits. */
-  async waitForSave(id:string,timeoutMs=15_000):Promise<LocalResponseSaveResult>{
-    const deadline=Date.now()+Math.max(0,timeoutMs);
+  /** A blocked save reports its state; active saves retain their checked write. */
+  async waitForSave(id:string,_legacyWait?:number):Promise<LocalResponseSaveResult>{
     for(;;){
       const runtime=this.jobs.get(id);if(runtime)this.finish(runtime);
       const result=this.saveResult(runtime);
-      if(result.saved||!runtime||runtime.done||runtime.stopped||this.closed||Date.now()>=deadline)return result;
-      await new Promise<void>(resolve=>setTimeout(resolve,Math.min(100,Math.max(1,deadline-Date.now()))));
+      if(result.saved||!runtime||runtime.done||runtime.stopped||this.closed||result.reason!=='saving')return result;
+      // A checked save already owns its completion promise. Wake when that
+      // operation finishes instead of delaying completion through a timer.
+      if(runtime.work)await runtime.work;else return result;
     }
   }
   private finish(runtime:Runtime){

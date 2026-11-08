@@ -36,8 +36,8 @@ export async function readInlineSnapshot(access:ThreadAccess,threadId:string,pro
 }
 
 /** Bounded, one-shot protocol replay for exact start/turn evidence absent from
- * canonical latestTurn. The caller's native freshness deadline owns aborting
- * this operation; no renderer timer, polling loop, or database is involved. */
+ * canonical latestTurn. The caller owns lifecycle cancellation; no elapsed
+ * deadline, polling loop, or database is involved. */
 export async function readInlineEvents(access:ThreadAccess,threadId:string,afterSequence:number,signal:AbortSignal,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url)):Promise<ThreadStreamItem[]> {
   const issued=await access.api('/api/auth/websocket-ticket',{});
   if(signal.aborted)throw Error('T3 binding recovery canceled.');
@@ -73,14 +73,13 @@ export async function readInlineEvents(access:ThreadAccess,threadId:string,after
 /** The Effect RPC stream stays open until stopped. Every reconnect asks for a
  * fresh snapshot, so lost deltas cannot duplicate text or leave a gap. */
 export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url),historyTargets?:()=>InlineHistoryTargets,replay?:{afterSequence:()=>number|undefined;pollSnapshots?:boolean|(()=>boolean);pollImmediately?:boolean;titleOnly?:boolean}) {
-  let stopped=false,socket:WebSocket|undefined,timer:ReturnType<typeof setTimeout>|undefined,rotation:ReturnType<typeof setTimeout>|undefined,pollTimer:ReturnType<typeof setTimeout>|undefined,attempt=0;
+  let stopped=false,socket:WebSocket|undefined,timer:ReturnType<typeof setTimeout>|undefined,pollTimer:ReturnType<typeof setTimeout>|undefined,attempt=0;
   let access:ThreadAccess|undefined;
   let snapshotBlocked=false;
   const pollEnabled=()=>!snapshotBlocked&&(typeof replay?.pollSnapshots==='function'?replay.pollSnapshots():replay?.pollSnapshots!==false);
   const closeAccess=(reason:ThreadAccessCloseReason)=>{if(pollTimer)clearTimeout(pollTimer);pollTimer=undefined;const old=access;access=undefined;if(old?.close)void Promise.resolve(old.close(reason)).catch(()=>{});};
   const retry=(error:Error)=>{
     if(stopped)return;
-    if(rotation)clearTimeout(rotation);
     logFailure('stream.reconnecting',error,{threadId,attempt});logEvent('stream.disconnected',{threadId});
     callbacks.reconnecting(error);closeAccess('stream-reconnect');
     const delay=Math.min(30_000,1000*2**Math.min(attempt++,5));
@@ -135,13 +134,11 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       const url=new URL('/ws',ready.origin);url.protocol=url.protocol==='https:'?'wss:':'ws:';
       url.searchParams.set('wsTicket',issued.ticket);url.searchParams.set('orchestrationProtocol',String(T3_PROTOCOL_VERSION));
       const openedSocket=socket=ws=makeSocket(url.href);
-      const opening=setTimeout(()=>fail(Error('T3 thread stream did not connect.')),15_000);
       openedSocket.onopen=()=>{
-        clearTimeout(opening);if(stopped){openedSocket.close();return;}
+        if(stopped){openedSocket.close();return;}
         ready.api.trackConnection?.({get closed(){return ended||stopped;}});
         socketOpen=true;
         logEvent('stream.connected',{threadId});attempt=0;
-        rotation=setTimeout(()=>fail(Error('Refreshing the T3 stream session.')),4*60_000);
         openedSocket.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,acceptBoundedSnapshot:true,acceptCompactTurnItems:true,...(replay?{afterSequence:replay.afterSequence(),requestCompletionMarker:true}:{})},headers:[]}));
         subscribeSetup();
         // Subscription hosts already own a full canonical polling loop. A second
@@ -186,9 +183,9 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
         }catch(error){fail(error instanceof Error?error:Error('T3 returned an invalid thread stream.'));}
       };
       openedSocket.onerror=()=>fail(Error('T3 thread stream connection failed.'));
-      openedSocket.onclose=()=>{clearTimeout(opening);fail(Error('T3 thread stream closed.'));};
+      openedSocket.onclose=()=>{fail(Error('T3 thread stream closed.'));};
     }catch(error){retry(error instanceof Error?error:Error('Cannot open T3 thread stream.'));}
   };
   void connect();
-  return {stop(){logEvent('stream.stopped',{threadId});stopped=true;if(timer)clearTimeout(timer);if(rotation)clearTimeout(rotation);if(socket){try{socket.send(JSON.stringify({_tag:'Interrupt',requestId:'1'}));}catch{/* Connection is already gone. */}socket.close();}closeAccess('stream-stopped');}};
+  return {stop(){logEvent('stream.stopped',{threadId});stopped=true;if(timer)clearTimeout(timer);if(socket){try{socket.send(JSON.stringify({_tag:'Interrupt',requestId:'1'}));}catch{/* Connection is already gone. */}socket.close();}closeAccess('stream-stopped');}};
 }

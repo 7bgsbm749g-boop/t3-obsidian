@@ -63,7 +63,7 @@ export class DeviceResponseManager {
   responseStatus(id:string){return this.local?.status(id);}
   frozenBody(id:string){return this.local?.frozenBody(id);}
   retrySave(binding:ResponseRequest,hash:string,frozenBody?:string){if(this.stopped)throw Error('The plugin is disabled.');return this.manager().retrySave(binding,hash,frozenBody);}
-  waitForSave(id:string,timeoutMs?:number):Promise<LocalResponseSaveResult>{return this.stopped||!this.local?Promise.resolve({saved:false,reason:'plugin-unavailable'}):this.local.waitForSave(id,timeoutMs);}
+  waitForSave(id:string,_legacyWait?:number):Promise<LocalResponseSaveResult>{return this.stopped||!this.local?Promise.resolve({saved:false,reason:'plugin-unavailable'}):this.local.waitForSave(id);}
   localResponse(id:string){const record=this.local?.record(id);return record?{record,host:record.request.host}:undefined;}
   cachedResponse(id:string){return this.localResponse(id);}
   async relocateResponse(_host:ResponseStorageTarget,record:ResponseRecord,path:string){await this.register({...record.request,notePath:path});return this.local!.record(record.request.id)!;}

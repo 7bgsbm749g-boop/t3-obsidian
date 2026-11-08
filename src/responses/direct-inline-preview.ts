@@ -162,11 +162,7 @@ export class DirectInlinePreview {
     const turnId=this.interruptedTurnId;if(!turnId)return;
     if(this.verifiedInterruptions.has(turnId)&&!delegatedWork(this.state,this.turnIds).moving)return;
     const generation=this.generation,request=this.record.request;
-    let timeout:unknown;
-    const work=Promise.race([
-      this.access().then(async access=>{try{return await readInlineSnapshot(access,request.threadId,request.projectId,{messageIds:[this.messageId()],turnIds:this.turnIds});}finally{await access.close?.();}}),
-      new Promise<never>((_resolve,reject)=>{timeout=this.clock.later(()=>reject(Error('T3 interruption verification timed out.')),10_000);}),
-    ]).then(snapshot=>{
+    const work=this.access().then(async access=>{try{return await readInlineSnapshot(access,request.threadId,request.projectId,{messageIds:[this.messageId()],turnIds:this.turnIds});}finally{await access.close?.();}}).then(snapshot=>{
       if(this.stopped||generation!==this.generation)return;
       const checked=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
       if(checked.turns?.[turnId]?.state!=='interrupted')return;
@@ -178,7 +174,7 @@ export class DirectInlinePreview {
       this.nextInterruptionVerification=this.clock.now()+1200;
       this.schedule(true);
     }).catch(error=>{if(!this.stopped&&generation===this.generation){logFailure('stream.direct.interruption-verification',error,{bindingId:request.id});if(responseTooLarge(error)){this.failure={kind:'response-too-large',operation:'snapshot'};this.schedule(true);}else this.connectionFailed(error);}})
-      .finally(()=>{this.clock.cancel(timeout);if(this.interruptionVerification===work){this.interruptionVerification=undefined;this.nextInterruptionVerification=this.clock.now()+1200;}});
+      .finally(()=>{if(this.interruptionVerification===work){this.interruptionVerification=undefined;this.nextInterruptionVerification=this.clock.now()+1200;}});
     this.interruptionVerification=work;
   }
   private verifyCompletion(){
@@ -187,22 +183,19 @@ export class DirectInlinePreview {
     const turnId=this.completionTurnId!,key=finalResponseKey(this.state,turnId),state=this.state;
     if(state.protocolVersion===2&&(!key||key===this.verifiedKey||this.failure?.operation==='final-reply'&&this.failure.key===key))return;
     if(state.protocolVersion!==2&&this.failure)return;
-    let timeout:unknown,access:ThreadAccess|undefined,closed=false,expired=false;
+    let access:ThreadAccess|undefined,closed=false,expired=false;
     const close=()=>{
       if(!access||closed)return;closed=true;
       try{void Promise.resolve(access.close?.(expired?'late-access':'caller-closed')).catch(error=>logFailure('stream.direct.verification-close',error,{bindingId:request.id}));}catch(error){logFailure('stream.direct.verification-close',error,{bindingId:request.id});}
     };
     const cancel=()=>{expired=true;close();};this.closeVerification=cancel;
-    const work=Promise.race([
-      this.access().then(async ready=>{
+    const work=this.access().then(async ready=>{
         access=ready;
         try{
           if(expired||this.stopped||generation!==this.generation)throw Error('T3 completion verification cancelled.');
           return await (state.protocolVersion===2?checkFinalResponse(ready,request.threadId,state,turnId):readInlineSnapshot(ready,request.threadId,request.projectId,{messageIds:[this.messageId()],turnIds:this.turnIds}));
         }finally{close();}
-      }),
-      new Promise<never>((_resolve,reject)=>{timeout=this.clock.later(()=>{cancel();reject(Error('T3 completion verification timed out.'));},10_000);}),
-    ]).then(result=>{
+      }).then(result=>{
       if(this.stopped||generation!==this.generation)return;
       if(state.protocolVersion===2){
         if(finalResponseKey(this.state,turnId)!==key)return;
@@ -217,7 +210,7 @@ export class DirectInlinePreview {
         this.verifiedSequence=result.snapshotSequence;
       }
       this.schedule(true);
-    }).catch(error=>{if(!this.stopped&&generation===this.generation){logFailure('stream.direct.completion-verification',error,{bindingId:request.id});if(responseTooLarge(error)){this.failure={kind:'response-too-large',operation:state.protocolVersion===2?'final-reply':'snapshot',key};this.schedule(true);}else this.connectionFailed(error);}}).finally(()=>{cancel();if(this.closeVerification===cancel)this.closeVerification=undefined;this.clock.cancel(timeout);if(this.verification===work){this.verification=undefined;this.nextVerification=this.clock.now()+1000;}});
+    }).catch(error=>{if(!this.stopped&&generation===this.generation){logFailure('stream.direct.completion-verification',error,{bindingId:request.id});if(responseTooLarge(error)){this.failure={kind:'response-too-large',operation:state.protocolVersion===2?'final-reply':'snapshot',key};this.schedule(true);}else this.connectionFailed(error);}}).finally(()=>{cancel();if(this.closeVerification===cancel)this.closeVerification=undefined;if(this.verification===work){this.verification=undefined;this.nextVerification=this.clock.now()+1000;}});
     this.verification=work;
   }
   reconnect(open:boolean){if(this.stopped)return;this.suspend();this.connectionIssue=undefined;this.connectionChanged?.();this.tick(open);}

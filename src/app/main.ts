@@ -91,7 +91,7 @@ import { collectImages, imageReferenceDefinitions, MAX_IMAGE_BYTES } from '../no
 import {vaultHost,loadVaultHost,mergeVaultHost,type VaultHost} from './vault-host';
 import {ensureNoProject,NO_PROJECT,isNoProjectKey,noProjectKey,noProjectMachine} from '../projects/no-project';
 import {CompletionSettings,CompletionJob,contentHash} from '../responses/completion';
-import {Connection,Project,Request,RequestDeliveryError,acceptedRequestThread,parseProjects,runBridge,sendRequest,configureBridge,retiredConnection,projectKey,projectLabel,withTimeout} from './bridge';
+import {Connection,Project,Request,RequestDeliveryError,acceptedRequestThread,parseProjects,runBridge,sendRequest,configureBridge,retiredConnection,projectKey,projectLabel} from './bridge';
 import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,type FolderLink} from '../projects/folder-link';
 import {loadFolderLinkChanges,mergeFolderLinkChanges,applyFolderLinkChanges,changedFolderLinks,mergeLegacyFolderLinks,type FolderLinkChange} from '../projects/folder-link-sync';
 import {installPaletteChat,type PaletteChatController} from '../conversations/palette-chat';
@@ -403,7 +403,7 @@ export default class SendToT3 extends Plugin {
     if(typeof this.registerMarkdownCodeBlockProcessor==='function'){
       const prefix=`html-result:v1:${this.settings.vaultId}:`;
       const store=new HtmlResultStore({read:key=>deviceState(prefix+key),write:async(key,value)=>{await deviceState(prefix+key,value);}},environmentId=>this.inlineThreadAccess(environmentId),async url=>{
-        const response=await withTimeout(requestUrl({url,headers:{Accept:'text/html'},throw:false}),30_000);
+        const response=await requestUrl({url,headers:{Accept:'text/html'},throw:false});
         return {status:response.status,mimeType:Object.entries(response.headers).find(([key])=>key.toLowerCase()==='content-type')?.[1]??'',bytes:response.arrayBuffer};
       },{isSignInError:signInRequired,onDiagnostic:diagnostic=>logEvent('html.result.failure',diagnostic as unknown as Record<string,unknown>,'warning')});
       this.htmlResults=new HtmlResultViews(this.app,store,{onSignIn:()=>this.openSettings()});this.htmlResults.install(this);
