@@ -5,7 +5,7 @@ import {runInNewContext} from './obsidian-context';
 import {createRequire} from 'node:module';
 import type {RunImportResult} from '../src/conversations/run-import';
 
-const bundle=build({stdin:{contents:"export {ImportRunModal,RunImportPicker} from './src/conversations/run-import-ui';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
+const bundle=build({stdin:{contents:"export {ImportRunModal,RunImportPicker,openRunImport} from './src/conversations/run-import-ui';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
 const drain=async()=>{for(let i=0;i<4;i++)await Promise.resolve();};
 function deferred<T>(){let resolve!:(value:T)=>void,reject!:(error:Error)=>void;const promise=new Promise<T>((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
 async function fixture(attach:(follow:boolean)=>Promise<RunImportResult>){
@@ -91,4 +91,22 @@ test('run preview dwell, stale work, search names and modal cleanup share one li
  first.events.pointermove({movementX:2,movementY:0});assert.equal(requests.length,3,'actual pointer movement restores hover control');
  picker.onChooseItem({...base,unavailable:'Late failure'});assert.equal(picked.length,0);
  picker.onClose();assert.equal(requests[2].signal.aborted,true);assert.equal(unloads,3);assert.equal(second.classes.has('is-previewing'),false);assert.equal(timers.size,0);assert.equal(keyEvents.keydown,undefined);
+});
+
+test('native close-before-choose keeps selection alive while cancelled and replaced flows stop',async()=>{
+ const opened:any[]=[],signals:AbortSignal[]=[],module={exports:{} as any},realRequire=createRequire(import.meta.url);
+ class Modal {modalEl={ownerDocument:{defaultView:{clearTimeout(){},removeEventListener(){}}}};open(){opened.push(this);}close(){this.onClose();}onClose(){}}
+ class Suggest extends Modal {placeholder='';setPlaceholder(value:string){this.placeholder=value;}select(item:unknown){this.close();(this as any).onChooseItem(item);}}
+ runInNewContext((await bundle).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{FuzzySuggestModal:Suggest,Modal,Notice:class{}}:realRequire(id),AbortController,queueMicrotask});
+ const app={},project={id:'project'},thread={id:'thread',projectId:'project'},run={messageId:'prompt',turnId:'run',turn:{turnId:'run',state:'completed'},status:'Completed',prompt:'Synthetic',createdAt:'2026-11-07'};
+ const pending=deferred<any[]>();let calls=0;
+ const host={projects:()=>[project],projectLabel:()=>'',threads:async(_project:unknown,signal:AbortSignal)=>{signals.push(signal);return ++calls===1?[thread]:pending.promise;},runs:async()=>[run],attach:async()=>{throw Error('No import was requested.');}};
+ module.exports.openRunImport(app,'Synthetic.md',host);opened.at(-1).select(project);await drain();
+ assert.equal(signals[0].aborted,false);assert.equal(opened.at(-1).placeholder,'Choose the source T3 thread');
+ opened.at(-1).select(thread);await drain();assert.equal(opened.at(-1).placeholder,'Choose a T3 response');
+ opened.at(-1).select(run);await drain();assert.equal(opened.at(-1).constructor.name,'ImportRunModal');assert.equal(signals[0].aborted,true);
+ module.exports.openRunImport(app,'Synthetic.md',host);opened.at(-1).select(project);await drain();
+ module.exports.openRunImport(app,'Synthetic.md',host);const replacement=opened.at(-1);assert.equal(signals[1].aborted,true);
+ pending.resolve([thread]);await drain();assert.equal(opened.at(-1),replacement,'late results cannot reopen an old flow');
+ replacement.close();await drain();replacement.select(project);await drain();assert.equal(signals.at(-1)?.aborted,true);assert.equal(opened.at(-1),replacement);
 });

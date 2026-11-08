@@ -41,7 +41,7 @@ export class ThreadAccessCache {
       const expires=Math.min(this.now()+180_000,access.expiresAt===undefined?Infinity:access.expiresAt-5000);
       const entry:Entry={access,expires,borrowed:{
         get origin(){return access.origin;},
-        api:(path,payload)=>this.request(environmentId,path,payload),
+        api:(path,payload,options)=>this.request(environmentId,path,payload,options),
         // Stop helpers own their borrow, never the host's underlying session.
         close:reason=>access.trace?.('borrow-released',reason??'caller-closed'),
       }};
@@ -55,9 +55,9 @@ export class ThreadAccessCache {
     if(this.entries.get(environmentId)===entry){entry.expires=0;entry.reason='auth-rejected';}
   }
 
-  private async request(environmentId:string,path:string,payload?:unknown):Promise<unknown>{
+  private async request(environmentId:string,path:string,payload?:unknown,options?:{signal?:AbortSignal}):Promise<unknown>{
     // Reads and stream-ticket creation are safe to retry. Dispatch never is.
-    return this.perform(environmentId,access=>access.api(path,payload),payload===undefined&&!path.split('?')[0].endsWith('/dispatch')||path==='/api/auth/websocket-ticket');
+    return this.perform(environmentId,access=>access.api(path,payload,options),payload===undefined&&!path.split('?')[0].endsWith('/dispatch')||path==='/api/auth/websocket-ticket');
   }
   private async perform<T>(environmentId:string,operation:(access:ThreadAccess)=>Promise<T>,retry:boolean):Promise<T>{
     const entry=await this.acquire(environmentId);
