@@ -7,6 +7,8 @@ import {hiddenInlineMarkerExtension} from '../../src/conversations/inline-marker
 import {installResponsePresentation} from '../../src/responses/response-presentation';
 import {contentHash} from '../../src/responses/completion';
 import {EventJournal,configureDiagnostics,connectionDiagnosticPolicy,diagnosticCategory} from '../../src/app/diagnostics';
+import {DiagnosticArchive} from '../../src/app/diagnostic-archive';
+import {connectDiagnosticFiles} from '../../src/notes/connect-command-files';
 import {streamMemory} from '../../src/app/stream-memory-diagnostics';
 import type {ResponseRecord} from '../../src/responses/response-record';
 import type {ThreadStreamCallbacks,watchThread} from '../../src/conversations/thread-stream';
@@ -25,7 +27,10 @@ export default class StreamMemoryLab extends Plugin {
   private write(name:string,data:any){fs.writeFileSync(path.join(this.root,name),JSON.stringify(data,null,2));}
   async run(){
     await pause(800);const app=this.app,manager=nativeResponses(app),id=crypto.randomUUID(),startedAt=new Date().toISOString();
-    this.journal=new EventJournal({load:async()=>undefined,save:async state=>this.write('PERSISTED.json',state),id:()=>crypto.randomUUID(),context:{deviceId:'isolated-stream-memory',pluginVersion:'source-candidate'}},{...connectionDiagnosticPolicy,accept:event=>diagnosticCategory(event)!==undefined});
+    let archiveTime=Date.now();const archive=new DiagnosticArchive('fixture-vault','isolated-stream-memory',undefined,()=>archiveTime);
+    const logFiles=connectDiagnosticFiles({call:async(tag,input:any)=>{if(tag!=='projects.writeFile')throw Error('Unexpected log RPC');const destination=path.join(this.root,'machine',input.relativePath);fs.mkdirSync(path.dirname(destination),{recursive:true});fs.writeFileSync(destination,input.contents);return {};}},'/synthetic-machine');
+    const logTarget={environmentId:'synthetic',workspaceRoot:'/synthetic-machine',directory:'.t3-obsidian/diagnostics/fixture-vault/isolated-stream-memory'};
+    this.journal=new EventJournal({retain:event=>archive.record(event),load:async()=>undefined,save:async state=>this.write('PERSISTED.json',state),id:()=>crypto.randomUUID(),context:{deviceId:'isolated-stream-memory',pluginVersion:'source-candidate'}},{...connectionDiagnosticPolicy,accept:event=>diagnosticCategory(event)!==undefined});
     configureDiagnostics(this.journal);streamMemory.reset();streamMemory.sample('enabled');
     const saved='# Memory fixture\n\n'+responseAnchor(id)+'\n';
     const file=await app.vault.create('Memory.md',saved),leaf=app.workspace.getLeaf(false);await leaf.openFile(file);
@@ -48,10 +53,14 @@ export default class StreamMemoryLab extends Plugin {
     const capture=await require('@electron/remote').getCurrentWebContents().capturePage();fs.writeFileSync(path.join(this.root,'native.png'),capture.toPNG());
     this.preview.dispose();this.sources.dispose();leaf.detach();manager.refresh();manager.dispose();
     streamMemory.sample('manual',()=>({...manager.memoryStatus(),...this.sourceCounters()}));
-    await this.journal.flush();const log=this.journal.snapshot(),memory=log.events.filter(event=>event.event==='memory.streaming');
-    const serialized=JSON.stringify(log),samples=memory.filter(event=>event.fields.checkpoint==='sample');
-    const checks={visible,updates:updates>30,heapSupported:memory.some(event=>(event.fields.heap as any)?.status==='supported'),activitySamples:samples.length>=2,rateBound:samples.every((event,index)=>index===0||Date.parse(event.at)-Date.parse(samples[index-1].at)>=4900),noContent:!serialized.includes('SYNTHETIC_PRIVATE')&&!serialized.includes('synthetic growth'),bounded:log.events.length<=512&&Buffer.byteLength(JSON.stringify(log.events))<256000,disposed:closed===1&&this.sources.status().sources===0&&manager.memoryStatus().viewCount===0};
-    await app.vault.delete(file);this.write('RESULT.json',{startedAt,finishedAt:new Date().toISOString(),checks,pass:Object.values(checks).every(Boolean),updates,memoryEvents:memory.length,cleanup:{noteDeleted:!app.vault.getFileByPath('Memory.md'),backendThreadsCreated:0},log});
+    for(let i=0;i<700;i++)this.journal.record('memory.streaming',{checkpoint:'retention-fixture',bodyLength:i});
+    await this.journal.flush();await archive.settle();for(let i=0;i<8;i++){archiveTime+=5001;await archive.sync(logFiles,logTarget);}
+    const directory=path.join(this.root,'machine',logTarget.directory),segments=fs.readdirSync(directory,{recursive:true}).filter((name:string)=>name.endsWith('.jsonl'));
+    const retained=segments.flatMap((name:string)=>fs.readFileSync(path.join(directory,name),'utf8').trim().split('\n').map((line:string)=>JSON.parse(line)));
+    await archive.close();const log=this.journal.snapshot(),memory=retained.filter((event:any)=>event.event==='memory.streaming');
+    const serialized=JSON.stringify(retained),samples=memory.filter((event:any)=>event.fields.checkpoint==='sample');
+    const checks={automaticPlainFiles:segments.length>1,unlimitedRetainedHistory:retained.length>700,visible,updates:updates>30,heapSupported:memory.some((event:any)=>(event.fields.heap as any)?.status==='supported'),activitySamples:samples.length>=2,rateBound:samples.every((event:any,index:number)=>index===0||Date.parse(event.at)-Date.parse(samples[index-1].at)>=4900),noContent:!serialized.includes('SYNTHETIC_PRIVATE')&&!serialized.includes('synthetic growth'),bounded:log.events.length<=512&&Buffer.byteLength(JSON.stringify(log.events))<256000,disposed:closed===1&&this.sources.status().sources===0&&manager.memoryStatus().viewCount===0};
+    await app.vault.delete(file);this.write('RESULT.json',{startedAt,finishedAt:new Date().toISOString(),checks,pass:Object.values(checks).every(Boolean),updates,memoryEvents:memory.length,archive:{directory,segments:segments.length,retainedEvents:retained.length},cleanup:{noteDeleted:!app.vault.getFileByPath('Memory.md'),backendThreadsCreated:0},log});
     await this.journal.close();configureDiagnostics();streamMemory.reset();
   }
   private sourceCounters(){const status=this.sources!.status();return {sourceCount:status.sources,readerCount:status.readers,cacheCharacters:status.cacheCharacters};}

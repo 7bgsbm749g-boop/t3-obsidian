@@ -1,59 +1,63 @@
-# Streaming memory diagnostics
+# Automatic diagnostic log files
 
-In **T3 Code → Advanced → Troubleshooting**, enable **Streaming memory logging**
-on the affected device. Connection and Response logging add connection identities
-and render/save timing. Leave Follow off unless scroll behavior is relevant.
-All switches default off and use Obsidian device-local storage, not `data.json`.
-They do not require a reload. Turn each switch off to stop its collection.
+Diagnostic history is saved automatically. Agents read ordinary JSONL log files;
+there is no export step. All recorded history is retained until the user deletes
+it. There is no total event, byte, or age retention limit.
 
-Use **Diagnostic log → View log**, or the **T3 Code: Export diagnostic log…**
-command. Export makes a manual memory checkpoint when memory logging is on.
-The checked T3 Connect command route also supports device-specific activation:
+On the connected local T3 machine the stable directory is:
 
-```sh
-python3 scripts/obsidian-command.py --vault /absolute/vault diagnostic-settings \
-  --diagnostic-preferences '{"connection":true,"response":true,"memory":true}'
-python3 scripts/obsidian-command.py --vault /absolute/vault \
-  --output /external/evidence/sample.json send-failure-log
+```
+<T3 No project workspace>/.t3-obsidian/diagnostics/<vault UUID>/<device UUID>/
 ```
 
-Add `--client-id DEVICE_UUID` where more than one device matches. Read settings
-with `diagnostic-settings` and no preferences. To stop memory collection, send
-`{"memory":false}`; this preserves other switches and the bounded prior journal.
-This uses the existing checked command-file protocol with unmodified T3 Code.
-No server endpoint, listener or privileged runtime bridge is added.
+Each dated subdirectory contains JSONL segments, one JSON event per line. `log.json`
+identifies the format, directory, stored event count and file-write errors. Agent
+files can be read while Obsidian is closed. The existing checked `client-status`
+command also returns `diagnosticLog` with the exact machine, workspace and directory.
+Agents should inspect the newest relevant segments when asked about an issue;
+do not ask the user to export or copy logs. Use bounded reads/tails when examining
+large histories. Segment boundaries are transfer units, not deletion or retention
+limits. Older segments remain available.
 
-## Bounds and interpretation
+The plugin uses existing authenticated T3 Connect file RPCs. It adds no filesystem
+or process imports, server endpoint, privileged bridge or background daemon.
+Nothing is written to notes, `data.json`, or the synced vault. During a connection
+outage, all events remain in device-local IndexedDB pages and are copied to files
+when that connection returns. Unsent pages survive reloads. Repeated file delivery
+updates the same segment rather than appending duplicates. A device storage error
+is reported; storage hardware/browser quota failures cannot guarantee retention.
 
-Collection runs at existing source, render, save and native-view lifecycle events.
-There is no sampling timer. One shared activity sample is allowed per five
-seconds. Explicit start/end, view open/close, save, disposal, enable and manual
-checkpoints share a separate cap of eight per five-second window. A skipped
-checkpoint count appears on the next accepted record. With logging off, suppliers,
-clock and heap reads do not run. No diagnostic callback or editor reference is
-retained. No DOM scan, note serialization, forced GC or content copy is used for
-counting. Existing strings use `.length` (UTF-16 code units, **not allocated bytes**).
-Counts include shared sources/readers, queued openings, canonical reads, replay
-cache characters; direct render body/message/activity counts and timing; native
-view document length, retained preview text, proofs and save fences. Fields vary
-by checkpoint; absent counters are unknown, not zero. Counts of shared strings
-can overlap and must not be added to estimate allocation.
+In **T3 Code → Advanced → Troubleshooting**, **Diagnostic log files → Show location**
+shows the directory and any write error. Connection, Response and Streaming memory
+logging are per-device switches. Leave Follow off unless scroll behavior matters.
+Turning a switch off stops new collection in that category and preserves history.
+The former Export command now opens the log location; its ID remains compatible.
+The read-only command API still provides a recent preview for older tools.
 
-Chromium `performance.memory` is feature detected. Heap values are browser-reported
-used/total/limit bytes and can be coarse or shared between contexts. A missing,
-invalid or denied API is `unsupported`. This is **JS heap**, not process RSS.
-Process RSS and cgroup charge are explicitly `unsupported` in plugin events.
-Use short, external, read-only `/proc/PID/status` and cgroup `memory.current`
-observations with UTC timestamps and process start identity to correlate them.
-RSS can contain shared pages; a cgroup can contain multiple processes. Do not
-sum overlapping values. Do not infer a leak or cause from a single sample.
+## RAM and work bounds
 
-All categories share a device-local journal capped at **512 events, 256,000 UTF-8
-encoded event bytes, seven days**. Exports add bounded metadata and JSON formatting
-and can be larger than the encoded event cap. IDs, UTC time, monotonic time,
-plugin version and device/session identity permit correlation without message
-text or credentials. New events evict old ones. Local IndexedDB writes coalesce
-while a write is active and serialize bounded journal snapshots. There is no
-flush timer. A sudden process/OS failure can lose the final in-flight write;
-`storageError` reports detected persistence failures. Logging is opt-in and has
-bounded, nonzero journal/storage cost. No native mobile RAM claim is made.
+Only the recent preview is limited to 512 events / 256,000 event bytes / seven days.
+That cache does **not** limit retained log files or the local archive. Archive pages
+contain up to 32 records. File delivery processes up to four pages per existing
+connection tick and is throttled to at most once per five seconds. It never reads
+or serializes the whole history. There is no new polling/sampling timer.
+
+Memory collection runs at existing stream/render/save/view events. One shared
+activity sample is allowed per five seconds, plus at most eight explicit lifecycle
+checkpoints per five-second window. Disabled memory logging performs no clock,
+heap or counter-supplier reads. No editor, note or stream reference is retained.
+No DOM scan, forced GC or whole-note serialization is used for counting.
+Lengths count UTF-16 code units, not allocated bytes. Shared counters can overlap.
+
+Chromium `performance.memory` reports **renderer JS heap** used/total/limit bytes,
+which can be coarse or shared across contexts. Missing or denied APIs report
+`unsupported`. Main-process RSS, renderer/GPU/utility RSS and whole-cgroup charges
+are separate metrics. External read-only captures should include the complete
+Electron family, each PID's start identity and actual cgroup, and relevant cgroup
+ancestors. Never add overlapping cgroup charges. Mark policy transitions such as
+user-requested uncapped shared apps; `max` is not itself a fault.
+
+UTC and monotonic timestamps, plugin version, device/session IDs, binding/thread
+IDs and counters allow correlation without message text or credentials. A short
+sample does not prove a leak or the cause of a memory failure. A crash can lose the
+last in-flight local write. Desktop proof does not establish native mobile behavior.

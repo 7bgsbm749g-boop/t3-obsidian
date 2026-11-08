@@ -100,6 +100,16 @@ separate release-title label. Keep all version files aligned and preserve
 published history. Do not bump versions for documentation or ordinary source
 contributions. Only explicit user direction can end the Alpha stage.
 
+## Issue diagnostics
+
+When asked about a plugin issue, read the existing automatic per-device JSONL
+logs before requesting more diagnostics. The checked `client-status` result's
+`diagnosticLog` gives the exact T3 machine/workspace/directory. Logs live below
+`<No project workspace>/.t3-obsidian/diagnostics/<vault UUID>/<device UUID>/`.
+They are ordinary agent-readable files, retained until the user deletes them;
+do not ask the user to export/copy logs. Read only relevant time ranges with
+bounded memory. See [Automatic diagnostic log files](docs/stream-memory-diagnostics.md).
+
 ## Evidence and completion
 
 Store evidence outside all project checkouts and worktrees, in the external

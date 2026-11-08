@@ -9,6 +9,7 @@ export interface ClientCommand {
 export interface ClientCommandResult {
   id:string;ok:boolean;error?:string;
   client?:{instanceId:string;loadedVersion:string};reloadScheduled?:boolean;
+  diagnosticLog?:ReturnType<import('./diagnostic-archive').DiagnosticArchive['status']>;
   failureLog?:import('../responses/send-failures').SendFailureLog;
   diagnosticSettings?:{previous:import('./diagnostics').DiagnosticPreferences;enabled:import('./diagnostics').DiagnosticPreferences};
   replyImports?:{files:number;removed:number;directory:string;sha256?:Record<string,string>};
