@@ -44,9 +44,8 @@ notes, threads, apps, and helpers after retaining evidence.
 
 ## Documentation and skills
 
-Documentation and skill-instruction changes use ordinary Git commits without
-local installation or release jobs. A main push still requires the version bump
-and automatic GitHub release described below. Review the diff
+Documentation and skill-instruction changes use ordinary Git commits, without
+plugin builds, version changes, installation, or release jobs. Review the diff
 and relevant links. In a configured maintainer checkout, integrate a reviewed
 single documentation commit with `python3 scripts/integrate_docs.py COMMIT`.
 This runs a normal Git cherry-pick under the repository lock, not the release
@@ -59,26 +58,25 @@ that skill self-contained: a library installation has no repository checkout.
 
 ## GitHub pushes and publication
 
-Every push to `main`, including a merged pull request, authorizes automatic
-GitHub release publication. It must include a strictly newer, unused numeric
-`0.0.BUILD` version aligned across all version files. This includes documentation
-and workflow-only pushes to `main`. Feature-branch pushes do not publish.
-The workflow does not assign versions or install into a vault. QLO2 delivery
-and Obsidian directory submission or review remain separate operations.
+`push`, `push to GitHub`, and `push to main` mean upload reviewed commits only.
+They do not authorize a version change, release tag, release queue job,
+installation, GitHub release, or Obsidian directory submission or review.
+The product-delivery default applies to implementation requests, not push
+requests. GitHub release publication needs a separate user request or existing
+authorization that explicitly covers publication; QLO2 delivery alone does not
+provide that authorization.
 
 Before an authorized push, read the shared maintainer instructions below.
 Push the intended branch with an explicit refspec and `git -c
 push.followTags=false push ...`. Do not use `--tags`, `--follow-tags`, or
 `--mirror`, push private queue refs, or create a release tag for a source push.
-Normal checks for the requested source change still apply. Confirm that the
-automatic tag build and publication succeed before reporting a main push complete.
+Do not add release checks or wait for publication work to complete a push.
+Normal checks for the requested source change still apply.
 
-The main-push workflow validates version alignment, reserves the exact source
-commit's numeric tag, and explicitly dispatches its tag workflow. The tag workflow
-runs lint, builds and attests the exact release assets, then publishes a regular
-Alpha release. Pull requests check the version before merge. Do not overwrite
-existing tags or release assets. Source-only maintenance remains available on
-feature branches; merging or pushing it to main requires a new version. See
+GitHub builds run for numeric release tags, not branch pushes or pull requests.
+The release workflow must build and attest the exact release assets before
+authorized publication. Instruction and workflow maintenance needs no plugin
+version, package, installation, or publication. See
 [Review and release checks](docs/review-and-release.md).
 
 ## Maintainer configuration and releases
@@ -99,8 +97,8 @@ Follow the private maintainer instructions for the configured delivery route.
 
 The project remains Alpha. New versions use numeric `0.0.BUILD`; Alpha is a
 separate release-title label. Keep all version files aligned and preserve
-published history. Feature-branch source contributions need no version bump;
-every main push requires one. Only explicit user direction can end the Alpha stage.
+published history. Do not bump versions for documentation or ordinary source
+contributions. Only explicit user direction can end the Alpha stage.
 
 ## Evidence and completion
 

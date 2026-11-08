@@ -1,62 +1,22 @@
-name: Release
+name: Release provenance
 
 on:
   push:
-    branches: [main]
     tags: ['0.0.*']
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 concurrency:
-  group: release-provenance-${{ github.ref }}-${{ github.sha }}
+  group: release-provenance-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  version:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Require a new aligned version before merge
-        env:
-          T3_PREVIOUS_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python3 scripts/github_release.py validate
-
-  prepare:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Reserve this push's version and start its tag build
-        env:
-          GH_TOKEN: ${{ github.token }}
-          T3_PREVIOUS_SHA: ${{ github.event.before }}
-        run: python3 scripts/github_release.py prepare
-
   attest:
-    if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    concurrency:
-      group: public-plugin-release
-      queue: max
-      cancel-in-progress: false
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
     steps:
       - name: Require an immutable numeric alpha tag
         env:
@@ -74,7 +34,16 @@ jobs:
         env:
           T3_RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          test "$(python3 scripts/github_release.py validate)" = "$T3_RELEASE_TAG"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          tag = os.environ['T3_RELEASE_TAG']
+          manifest = json.loads(Path('manifest.json').read_text())
+          package = json.loads(Path('package.json').read_text())
+          lock = json.loads(Path('package-lock.json').read_text())
+          assert manifest['version'] == package['version'] == lock['version'] == lock['packages']['']['version'] == tag
+          assert json.loads(Path('versions.json').read_text())[tag] == manifest['minAppVersion']
+          PY
       - run: npm ci
       - run: npm run lint
       - run: npm run build
@@ -85,7 +54,3 @@ jobs:
             dist/main.js
             manifest.json
             styles.css
-      - name: Publish the attested assets as a regular Alpha release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/github_release.py publish

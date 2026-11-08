@@ -21,9 +21,8 @@ build refuses test adapters and retired filesystem dependencies in its inputs.
 `npm test` runs and caches these gates before the affected tests. Cache keys
 include installed dependency bytes, runtime, source and configuration. Passing
 bounded test batches retain their own logs; failed batches have no success
-receipt. The release-tag workflow runs the same gates before building. Every
-main push dispatches a tag build and publication; pull requests check that the
-version is aligned and newer than their base before merge.
+receipt. The release-tag workflow runs the same gates before building; branch
+pushes and pull requests do not run a GitHub build workflow.
 
 ## Necessary capabilities and overrides
 
@@ -54,13 +53,11 @@ transitive notice. Reassess exposure when updating the pinned upstream checker.
 
 ## Push source commits
 
-A feature-branch push uploads reviewed source without publishing. Every push
-to `main`, including a PR merge, publishes a GitHub release after its checks pass.
-Supply a strictly newer, unused `0.0.BUILD` in `manifest.json`, `package.json`,
-both root version fields in `package-lock.json`, and `versions.json` before
-merging or pushing. This rule includes documentation and maintenance changes.
-Versions are never assigned silently. Read the shared maintainer instructions
-before pushing, use an
+A request to push means upload reviewed commits to the intended GitHub branch.
+It does not authorize a version bump, release tag, release queue job, vault
+installation, GitHub release, or directory submission or review. Keep normal
+development checks for the requested changes, but do not run release checks
+just to push. Read the shared maintainer instructions before pushing, use an
 explicit branch refspec, and disable implicit tag following:
 
 ```sh
@@ -69,34 +66,15 @@ git -c push.followTags=false push origin COMMIT:refs/heads/BRANCH
 
 Replace `COMMIT` and `BRANCH` with the reviewed commit and intended destination.
 Do not push private queue refs or use `--tags`, `--follow-tags`, or `--mirror`.
-PR validation rejects a version that does not advance its base. Main validation
-also refuses a tag owned by another commit. A failed check stops publication;
-fix the source with another new version rather than replacing a reserved tag.
-No workflow installs into a vault or submits the directory entry. The local
-QLO2 queue remains separate until its replacement is implemented.
+Source pushes and pull requests do not trigger hosted build checks. Workflow
+maintenance uses the queue's source-only maintenance route, without a plugin
+version or installation; documentation-only commits use `scripts/integrate_docs.py`.
 
 ## Publish verified assets
 
-### Automatic publication from main
-
-`.github/workflows/release-provenance.yml` reserves a numeric tag at the exact
-push commit and explicitly dispatches the same workflow at that tag. GitHub's
-repository token does not trigger tag-push workflows by itself, so the explicit
-dispatch is required. The tag workflow checks alignment, installs dependencies,
-runs lint and builds before attesting all three assets. It uploads them to a
-draft, checks their SHA-256 digests, and then publishes a regular Alpha release.
-An existing draft can resume missing uploads; existing bytes are never replaced.
-Rerunning a published version verifies the same bytes without replacing it.
-
-Tag builds use GitHub's bounded concurrency queue (`queue: max`) so a later push
-does not cancel an earlier pending release. Older builds do not replace a newer
-numeric release as Latest. There are no path filters: documentation-only main
-pushes also need a unique version and publish.
-
-### Legacy manual publication
-
-The following helper remains available for previously delivered queue archives.
-New main pushes publish automatically and do not need this manual procedure.
+Use this procedure only when the user requested GitHub release publication or
+already authorized it explicitly. A push request or QLO2 installation does not
+authorize these steps.
 
 1. Complete the normal release queue, changed-behavior smoke checks, fresh Sync,
    and exact real-client verification. Keep all fixtures outside the real vault.
@@ -104,9 +82,9 @@ New main pushes publish automatically and do not need this manual procedure.
    `.github/workflows/release-provenance.yml` builds that tag and uses GitHub's
    official provenance action to attest `main.js`, `manifest.json` and
    `styles.css`. It installs dependencies, runs lint, checks types and builds
-   before attesting and publishing. Manual retries must target that same tag.
-   These release-asset attestations address the directory's missing-attestation
-   recommendation. See the
+   before attesting. Manual retries must target that same tag. Removing branch
+   and pull-request builds does not remove these release-asset attestations,
+   which address the directory's missing-attestation recommendation. See the
    [official release workflow guide](https://github.com/obsidianmd/obsidian-developer-docs/blob/main/en/Plugins/Releasing/Release%20your%20plugin%20with%20GitHub%20Actions.md).
 3. After the workflow succeeds, use a current official GitHub CLI and run:
 

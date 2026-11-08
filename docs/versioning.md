@@ -46,8 +46,8 @@ does **not** change the published alpha format, including for prepared candidate
   advances its minor component instead of leaving zero.
 - `none`: documentation, tests, source moves, or delivery tooling alone. The
   semantic comparison counters stay unchanged. Such work normally integrates
-  without a local plugin installation. Pushing it to main still requires a new
-  alpha build and automatic GitHub release, without advancing those counters.
+  without a plugin release; an explicit delivery-tool verification release
+  still advances its alpha build.
 
 These comparison rules follow the chosen historical interpretations of
 [Semantic Versioning](https://semver.org/), rather than claim that the old
@@ -64,12 +64,9 @@ Never rewrite historical tags, archives, receipts, or comparison rows. The
 reviewed private seed is supplied once with `--history-seed PATH`; later jobs
 use the retained history.
 
-Every push to `main`, including a merged PR or maintenance-only change, must
-carry a strictly newer, unused numeric version in all version files. The GitHub
-workflow creates the matching tag, builds and attests its assets, then publishes
-a regular release with Alpha in its title. It does not bump versions itself.
-Feature-branch pushes do not create releases. The local delivery queue remains
-separate; its eventual replacement by PR-based delivery is not part of this change.
+For separately authorized GitHub publication, publish a regular release with
+matching numeric tag and manifest, and keep Alpha in its title and description.
+A source push does not create a release or advance the plugin version.
 The GitHub prerelease flag is not the
 project's development-stage switch. Confirm the current
 [Obsidian submission requirements](https://docs.obsidian.md/Plugins/Releasing/Submit+your+plugin)
