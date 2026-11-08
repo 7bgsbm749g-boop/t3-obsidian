@@ -1665,6 +1665,7 @@ export default class SendToT3 extends Plugin {
       }catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403))this.verifiedConnections.delete(key);this.routeFailures.set(paired.id,message(error));throw error;}
     });
     routed.trackConnection=connection=>this.routeStatus.track(paired.id,connection);
+    routed.cachedImportThreads=projectId=>api.cachedImportThreads?.(projectId);
     return {origin:endpoint(paired.url),get expiresAt(){return session?.expiresAt;},api:routed};
   }
   private async localInlineEnvironment():Promise<string>{

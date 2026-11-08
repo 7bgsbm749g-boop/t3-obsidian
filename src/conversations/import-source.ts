@@ -17,6 +17,7 @@ async function readHistory(access:ThreadAccess,threadId:string,projectId:string,
  * a regular T3 client. No custom server endpoint is required. */
 export async function readImportThreads(access:ThreadAccess,projectId:string,signal?:AbortSignal):Promise<ThreadChoice[]>{
  requestAborted(signal);
+ const cached=access.api.cachedImportThreads?.(projectId);if(cached)return cached;
  const shell=await abortableRead(access.api('/api/orchestration/shell',undefined,{signal}),signal);
  return projectThreads({threads:readThreadList(shell)},projectId);
 }

@@ -19,11 +19,13 @@ import type {SocketFactory} from './t3-rpc';
 import {PLUGIN_PERMISSIONS,hasPluginPermissions} from './environment-permissions';
 import {ensureNoProject} from '../projects/no-project';
 import {AUTO_THREAD_TITLE} from '../conversations/thread-title';
+import {ThreadCatalogCache} from './thread-catalog';
 export interface RemoteEnvironmentDescriptor extends Record<string,unknown>{environmentId:string;label:string;orchestrationProtocolVersion:2}
 export interface PairedConnection {id:string;name:string;url:string;environmentId:string;managed?:boolean;routeKind?:'local'|'https'|'ssh'}
 export interface PairedSession {token:string;expiresAt:number;environmentId:string;url:string;dpopKeyId?:string;accountId?:string;permissions?:string[]}
 export interface DirectPlan {protocolVersion?:2;launch?:boolean;generateTitle?:boolean;workspaceStrategy?:import('../conversations/model-defaults').WorkspaceStrategy;hash:string;environmentId:string;phase:'prepared'|'created'|'started';create:CreateThreadCommand|null;turn:TurnStartCommand;observedActiveTurnId?:string;delivery?:InlineStartRequest}
 export type Fetcher=typeof fetch;
+const threadCatalogs=new WeakMap<Fetcher,ThreadCatalogCache>();
 export function endpoint(value:string):string {
  let u:URL;try{u=new URL(value.trim());}catch{throw Error('Enter a T3 HTTPS address or pairing link.');}
  const local=['localhost','127.0.0.1','[::1]'].includes(u.hostname);
@@ -85,7 +87,15 @@ export async function environmentApi(c:Connection,s:PairedSession|undefined,fetc
  if(s.expiresAt<=Date.now()+5000)throw Error('T3 pairing session expired. Pair this device again using a fresh T3 link.');
  const d=await descriptor(url,fetcher,signal);if(d.environmentId!==c.environmentId)throw Error('The address now points to a different T3 environment. Nothing was sent; add it as a new connection.');
  const key=s.dpopKeyId?await proofKey(s.dpopKeyId,false):undefined;
- return t3Api(async(path:string,payload?:unknown,options?:T3RequestOptions)=>{requestAborted(options?.signal);if(!path.startsWith('/api/')||path.includes('..')||path.includes('\\'))throw Error('Invalid T3 API path.');const target=url+path;const method=payload===undefined?'GET':'POST';return jsonHttp(target,{method,signal:options?.signal,headers:{Authorization:(key?'DPoP ':'Bearer ')+s.token,'Content-Type':'application/json',[T3_PROTOCOL_HEADER]:String(T3_PROTOCOL_VERSION),...(key?{DPoP:await proof(key,method,target,s.token)}:{})},...(payload===undefined?{}:{body:JSON.stringify(payload)})},fetcher,options?.compactImport===true);},url,makeSocket);
+ const api=t3Api(async(path:string,payload?:unknown,options?:T3RequestOptions)=>{requestAborted(options?.signal);if(!path.startsWith('/api/')||path.includes('..')||path.includes('\\'))throw Error('Invalid T3 API path.');const target=url+path;const method=payload===undefined?'GET':'POST';return jsonHttp(target,{method,signal:options?.signal,headers:{Authorization:(key?'DPoP ':'Bearer ')+s.token,'Content-Type':'application/json',[T3_PROTOCOL_HEADER]:String(T3_PROTOCOL_VERSION),...(key?{DPoP:await proof(key,method,target,s.token)}:{})},...(payload===undefined?{}:{body:JSON.stringify(payload)})},fetcher,options?.compactImport===true);},url,makeSocket);
+ const transport=fetcher??browserFetch;let catalog=threadCatalogs.get(transport);if(!catalog){catalog=new ThreadCatalogCache();threadCatalogs.set(transport,catalog);}
+ const identity=JSON.stringify([url,c.environmentId,s.token,s.expiresAt,s.dpopKeyId,s.accountId,s.permissions]),cache=catalog;
+ const routed:import('./t3-rpc').T3Api=async(path,payload,options)=>{
+  try{const value=await api(path,payload,options);if(path==='/api/orchestration/shell'&&payload===undefined){try{cache.remember(identity,value,s.expiresAt);}catch{cache.delete(identity);}}return value;}
+  catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403))cache.delete(identity);throw error;}
+ };
+ routed.cachedImportThreads=projectId=>cache.read(identity,projectId);
+ return routed;
 }
 interface CachedReadApi {work:Promise<AbortableT3Api>;controller:AbortController;users:number;settled:boolean;expires:number}
 const readApis=new WeakMap<Fetcher,Map<string,CachedReadApi>>();
