@@ -321,7 +321,7 @@ class ReleaseQueueTests(unittest.TestCase):
         self.assertLess(a['jobId'], b['jobId'])
         self.assertEqual(self.git('status', '--porcelain=v1'), '')
 
-    def test_each_release_has_one_public_commit_with_source_and_exact_version_bytes(self):
+    def test_each_release_preserves_source_history_and_exact_version_bytes(self):
         base = self.git('rev-parse', 'HEAD')
         first = self.source('first'); second = self.source('second')
         (first / 'first.ts').write_text('export const value=2;')
@@ -329,14 +329,22 @@ class ReleaseQueueTests(unittest.TestCase):
         a = queue.enqueue(first, self.root, 'HEAD', queue=self.store, evidence=self.evidence,
                           notes='Verified fixture', summary='Improve first change')
         b = self.submit(second)
+        sources = self.git('rev-list', '--reverse', base + '..' + queue.git(first, 'rev-parse', 'HEAD')).splitlines()
+        sources.append(queue.git(second, 'rev-parse', 'HEAD'))
+        original_commits = {commit: self.git('cat-file', 'commit', commit) for commit in sources}
         queue.drain(self.release, queue=self.store)
-        commits = self.git('rev-list', '--reverse', base + '..HEAD').splitlines()
+        commits = self.git('rev-list', '--first-parent', '--reverse', base + '..HEAD').splitlines()
         self.assertEqual(len(commits), 2)
+        self.assertEqual(set(self.git('rev-list', base + '..HEAD').splitlines()), set(sources + commits))
+        for commit, original in original_commits.items():
+            self.assertTrue(queue.ancestor(self.root, commit, 'HEAD'))
+            self.assertEqual(self.git('cat-file', 'commit', commit), original)
         for job, commit, version, name in [(a, commits[0], '1.0.1', 'first'), (b, commits[1], '1.0.2', 'second')]:
             state = queue.status(job['jobId'], queue=self.store)['jobs'][0]
             self.assertEqual(state['releaseCommit'], commit)
-            self.assertEqual(len(self.git('rev-list', '--parents', '-n', '1', commit).split()), 2)
-            self.assertFalse(queue.ancestor(self.root, state['sourceCommit'], 'HEAD'))
+            self.assertEqual(state['integrationStyle'], 'merge')
+            self.assertEqual(self.git('rev-parse', commit + '^2'), state['sourceCommit'])
+            self.assertTrue(queue.ancestor(self.root, state['sourceCommit'], 'HEAD'))
             self.assertEqual(json.loads(self.git('show', commit + ':manifest.json'))['version'], version)
             self.assertEqual(self.git('show', commit + ':' + name + '.ts'), (self.root / (name + '.ts')).read_text())
             self.assertEqual(queue.read(self.release.release_receipt_dir(version) / 'deployment.json')['gitCommit'], commit)
@@ -356,7 +364,7 @@ class ReleaseQueueTests(unittest.TestCase):
         self.assertEqual(self.published, ['1.0.1', '1.0.2'])
         self.assertEqual((self.root / 'first.ts').read_text(), 'export const value=2;')
 
-    def test_task_can_build_on_multiple_squashed_sources_without_reapplying_them(self):
+    def test_task_can_build_on_multiple_released_sources_without_reapplying_them(self):
         first = self.source('first'); second = self.source('second'); combined = self.source('combined')
         for source in (first, second):
             self.submit(source)
@@ -461,7 +469,7 @@ class ReleaseQueueTests(unittest.TestCase):
         self.assertFalse((self.root / 'skill-and-product.ts').exists())
         self.assertEqual(self.published, [])
 
-    def test_crash_on_either_side_of_fast_forward_resumes_the_same_single_commit(self):
+    def test_crash_on_either_side_of_fast_forward_resumes_the_same_merge_commit(self):
         class WorkerCrash(BaseException):
             pass
         for after_move in (False, True):
@@ -484,7 +492,8 @@ class ReleaseQueueTests(unittest.TestCase):
                 self.assertEqual(self.git('status', '--porcelain=v1'), '')
                 queue.drain(self.release, queue=self.store)
                 self.assertEqual(self.git('rev-parse', 'HEAD'), candidate)
-                self.assertEqual(self.git('rev-list', '--count', base + '..HEAD'), '1')
+                self.assertEqual(self.git('rev-list', '--count', base + '..HEAD'), '2')
+                self.assertEqual(self.git('rev-parse', candidate + '^2'), queue.git(source, 'rev-parse', 'HEAD'))
                 self.assertIsNone(queue.status(job['jobId'], queue=self.store)['jobs'][0]['pendingIntegration'])
 
     def test_concurrent_submissions_are_idempotent_and_a_second_worker_cannot_publish(self):
@@ -751,6 +760,17 @@ class ReleaseQueueTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'needs-evidence first'):
             queue.wait_for_memory(job['jobId'], '768M', 'native-watch', queue=self.store)
         self.assertEqual(queue.status(job['jobId'], queue=self.store)['jobs'][0]['status'], 'queued')
+
+    def test_verification_retains_current_native_command_schedule_ids(self):
+        source = self.source('native-command-watch')
+        job = queue.enqueue(source, self.root, 'HEAD', thread_id='owning-thread', queue=self.store)
+        queue.drain(self.release, queue=self.store)
+        watch = 'scheduled-task:command:mcp:a9325d6d-b56c-43d3-ac63-9fb9f63814b4:schedule-task:release-recovery'
+        state = queue.wait_for_memory(job['jobId'], '768M', watch, queue=self.store)
+        self.assertEqual(state['recoveryTaskId'], watch)
+        for invalid in ['watch\nbad', 'watch;command', 'a' * 513]:
+            with self.assertRaisesRegex(ValueError, 'scheduledTaskId'):
+                queue.wait_for_memory(job['jobId'], '768M', invalid, queue=self.store)
 
     def test_later_release_does_not_reset_probe_deadline_or_block_behind_verification(self):
         _, first, clock = self.memory_job()

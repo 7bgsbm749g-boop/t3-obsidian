@@ -4,6 +4,26 @@ import {watchThread,readInlineEvents} from '../src/conversations/thread-stream';
 import {T3ResponseTooLargeError} from '../src/connection/t3-response-limits';
 import {completedSetup,preparationItem} from './fixtures/worktree-setup';
 import {RouteStatus} from '../src/connection/route-status';
+import {EventJournal,configureDiagnostics,connectionDiagnosticPolicy,diagnosticCategory} from '../src/app/diagnostics';
+
+test('a healthy stream stays open beyond the old refresh and ticket deadline, then recovers a real close',async t=>{
+ t.mock.timers.enable({apis:['setTimeout','Date']});const sockets:any[]=[],errors:Error[]=[],saved:any[]=[];let tickets=0;
+ const journal=new EventJournal({load:async()=>undefined,save:async state=>{saved.push(state);},id:()=> 'client-session',context:{deviceId:'phone'}},{...connectionDiagnosticPolicy,accept:event=>diagnosticCategory(event)==='connection'});
+ configureDiagnostics(journal);
+ const api=async()=>({ticket:`ticket-${++tickets}`,expiresAt:Date.now()+5*60_000});
+ const watcher=watchThread('thread',async()=>({origin:'https://fixture',diagnosticRoute:{routeId:'route',environmentId:'environment',routeKind:'remote'},api}),{item:()=>{},reconnecting:error=>errors.push(error)},()=>{const socket:any={closeCount:0,send(){},close(){socket.closeCount++;socket.onclose?.({code:1000,reason:'',wasClean:true});}};sockets.push(socket);return socket;},undefined,{afterSequence:()=>41,pollSnapshots:false,diagnostics:()=>({bindingId:'binding',turnId:'turn',messageId:'prompt'})});
+ const settle=async()=>{for(let n=0;n<16;n++)await Promise.resolve();};
+ try{
+  await settle();sockets[0].onopen();t.mock.timers.tick(16*60_000);await settle();
+  assert.equal(sockets.length,1);assert.equal(sockets[0].closeCount,0);assert.equal(tickets,1);assert.equal(errors.length,0);
+  sockets[0].onclose({code:1006,reason:'ticket=private',wasClean:false});t.mock.timers.tick(1000);await settle();sockets[1].onopen();
+  sockets[1].onmessage({data:JSON.stringify({_tag:'Chunk',requestId:'1',values:[{kind:'synchronized'}]})});
+  const events=journal.snapshot().events,closed=events.find(event=>event.event==='stream.closed')!,retry=events.find(event=>event.event==='stream.reconnecting')!,recovered=events.find(event=>event.event==='stream.recovered')!;
+  assert.equal(closed.fields.closeCode,1006);assert.equal(closed.fields.wasClean,false);assert.equal(retry.fields.cause,'socket-close');assert.equal(retry.fields.retryDelayMs,1000);
+  assert.equal(retry.fields.bindingId,'binding');assert.equal(retry.fields.turnId,'turn');assert.equal(retry.fields.routeId,'route');assert.equal(retry.fields.afterSequence,41);assert.equal(recovered.fields.recoveryMs,1000);
+  assert.notEqual(recovered.fields.streamId,retry.fields.streamId);assert.equal(errors.length,1);assert.equal(tickets,2);assert.doesNotMatch(journal.export(),/ticket=private/);await journal.flush();assert.ok(saved.length);
+ }finally{watcher.stop();configureDiagnostics();await journal.close();t.mock.timers.reset();}
+});
 
 test('a slow opening and a healthy long-lived subscription remain active until the caller stops',async t=>{
  t.mock.timers.enable({apis:['setTimeout','Date']});const sockets:any[]=[],failures:Error[]=[],items:any[]=[];

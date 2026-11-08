@@ -1,7 +1,7 @@
 const EVENT_LOG_PATH=eventLogPath('.obsidian');
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {EventJournal,configureDiagnostics,redact,type DiagnosticState} from '../src/app/diagnostics';
+import {EventJournal,configureDiagnostics,redact,logEvent,diagnosticEnabled,diagnosticCategory,diagnosticPreferences,connectionDiagnosticPolicy,type DiagnosticState} from '../src/app/diagnostics';
 import {SyncedEventLogs,eventLogPath,EVENT_LOG_FOLDER} from './fixtures/baseline-native/synced-event-logs';
 import {instrumentOperations} from '../src/app/diagnostic-operations';
 function fixture(deviceId='device',data=new Map<string,string>()){
@@ -11,8 +11,64 @@ function fixture(deviceId='device',data=new Map<string,string>()){
   const io={id:()=>`${deviceId}-${++serial}`,now:()=>time,context:{deviceId},load:async()=>saved,save:async(state:DiagnosticState)=>{saved=structuredClone(state);},publish:(events:any)=>sync.publish(events),readSynced:()=>sync.read()};
   return {io,sync,data,get saved(){return saved;},get writes(){return writes;},setSaved:(value:any)=>saved=value,setFail:(value:boolean)=>fail=value,advance:(ms:number)=>time+=ms};
 }
+
+test('connection and Follow switches gate the existing journal without enabling chunk or operation logs',async()=>{
+  const f=fixture(),preferences=diagnosticPreferences(undefined);
+  const j=new EventJournal(f.io,{...connectionDiagnosticPolicy,accept:event=>{const category=diagnosticCategory(event);return !!category&&preferences[category];}});
+  configureDiagnostics(j);
+  try{
+    logEvent('stream.connected');logEvent('response.follow.changed');assert.equal(j.snapshot().events.length,0);
+    preferences.connection=true;
+    logEvent('stream.closed',{closeCode:1006,closeReason:'ticket=private https://private.example',error:Object.assign(Error('offline'),{status:401})});
+    logEvent('stream.chunk',{count:100});logEvent('operation.completed');logEvent('response.follow.changed');
+    await j.flush();assert.equal(f.saved.events.length,1);assert.equal(f.saved.events[0].fields.closeCode,1006);assert.equal(f.saved.events[0].fields.error.status,401);
+    preferences.connection=false;preferences.follow=true;
+    logEvent('stream.connected');logEvent('response.follow.changed',{reason:'reconnecting',bindingId:'response'});
+    await j.flush();assert.deepEqual(f.saved.events.map((event:any)=>event.event),['stream.closed','response.follow.changed']);
+    assert.doesNotMatch(j.export(),/private\.example|ticket=private/);
+  }finally{configureDiagnostics();await j.close();}
+});
+
+test('response traces use the same journal and an independent default-off device switch',async()=>{
+  const f=fixture(),preferences=diagnosticPreferences(undefined),other=diagnosticPreferences(undefined);Object.assign(f.io.context,{pluginVersion:'0.0.405'});
+  assert.deepEqual(preferences,{connection:false,follow:false,response:false});
+  const j=new EventJournal(f.io,{...connectionDiagnosticPolicy,accept:event=>{const category=diagnosticCategory(event);return !!category&&preferences[category];}});
+  configureDiagnostics(j);
+  try{
+    assert.equal(diagnosticEnabled('note.save.prepared'),false);logEvent('response.save.pending',{reason:'note-changed'});assert.equal(j.snapshot().events.length,0);
+    preferences.response=true;assert.equal(other.response,false);assert.equal(diagnosticEnabled('note.save.prepared'),true);
+    logEvent('note.save.prepared',{attemptId:'attempt',baseHash:'a'.repeat(64),body:'PRIVATE NOTE'});logEvent('response.source.frame',{processingMs:12});logEvent('stream.connected');
+    await j.flush();assert.deepEqual(f.saved.events.map((event:any)=>event.event),['note.save.prepared','response.source.frame']);
+    assert.equal(typeof f.saved.events[0].fields.monotonicMs,'number');assert.equal(f.saved.events[0].fields.pluginVersion,'0.0.405');assert.doesNotMatch(j.export(),/PRIVATE NOTE/);
+  }finally{configureDiagnostics();await j.close();}
+});
+
+test('transition records save without a flush timer, survive midnight and filter export by UTC time',async()=>{
+  const f=fixture(),j=new EventJournal(f.io,connectionDiagnosticPolicy);
+  j.record('stream.connected');await new Promise(resolve=>setImmediate(resolve));assert.equal(f.saved.events.length,1);
+  f.advance(24*60*60_000);j.record('stream.reconnecting');await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.saved.events.length,2);assert.equal(j.snapshot('2026-10-02T00:00:00Z').events.length,1);
+  f.advance(7*24*60*60_000+1);assert.equal(j.snapshot().events.length,0);await j.close();
+});
+
+test('the connection journal enforces record and UTF-8 byte caps and loads only supported event types',async()=>{
+  const f=fixture(),j=new EventJournal(f.io,{...connectionDiagnosticPolicy,maxEvents:3,maxBytes:1500});
+  for(let i=0;i<8;i++)j.record('stream.closed',{index:i,closeReason:'界'.repeat(200)});
+  const snapshot=j.snapshot();assert.ok(snapshot.events.length>0&&snapshot.events.length<=3);
+  assert.ok(snapshot.events.reduce((sum,event)=>sum+Buffer.byteLength(JSON.stringify(event)),0)<=1500);
+  f.setSaved({schema:1,events:[{...snapshot.events[0],event:'stream.chunk'},{...snapshot.events[0],event:'stream.closed',fields:{token:'secret'}}]});
+  const restored=new EventJournal(f.io,{...connectionDiagnosticPolicy,retain:event=>diagnosticCategory(event)!==undefined,accept:()=>false});await restored.load();
+  assert.deepEqual(restored.snapshot().events.map(event=>event.event),['stream.closed']);assert.doesNotMatch(restored.export(),/secret/);
+  restored.record('stream.closed');assert.equal(restored.snapshot().events.length,1);
+  await restored.close();await j.close();
+});
 test('metadata redaction excludes credentials and note bodies',()=>{
   const bytes=JSON.stringify(redact({prompt:'private note',selection:{text:'private'},nested:{accessToken:'secret',url:'https://host/?ticket=secret'},error:Error('Request https://host failed token=secret')}));assert.doesNotMatch(bytes,/private note|"secret"|ticket=secret|token=secret/);assert.match(bytes,/redacted/);
+});
+
+test('socket close reasons redact quoted credential fields and DPoP proofs',()=>{
+ const value=redact({closeCode:1008,closeReason:'{"accessToken":"private-token", "refresh_token":"private refresh"} DPoP private-proof'});
+ assert.doesNotMatch(JSON.stringify(value),/private-token|private refresh|private-proof/);assert.match(JSON.stringify(value),/1008/);
 });
 test('old local timelines migrate without any reporting state',async()=>{
   const f=fixture(),j=new EventJournal(f.io);j.record('old');const old=JSON.parse(j.export());delete old.events[0].deviceId;f.setSaved({...old,incidents:[{status:'queued'}],attempts:[1],watches:[{}]});

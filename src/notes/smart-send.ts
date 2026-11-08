@@ -7,7 +7,7 @@ import {runImportReceipts} from '../conversations/run-import-receipt';
 import {markdownCodeRanges} from '../responses/reply-html';
 import {markdownText,mergeSpans as union,subtractSpans} from './smart-markdown';
 import {changedEdits} from '../responses/coordinated-merge';
-import {noteIdentity,noteIdentityRanges} from './note-identity';
+import {noteIdentityRanges} from './note-identity';
 
 export type Span=[number,number];
 export interface PackedText {hash:string;encoding:'text'|'gzip';data:string}
@@ -227,7 +227,7 @@ export function explicitSelectionText(document:string,[start,end]:Span):string {
   return text+document.slice(cursor,end);
 }
 export async function prepareSmartSend(data:SmartSendData,path:string,destination:string,document:string,scope?:Span){
-  const noteId=smartNote(data,path,noteIdentity(document)),projection=await sourceProjection(data,noteId,document),current=projection.text;
+  const noteId=smartNote(data,path),projection=await sourceProjection(data,noteId,document),current=projection.text;
   const identities=noteIdentities(data,noteId),heads=Object.entries(data.heads).filter(([,h])=>identities.has(h.noteId)&&h.destination===destination);
   let covered:Span[]=[];for(const [,head] of heads)covered.push(...mappedCoverage(await unpackText(head.source),current,head.covered));covered=union(covered);
   const requested:Span[]=scope?projection.segments.flatMap(segment=>{const from=Math.max(scope[0],segment.rawFrom),to=Math.min(scope[1],segment.rawTo);return to>from?[[segment.from+from-segment.rawFrom,segment.from+to-segment.rawFrom] as Span]:[];}):[[0,current.length]];

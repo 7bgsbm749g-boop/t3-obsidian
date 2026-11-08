@@ -41,6 +41,8 @@ export class ThreadAccessCache {
       const expires=Math.min(this.now()+180_000,access.expiresAt===undefined?Infinity:access.expiresAt-5000);
       const entry:Entry={access,expires,borrowed:{
         get origin(){return access.origin;},
+        get diagnosticRoute(){return access.diagnosticRoute;},
+        get expiresAt(){return access.expiresAt;},
         api:(path,payload,options)=>this.request(environmentId,path,payload,options),
         // Stop helpers own their borrow, never the host's underlying session.
         close:reason=>access.trace?.('borrow-released',reason??'caller-closed'),

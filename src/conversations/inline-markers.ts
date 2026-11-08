@@ -7,13 +7,14 @@ import type {MarkdownPostProcessorContext} from 'obsidian';
 import {responseBoundaries,responseFrame} from '../responses/response-container';
 import {ContainerMarkerIndex} from '../responses/container-marker-index';
 import {validateResponseRequest} from '../responses/response-model';
+import {noteIdentityRanges} from '../notes/note-identity';
 import {markdownCodeRanges} from '../responses/reply-html';
 
 export interface ContainerMarkerDecorations {index:ContainerMarkerIndex;decorations:DecorationSet}
 
 /** Match only complete plugin tracking comments, including beside user text. */
 export function inlineMarkerRegex():RegExp {
-  return /<!-- (?:(?:t3-inline|t3-response):(?:start|end):[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}|t3-(?:question|approval):(?:start|end):%7B[A-Za-z0-9%_.~-]+%7D|t3-response-binding:[0-9a-fA-F-]{36}:%7B[A-Za-z0-9%_.!~*'()-]+%7D|t3-run-import:%7B[A-Za-z0-9%_.!~*'()-]+%7D) -->/g;
+  return /<!-- (?:(?:t3-inline|t3-response):(?:start|end):[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}|t3-(?:question|approval):(?:start|end):%7B[A-Za-z0-9%_.~-]+%7D|t3-response-binding:[0-9a-fA-F-]{36}:%7B[A-Za-z0-9%_.!~*'()-]+%7D|t3-note-id:[a-f0-9]{64}|t3-run-import:%7B[A-Za-z0-9%_.!~*'()-]+%7D) -->/g;
 }
 
 export function hiddenInlineMarkerExtension():Extension {
@@ -21,6 +22,7 @@ export function hiddenInlineMarkerExtension():Extension {
   // registering the extension, so the decorations share the editor's classes.
   const {Decoration,EditorView,MatchDecorator,ViewPlugin}=cmView;
   const matcher=new MatchDecorator({regexp:inlineMarkerRegex(),maxLength:1_000_000,decoration:(match,view,pos)=>{
+    if(match[0].startsWith('<!-- t3-note-id:')&&!noteIdentityRanges(view.state.doc.toString()).some(range=>range.from===pos))return null;
     if(match[0].startsWith('<!-- t3-response-binding:')||match[0].startsWith('<!-- t3-run-import:')){
       const document=view.state.doc.toString();
       if(markdownCodeRanges(document).some(([from,to])=>pos>=from&&pos<to))return null;

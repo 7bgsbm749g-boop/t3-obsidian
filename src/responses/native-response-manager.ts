@@ -12,7 +12,7 @@ import {NativeResponseView} from './native-response-view';
 import {responseAnchor,responseRegion,type LocalResponse} from './native-response-projection';
 import type {ResponseRecord} from './response-record';
 import {regionBody,initialRegion,renameInlineHeader} from '../conversations/inline-thread';
-import {logFailure} from '../app/diagnostics';
+import {logFailure,logEvent,diagnosticEnabled} from '../app/diagnostics';
 import {nativeCommitMatches,readNativeCommitProof,type NativeCommitProof} from './native-response-commit';
 import type {DirectInlineUpdate} from './direct-inline-preview';
 import {loadNativePreviews,checkedNativePreview,sameNativePreview,previewMatches,previewMessageId,MAX_NATIVE_PREVIEWS,MAX_NATIVE_PREVIEW_CHARACTERS,type NativePreviewEntry,type NativePreviewSnapshot} from './native-preview-cache';
@@ -64,6 +64,8 @@ export class NativeResponseManager {
   private reads=new Map<string,Promise<void>>();
   private changedDuringRead=new Set<string>();
   private lifetime=0;
+  private streamRefreshPaths=new Set<string>();
+  private streamRefreshQueued=false;
   private relocations=new Map<string,Map<string,string>>();
   private warnings=new Map<MarkdownView,Map<string,HTMLElement>>();
   private previewVault?:string;
@@ -294,14 +296,17 @@ export class NativeResponseManager {
     const record=this.records.get(update.request.id),previous=this.streams.get(update.request.id);
     if(record&&(record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.cleanupComplete||record.state?.locationConflict||record.request.vaultId!==update.request.vaultId||record.request.threadId!==update.request.threadId||record.request.projectId!==update.request.projectId||record.request.threadEnvironmentId!==update.request.threadEnvironmentId))return;
     if(previous&&previous.sequence>update.sequence)return;
-    const cached=this.cached.get(update.request.id);
+    const cached=this.cached.get(update.request.id),restoring=this.reconnecting.has(update.request.id);
     if(record&&update.messageId!==previewMessageId(record))return;
     if(cached&&this.reconnecting.has(update.request.id)){
       if(!record||!previewMatches(cached,record)||update.sequence<cached.sequence)return;
       this.reconnecting.delete(update.request.id);
     }
     const path=record?.state?.notePath??update.request.notePath;
-    this.streams.set(update.request.id,{...update,request:{...update.request,notePath:path}});this.refresh(new Set([path,previous?.request.notePath??path]));
+    this.streams.set(update.request.id,{...update,request:{...update.request,notePath:path}});
+    if(update.phase!=='running'||previous?.phase!=='running'||update.failure||JSON.stringify(update.displayedInputIds)!==JSON.stringify(previous?.displayedInputIds)||restoring){this.refresh(new Set([path,previous?.request.notePath??path]));return;}
+    this.streamRefreshPaths.add(path);this.streamRefreshPaths.add(previous?.request.notePath??path);
+    if(!this.streamRefreshQueued){this.streamRefreshQueued=true;const lifetime=this.lifetime;queueMicrotask(()=>{this.streamRefreshQueued=false;if(lifetime!==this.lifetime){this.streamRefreshPaths.clear();return;}const paths=this.streamRefreshPaths;this.streamRefreshPaths=new Set();this.refresh(paths);});}
   }
   title(id:string,title:string){if(!title.trim()||this.titles.get(id)===title)return;this.titles.set(id,title);this.refresh();}
   localCompleted(id:string,path:string){this.localStops.delete(id);this.records.delete(id);this.streams.delete(id);this.connectionIssues.delete(id);this.provisional.delete(id);this.forgetPreview(id);this.refresh(new Set([path]));}
@@ -506,7 +511,9 @@ export class NativeResponseManager {
           if(!restoring)this.rememberPreview(record,displayed);
           const terminal=record.finalWriter||record.responseRemovedAt!==undefined||record.stopRequestedAt||record.state?.userStopped||record.state?.finalSaved||record.state?.cleanupComplete||record.state?.locationConflict||['complete','completed','interrupted','error','cancelled','conflict'].includes(record.state?.status??'')||stream?.completionVerified||['complete','interrupted','error'].includes(stream?.phase??'');
           const connection=this.connectionIssues.get(id),visible=restoring&&!failure?this.titled(id,cached.body):displayed;
-          responses.push({id,body:connection?responseConnectionBody(visible,connection,id):visible,movable:!terminal&&!failure&&!connection,stoppable:!terminal,followable:!terminal&&!failure&&!connection});
+          // Losing the connection pauses viewport work; it does not finish the
+          // response or revoke the reader's explicit Follow choice.
+          responses.push({id,body:connection?responseConnectionBody(visible,connection,id):visible,movable:!terminal&&!failure&&!connection,stoppable:!terminal,followable:!terminal&&!failure,followPaused:!!connection});
         }
         for(const stop of this.localStops.values()){
           if(stop.path!==view.file.path||!responseRegion(saved,stop.id)||adapter?.hasMaterialized(stop.id))continue;
@@ -585,11 +592,12 @@ export class NativeResponseManager {
     for(const {view} of this.savedViews(path))this.view(view)?.resumeReviewed(disk,reviewed);
   }
   async beginFinalSave(path:string,review=false):Promise<()=>void>{
+    const timed=diagnosticEnabled('note.save.fence'),started=timed?performance.now():0;let held=0;
     const previous=this.finalSaveQueues.get(path)??Promise.resolve();let unlock!:()=>void;
     const lock=new Promise<void>(resolve=>{unlock=resolve;}),tail=previous.then(()=>lock);this.finalSaveQueues.set(path,tail);
     await previous;
     const fence:FinalSaveFence={path,review,released:false,sealed:false,invalid:false,panes:new Map(),members:new Map()};this.activeFinalSaves.set(path,fence);
-    const release=()=>{if(fence.released)return;fence.released=true;for(const member of [...fence.members.values()].reverse())member.release?.();if(this.activeFinalSaves.get(path)===fence)this.activeFinalSaves.delete(path);unlock();if(this.finalSaveQueues.get(path)===tail)this.finalSaveQueues.delete(path);};
+    const release=()=>{if(fence.released)return;fence.released=true;if(timed&&held)logEvent('note.save.fence',{waitMs:held-started,holdMs:performance.now()-held,panes:fence.panes.size,invalid:fence.invalid});for(const member of [...fence.members.values()].reverse())member.release?.();if(this.activeFinalSaves.get(path)===fence)this.activeFinalSaves.delete(path);unlock();if(this.finalSaveQueues.get(path)===tail)this.finalSaveQueues.delete(path);};
     try{
       for(;;){
         this.admitFinalSavePanes(fence);await Promise.all([...fence.members.values()].map(member=>member.work));
@@ -598,7 +606,7 @@ export class NativeResponseManager {
         if(panes.some(view=>!this.view(view)||!fence.members.get(this.view(view)!)?.ready))continue;
         fence.panes=new Map(panes.map(view=>[view,view.file]));fence.sealed=true;
         if(!this.finalSaveReady(path))throw Error('The native panes changed before final delivery.');
-        return release;
+        held=timed?performance.now():0;return release;
       }
     }catch(error){release();throw error;}
   }

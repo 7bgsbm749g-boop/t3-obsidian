@@ -1,6 +1,6 @@
 import {nativeResponses} from '../responses/native-response-manager';
 import {hasCompletionProof,hasResponseMarkers} from './inline-thread';
-import {logEvent} from '../app/diagnostics';
+import {logEvent,diagnosticEnabled} from '../app/diagnostics';
 import {logFailure} from '../app/diagnostics';
 import {contentHash} from '../responses/completion';
 import type {App,Editor,MarkdownView} from 'obsidian';
@@ -8,6 +8,8 @@ import {replaceInlineEditorText} from './inline-editor';
 import {ResponseNoteLocator} from '../responses/response-location';
 import {responseAnchor,responseRegion} from '../responses/native-response-projection';
 import {responseIds,responseBoundaries} from '../responses/response-container';
+import {randomId} from '../shared/uuid';
+import {changedEdits,mergeSavedEdits} from '../responses/coordinated-merge';
 import type {FinalWriteOutcome} from '../responses/completion-attempt';
 
 const locators=new WeakMap<App,ResponseNoteLocator>();
@@ -102,25 +104,34 @@ export function deviceFinalNoteIO(app:App,allowed:()=>boolean){
   const acquire=async(path:string,review=false)=>manager.beginFinalSave(path,review);
   const compareAndSetAttempt=async(path:string,before:string,after:string,_attemptId:string,guard=()=>true):Promise<FinalWriteOutcome>=>{
     let release:(()=>void)|undefined,prepared=false,written=false,ioStarted=false;
-    const changed=Error('The local note changed before final save.');
+    const changed=Error('The local note changed before final save.'),started=Date.now();
+    let reason='not-started';
+    const outcome=(result:FinalWriteOutcome,detail:string)=>{if(diagnosticEnabled('note.save.outcome'))logEvent('note.save.outcome',{attemptId:_attemptId,noteAlias:contentHash(path),status:result.status,reason:detail,elapsedMs:Date.now()-started,documentLength:before.length,proposedLength:after.length,panes:manager.savedViews(path).length});return result;};
     try{
       release=await acquire(path);
-      const file=app.vault.getFileByPath(path);if(!file||!allowed())return {status:'no-write'};
-      const same=()=>allowed()&&guard()&&file.path===path&&app.vault.getFileByPath(path)===file&&manager.finalSaveReady(path)&&manager.savedViews(path).every(view=>view.saved()===before);
+      const file=app.vault.getFileByPath(path);if(!file||!allowed())return outcome({status:'no-write'},'file-unavailable');
+      const same=()=>{
+        reason=!allowed()?'plugin-stopped':!guard()?'attachment-changed':file.path!==path||app.vault.getFileByPath(path)!==file?'file-replaced':!manager.finalSaveReady(path)?'pane-membership-changed':!manager.savedViews(path).every(view=>view.saved()===before)?'pane-revision-changed':'';
+        return !reason;
+      };
       const snapshot=observed.get(path);
-      if(!snapshot||snapshot.file!==file||snapshot.current!==before||!same()||await app.vault.read(file)!==snapshot.disk||!same())return {status:'no-write'};
+      if(!snapshot||snapshot.file!==file||snapshot.current!==before)return outcome({status:'no-write'},'plan-revision-changed');
+      if(!same())return outcome({status:'no-write'},reason);
+      if(await app.vault.read(file)!==snapshot.disk)return outcome({status:'no-write'},'disk-revision-changed');
+      if(!same())return outcome({status:'no-write'},reason);
+      if(diagnosticEnabled('note.save.prepared'))logEvent('note.save.prepared',{attemptId:_attemptId,noteAlias:contentHash(path),baseHash:contentHash(snapshot.disk),projectionHash:contentHash(before),proposedHash:contentHash(after)});
       const ids=responseIds(before).filter(id=>responseRegion(before,id)&&!responseRegion(after,id));
       // Preparing several panes can fail after an earlier pane installed its
       // intent. Cancel every pane even when that operation does not return.
       prepared=true;manager.prepare(path,before,after,ids);
-      ioStarted=true;await app.vault.process(file,current=>{if(!same()||current!==snapshot.disk)throw changed;return after;});written=true;
+      ioStarted=true;await app.vault.process(file,current=>{if(!same())throw changed;if(current!==snapshot.disk){reason='disk-revision-changed';throw changed;}return after;});written=true;
       const disk=await app.vault.read(file);
-      if(!allowed()||file.path!==path||app.vault.getFileByPath(path)!==file||disk!==after||!manager.finalSaveReady(path))return {status:'written-unverified'};
-      manager.committed(path,disk,ids);return {status:'verified'};
+      if(!allowed()||file.path!==path||app.vault.getFileByPath(path)!==file||disk!==after||!manager.finalSaveReady(path))return outcome({status:'written-unverified'},'readback-or-pane-revision-changed');
+      manager.committed(path,disk,ids);return outcome({status:'verified'},'disk-and-panes-verified');
     }catch(error){
-      if(error===changed)return {status:'no-write'};
+      if(error===changed)return outcome({status:'no-write'},reason);
       logFailure('response.device-completion.final-save',error,{notePath:path});
-      return {status:written?'written-unverified':ioStarted?'unknown':'no-write'};
+      return outcome({status:written?'written-unverified':ioStarted?'unknown':'no-write'},'io-failed');
     }finally{if(prepared)manager.cancel(path);release?.();}
   };
   return {
@@ -159,10 +170,21 @@ export function deviceFinalNoteIO(app:App,allowed:()=>boolean){
       const disk=await app.vault.read(file);if(!allowed()||file.path!==path||app.vault.getFileByPath(path)!==file||!manager.finalSaveReady(path))return;
       const own=recovered.get(path);if(own?.file===file&&own.expected===disk)return disk;
       for(const {view} of manager.savedViews(path))manager.view(view)?.reconcileDisk(disk);
+      const panes=manager.savedViews(path).map(pane=>({...pane,value:pane.saved()}));
+      let merged=disk;
+      for(const pane of panes){
+        const result=mergeSavedEdits(disk,merged,changedEdits(disk,pane.value));
+        if(!result.ok){logEvent('note.save.pending',{reason:'pane-overlap',panes:panes.length});return;}
+        merged=result.text;
+      }
+      if(!manager.finalSaveReady(path)||panes.some(pane=>pane.saved()!==pane.value))return;
+      // Only compatible saved projections are reconciled. Transient response
+      // bodies never participate, and an overlapping edit remains untouched.
+      for(const pane of panes)if(pane.value!==merged)manager.view(pane.view)?.editSaved(merged);
       const current=await io.readNote(path);if(!manager.finalSaveReady(path))return;if(current!==undefined)observed.set(path,{file,disk,current});return current;
       }finally{release();}
     },
     compareAndSetAttempt,
-    compareAndSet:async(path:string,before:string,after:string,guard?:()=>boolean)=>(await compareAndSetAttempt(path,before,after,'legacy',guard)).status==='verified',
+    compareAndSet:async(path:string,before:string,after:string,guard?:()=>boolean)=>(await compareAndSetAttempt(path,before,after,randomId(),guard)).status==='verified',
   };
 }

@@ -2,6 +2,7 @@ import {isRecord} from '../shared/values';
 import {contentHash} from './completion';
 import {inlineTurnMessages,turnPhase,type InlineThreadState} from '../conversations/inline-thread';
 import type {ThreadAccess} from '../conversations/thread-stream';
+import {logEvent} from '../app/diagnostics';
 import {delegatedWork} from '../conversations/inline-delegation';
 
 /** Completion is an exact persisted run, not a ready connection or replay end. */
@@ -33,10 +34,11 @@ export function finalResponseKey(state:InlineThreadState,turnId:string,options:C
  * correction replaces it without requiring a second matching download. */
 export async function checkFinalResponse(access:ThreadAccess,threadId:string,state:InlineThreadState,turnId:string,options:CompletionOptions={}):Promise<{state:InlineThreadState;verified:boolean}> {
   if(!finalResponseKey(state,turnId,options))return {state,verified:false};
-  const message=inlineTurnMessages(state,turnId).at(-1)!;
+  const message=inlineTurnMessages(state,turnId).at(-1)!,started=Date.now();
   const item=await access.api('/api/orchestration/turn-item',{threadId,itemId:message.itemId,...(message.updatedAt?{revision:message.updatedAt}:{})});
   if(!isRecord(item)||item.updatedAt!==undefined&&typeof item.updatedAt!=='string'||item.id!==message.itemId||item.threadId!==threadId||item.runId!==turnId||item.messageId!==message.id||item.type!=='assistant_message'||item.streaming!==false||item.status!=='completed'||typeof item.text!=='string')throw Error('T3 did not return the final reply for this response.');
   if(message.updatedAt&&(!item.updatedAt||item.updatedAt<message.updatedAt))throw Error('T3 returned an older final reply.');
+  logEvent('response.lifecycle.verification',{threadId,turnId,messageId:message.id,itemId:message.itemId,elapsedMs:Date.now()-started,characters:item.text.length,corrected:item.text!==message.text});
   const corrected={...message,text:item.text,updatedAt:typeof item.updatedAt==='string'?item.updatedAt:undefined,streaming:false};
   return {state:{...state,messages:state.messages.map(m=>m.id===message.id?corrected:m)},verified:true};
 }

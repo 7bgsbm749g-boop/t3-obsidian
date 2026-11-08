@@ -7,9 +7,11 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'scripts'))
 spec = importlib.util.spec_from_file_location('lab', ROOT / 'scripts/obsidian-sync-lab.py')
 lab = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(lab)
@@ -28,7 +30,7 @@ counter = 0
 
 
 def fixture(mode=None, value=None):
-    command = ['./node_modules/.bin/tsx', 'tests/native/local-response-sync-case.ts']
+    command = ['./node_modules/.bin/tsx', '--import', './tests/desktop-sdk-port.mjs', 'tests/native/local-response-sync-case.ts']
     if mode:
         command.append(mode)
     return json.loads(subprocess.run(command, cwd=ROOT, input=json.dumps(value) if value is not None else None,
@@ -128,6 +130,12 @@ finally:
             (vaults['a'] / name).unlink(missing_ok=True)
         (vaults['a'] / relative_data).unlink(missing_ok=True)
         transfer()
+        remaining = [str(vaults[client] / name) for client in states for name in names
+                     if (vaults[client] / name).exists()]
+        (evidence / 'cleanup.json').write_text(json.dumps(dict(remainingNotes=remaining,
+            temporaryThreads=[], productionTouched=False), indent=2) + '\n')
+        if remaining:
+            raise RuntimeError('Temporary Sync notes remain: ' + ', '.join(remaining))
     finally:
         for client, old in configs.items():
             config(client, '--config-dir', old['configDir'], '--configs', ','.join(old['configs']))

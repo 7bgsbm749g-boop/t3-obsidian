@@ -349,7 +349,7 @@ export class NativeResponseView {
     if(cm?.dispatch&&cm!==this.moveEditor){this.releaseMoveHistory?.();this.moveEditor=cm;this.releaseMoveHistory=guardResponseMoveHistory(cm,(transaction,move)=>this.moveTransaction(transaction,move));}
     const before=this.saved();let saved=before;
     for(const input of inputs)if(responses.some(response=>response.id===input.id))saved=completedSelectionDraft(saved,input.id,input.steering);
-    if(saved===before&&this.compactTools===(this.view.getState?.().source!==true)&&responses.length===this.responses.length&&responses.every((response,index)=>response.id===this.responses[index].id&&response.body===this.responses[index].body&&response.movable===this.responses[index].movable&&response.stoppable===this.responses[index].stoppable&&response.followable===this.responses[index].followable)&&this.displayed()===this.projection.display){this.correctCaret();return;}
+    if(saved===before&&this.compactTools===(this.view.getState?.().source!==true)&&responses.length===this.responses.length&&responses.every((response,index)=>response.id===this.responses[index].id&&response.body===this.responses[index].body&&response.movable===this.responses[index].movable&&response.stoppable===this.responses[index].stoppable&&response.followable===this.responses[index].followable&&response.followPaused===this.responses[index].followPaused)&&this.displayed()===this.projection.display){this.correctCaret();return;}
     const projection=this.buildProjection(saved,responses);
     this.responses=responses.map(response=>({...response}));this.projection=projection;
     for(const response of responses)this.materialized.delete(response.id);

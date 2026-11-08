@@ -12,7 +12,7 @@ export class ResponseProjectionCache {
   private copy(projection:ResponseProjection):ResponseProjection{return {...projection,ranges:projection.ranges.map(range=>({...range}))};}
   project(path:string,saved:string,responses:readonly LocalResponse[]):ResponseProjection {
     const old=this.entries.get(path);
-    if(old&&old.projection.saved===saved&&old.responses.length===responses.length&&responses.every((response,index)=>response.id===old.responses[index].id&&response.body===old.responses[index].body)){
+    if(old&&old.projection.saved===saved&&old.responses.length===responses.length&&responses.every((response,index)=>response.id===old.responses[index].id&&response.body===old.responses[index].body&&response.followable===old.responses[index].followable&&response.followPaused===old.responses[index].followPaused)){
       this.entries.delete(path);this.entries.set(path,old);this.hits++;return this.copy(old.projection);
     }
     this.projections++;
