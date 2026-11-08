@@ -76,6 +76,7 @@ import {continueQuestionAnswer} from '../interaction/question-continuation';
 import {validateNoteCommand,validateAgentCommand,type NoteCommand,type NoteCommandResult} from '../notes/note-command';
 import {isFolderCommand,executeFolderCommand,type FolderCommand} from '../projects/folder-command';
 import {configureDiagnostics,logEvent,logFailure,EventJournal,diagnosticPreferences,diagnosticCategory,connectionDiagnosticPolicy,type DiagnosticCategory} from './diagnostics';
+import {streamMemory} from './stream-memory-diagnostics';
 import {clearVaultDiagnostics} from './disabled-diagnostics';
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from '../connection/cloud';
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from '../connection/native-account';
@@ -240,9 +241,15 @@ export default class SendToT3 extends Plugin {
   private diagnosticPreferenceKey(){return `t3-diagnostic-preferences-v1:${this.settings.vaultId}:${this.deviceId}`;}
   setDiagnosticLogging(category:DiagnosticCategory,enabled:boolean){
     const preferences={...this.diagnosticLogging,[category]:enabled};
-    this.app.saveLocalStorage(this.diagnosticPreferenceKey(),preferences);this.diagnosticLogging=preferences;
+    this.app.saveLocalStorage(this.diagnosticPreferenceKey(),preferences);this.diagnosticLogging=preferences;if(category==='memory'){streamMemory.reset();if(enabled)this.memoryCheckpoint('enabled');}
   }
-  private diagnosticLog(since?:string){const diagnostics=this.diagnostics?.snapshot(since);return {...sendFailureLog(this.app.loadLocalStorage(this.failureKey()),pluginManifest.version,this.deviceId,since),...(diagnostics?{diagnostics:{...diagnostics,enabled:{...this.diagnosticLogging},responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app)}}:{})};}
+  private memoryCheckpoint(checkpoint:'manual'|'enabled'){
+    streamMemory.sample(checkpoint,()=>{
+      const health=this.deviceInline?.health();
+      return {...nativeResponses(this.app).memoryStatus(),...markdownCodeCacheStatus(),sourceCount:health?.sources,readerCount:health?.readers,queuedCount:health?.queued,saveQueuedCount:health?.saveQueued,saveWorkerCount:health?.saveWorkers,cacheCharacters:health?.cacheCharacters};
+    });
+  }
+  private diagnosticLog(since?:string){this.memoryCheckpoint('manual');const diagnostics=this.diagnostics?.snapshot(since);return {...sendFailureLog(this.app.loadLocalStorage(this.failureKey()),pluginManifest.version,this.deviceId,since),...(diagnostics?{diagnostics:{...diagnostics,enabled:{...this.diagnosticLogging},responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app)}}:{})};}
   private failedRequests=new WeakSet<Request>();
   private connectionRecovery?:ConnectionRecovery;
   private connectionRecoveryTarget(target:ResponseStorageTarget){return JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);}
@@ -368,7 +375,7 @@ export default class SendToT3 extends Plugin {
     this.diagnosticLogging=diagnosticPreferences(this.app.loadLocalStorage(this.diagnosticPreferenceKey()));
     const diagnosticKey=`diagnostics:${this.settings.vaultId}:${this.deviceId}`;
     this.diagnostics=new EventJournal({load:()=>deviceState(diagnosticKey),save:state=>deviceState(diagnosticKey,state),id:randomId,context:{deviceId:this.deviceId,pluginVersion:pluginManifest.version,platform:Platform.isMobile?'mobile':'desktop'}},{...connectionDiagnosticPolicy,retain:event=>diagnosticCategory(event)!==undefined,accept:event=>{const category=diagnosticCategory(event);return !!category&&this.diagnosticLogging[category];}});
-    await this.diagnostics.load();configureDiagnostics(this.diagnostics);
+    await this.diagnostics.load();configureDiagnostics(this.diagnostics);streamMemory.reset();
     const adapter=this.app.vault?.adapter;
     if(adapter&&typeof adapter.exists==='function'&&typeof adapter.remove==='function'){
       try{await clearVaultDiagnostics(adapter,this.app.vault.configDir);}catch(error){new Notice(`Could not clear plugin logs: ${message(error)}`);}
@@ -832,6 +839,11 @@ export default class SendToT3 extends Plugin {
     if(isClientCommand(input)){
       if(!this.clientMaintenance||this.stopped)throw Error('Client maintenance is unavailable.');
       const result=await this.clientMaintenance.execute(input);
+      if(input.kind==='diagnostic-settings'){
+        const previous={...this.diagnosticLogging};
+        for(const [category,enabled] of Object.entries(input.diagnosticPreferences??{}))this.setDiagnosticLogging(category as DiagnosticCategory,enabled);
+        return {...result,diagnosticSettings:{previous,enabled:{...this.diagnosticLogging}}};
+      }
       if(input.kind==='send-failure-log')return {...result,failureLog:this.diagnosticLog(input.since)};
       return input.kind==='client-status'?{...result,commandServer:{transport:'t3-connect',connected:this.commandHosts.size},connectionRecovery:this.connectionRecovery?.status(),codeRangeCache:markdownCodeCacheStatus(),responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app),legacyRepliesRetired:true}:result;
     }
@@ -2102,7 +2114,7 @@ export default class SendToT3 extends Plugin {
   async exportDiagnostics(){
     const modal=new Modal(this.app);modal.titleEl.setText('Diagnostic log');
     const log=this.diagnosticLog();
-    modal.contentEl.createEl('p',{text:'The last 64 send failures and enabled connection, Follow or response events on this device. Events are limited to 512 records, 256 KB and seven days. Message text and credentials are excluded.'});
+    modal.contentEl.createEl('p',{text:'The last 64 send failures and enabled connection, Follow, response or streaming memory events on this device. Events are limited to 512 records, 256 KB and seven days. Message text and credentials are excluded.'});
     const field=modal.contentEl.createEl('textarea',{cls:'send-to-t3-failure-log'});field.readOnly=true;field.value=JSON.stringify(log,null,2);
     modal.open();
   }
@@ -2801,7 +2813,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }
   }
-  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;configureDiagnostics();void this.diagnostics?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});this.diagnostics=undefined;}
   async monitorCompletions() {
     if(this.monitoring||this.stopped||this.busy)return;
     this.monitoring=true;try{await this.monitorSettlements();}finally{this.monitoring=false;}
@@ -2989,6 +3001,7 @@ export class T3Settings extends PluginSettingTab {
     new Setting(el).setName('Connection logging').setDesc('Record connection, reconnect and recovery events on this device only. Off by default.').addToggle(toggle=>toggle.setValue(preferences.connection).onChange(enabled=>this.plugin.setDiagnosticLogging('connection',enabled)));
     new Setting(el).setName('Follow logging').setDesc('Record when auto-scroll starts, pauses, resumes or turns off on this device only. Off by default.').addToggle(toggle=>toggle.setValue(preferences.follow).onChange(enabled=>this.plugin.setDiagnosticLogging('follow',enabled)));
     new Setting(el).setName('Response logging').setDesc('Record response recovery, rendering and final-save decisions on this device only. Off by default.').addToggle(toggle=>toggle.setValue(preferences.response).onChange(enabled=>this.plugin.setDiagnosticLogging('response',enabled)));
+    new Setting(el).setName('Streaming memory logging').setDesc('Sample browser JS heap and streaming counters on this device. Off by default; at most one activity sample per 5 seconds plus bounded lifecycle checkpoints. No message text, RSS or cgroup measurement.').addToggle(toggle=>toggle.setValue(preferences.memory).onChange(enabled=>this.plugin.setDiagnosticLogging('memory',enabled)));
     new Setting(el).setName('Diagnostic log').setDesc('View send failures and enabled diagnostic events from this device. Nothing is synced.').addButton(button=>button.setButtonText('View log').onClick(()=>this.plugin.exportDiagnostics()));
   }
 

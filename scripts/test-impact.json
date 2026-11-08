@@ -132,6 +132,9 @@
       "tests/native/agent-mcp-fleet-lab.ts",
       "scripts/build-agent-mcp-lab.mjs",
       "styles.css"
+    ],
+    "tests/stream-memory-diagnostics.test.ts": [
+      "tests/native/stream-memory-lab.ts"
     ]
   }
 }

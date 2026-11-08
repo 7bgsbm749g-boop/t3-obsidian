@@ -3,11 +3,11 @@ import {jsonClone} from '../shared/values';
 export type LogLevel='info'|'warning'|'error';
 export interface DiagnosticEvent {at:string;sequence:number;sessionId:string;deviceId:string;event:string;level:LogLevel;fields:Record<string,unknown>}
 export interface DiagnosticState {schema:1;events:DiagnosticEvent[]}
-export type DiagnosticCategory='connection'|'follow'|'response';
-export interface DiagnosticPreferences {connection:boolean;follow:boolean;response:boolean}
-export function diagnosticPreferences(value:unknown):DiagnosticPreferences {return {connection:isRecord(value)&&value.connection===true,follow:isRecord(value)&&value.follow===true,response:isRecord(value)&&value.response===true};}
+export type DiagnosticCategory='connection'|'follow'|'response'|'memory';
+export interface DiagnosticPreferences {connection:boolean;follow:boolean;response:boolean;memory:boolean}
+export function diagnosticPreferences(value:unknown):DiagnosticPreferences {return {connection:isRecord(value)&&value.connection===true,follow:isRecord(value)&&value.follow===true,response:isRecord(value)&&value.response===true,memory:isRecord(value)&&value.memory===true};}
 const connectionEvents=new Set(['stream.connecting','stream.connected','stream.reconnecting','stream.closed','stream.stopped','stream.recovered','stream.poll.failed','stream.poll.recovered','stream.direct.reconnecting','stream.direct.recovered','stream.direct.interruption-verification','stream.direct.completion-verification','stream.direct.reset','connection.client-state','connection.auth.renewing','connection.auth.recovered','connection.auth.failed']);
-export function diagnosticCategory(event:string):DiagnosticCategory|undefined {return connectionEvents.has(event)?'connection':event==='response.follow.changed'?'follow':/^(?:response\.(?:source|recovery|lifecycle|save|render)\.|note\.save\.)/.test(event)?'response':undefined;}
+export function diagnosticCategory(event:string):DiagnosticCategory|undefined {return event==='memory.streaming'?'memory':connectionEvents.has(event)?'connection':event==='response.follow.changed'?'follow':/^(?:response\.(?:source|recovery|lifecycle|save|render)\.|note\.save\.)/.test(event)?'response':undefined;}
 export interface DiagnosticPolicy {accept?:(event:string)=>boolean;retain?:(event:string)=>boolean;maxEvents?:number;maxBytes?:number;retentionMs?:number;persistOnRecord?:boolean}
 export const connectionDiagnosticPolicy={maxEvents:512,maxBytes:256_000,retentionMs:7*24*60*60_000,persistOnRecord:true};
 export interface DiagnosticExport extends DiagnosticState {exportedAt:string;context:unknown;storageError:string;enabled?:DiagnosticPreferences}
