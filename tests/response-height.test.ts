@@ -54,13 +54,24 @@ test('background parsing and overlapping updates must settle before releasing th
   h.parsing(false);h.advance(300);assert.equal(h.guarded(),true);h.advance(400);assert.equal(h.guarded(),false);
 });
 
-test('a shorter projection can release its real height instead of retaining empty scroll space',()=>{
+test('a shorter active projection keeps protection until its real smaller height settles',()=>{
   const h=heightFixture('Before\n\nA long response\n\nAfter'),guard=new ResponseHeightGuard(h.view);
   guard.begin(display);h.rendered(false);h.height(6500);assert.equal(h.guarded(),true);
   const changes=h.cm.state.changes({from:8,to:24,insert:''});
-  guard.begin(display,changes);assert.equal(h.guarded(),false);assert.equal(h.jobs.size,0);
+  guard.begin(display,changes);assert.equal(h.guarded(),true);
+  assert.equal(h.scroller.scrollTop,7000);assert.equal(h.scroller.scrollHeight,10000);
+  h.rendered(true);guard.changed();h.advance(700);
+  assert.equal(h.guarded(),false);assert.equal(h.jobs.size,0);
   assert.equal(h.style.getPropertyValue(responseHeightProperty),'');
-  guard.begin(display,changes);assert.equal(h.guarded(),false);
+});
+
+test('a shorter status cannot expose a false native bottom between stream frames',()=>{
+  const h=heightFixture('inProgress'),guard=new ResponseHeightGuard(h.view);
+  const changes=h.cm.state.changes({from:0,to:10,insert:'completed'});
+  guard.begin(display,changes);h.rendered(false);h.height(6500);guard.changed();h.advance(900);
+  assert.equal(h.guarded(),true);assert.equal(h.scroller.scrollTop,7000);assert.equal(h.scroller.scrollHeight,10000);
+  h.rendered(true);h.height(10000);guard.changed();h.advance(700);
+  assert.equal(h.guarded(),false);assert.equal(h.scroller.scrollTop,7000);
 });
 
 test('a virtualized widget does not cause unlimited polling and later DOM work can release its guard',()=>{

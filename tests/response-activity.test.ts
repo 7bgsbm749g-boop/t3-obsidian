@@ -59,7 +59,8 @@ test('one bottom row inside the collapse fold, outside prose and controls in oth
     const blocks=ast.children.filter(n=>n.type==='blockquote'||n.type==='code').map(node=>text.slice(node.position!.start.offset!,node.position!.end.offset!));
     if(mode==='collapse'){
       assert.equal(blocks.filter(block=>block.includes('send-to-t3-response-activity')).length,1);
-      assert.match(blocks[0],/^> \[!t3-progress\]\+ [\s\S]*> <details class="send-to-t3-response-activity"/);
+      assert.match(blocks[0],/^> \[!t3-progress\]\+ [\s\S]*> <span class="send-to-t3-response-activity" role="status"/);
+      assert.match(blocks[0],/<details class="send-to-t3-tool-group"/);
       assert.doesNotMatch(blocks[0],/FOLLOWING USER CONTENT/);
     }else for(const block of blocks)assert.doesNotMatch(block,/send-to-t3-response-activity/);
     for(const phase of ['complete','interrupted','cancelled','error'] as const){
