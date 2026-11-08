@@ -41,6 +41,8 @@ class EvidencePathTests(unittest.TestCase):
     def test_sync_lab_keeps_evidence_in_the_external_project_store(self):
         spec = importlib.util.spec_from_file_location('sync_lab', Path(__file__).with_name('obsidian-sync-lab.py'))
         module = importlib.util.module_from_spec(spec)
+        # The CLI imports its adjacent configuration module by name. Supply
+        # that exact module without depending on another test's import order.
         with patch.dict('sys.modules', {'maintainer_config': maintainer_config}):
             spec.loader.exec_module(module)
         self.assertEqual(module.EVIDENCE.parent, maintainer_config.evidence_root(ROOT))

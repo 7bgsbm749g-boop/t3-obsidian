@@ -1,7 +1,7 @@
 import {Platform} from 'obsidian';
 
 // Renderer timers can throttle in a background window. Native timers keep the
-// connection polling and response deadlines while Obsidian is hidden.
+// connection coordination running while Obsidian is hidden.
 export async function desktopTimers(){
   if(Platform.isDesktop){
   const {setInterval,clearInterval,setTimeout}=await import('node:timers');

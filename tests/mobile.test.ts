@@ -54,6 +54,7 @@ test('direct pairing works in mobile bundle, keeps sessions local, and never rep
   assert.equal(o.redirect,'error');assert.equal(o.credentials,'omit');
   if(url.endsWith('/.well-known/t3/environment'))return new Response(JSON.stringify({environmentId:'env',label:'Laptop',orchestrationProtocolVersion:2}));
   assert.equal(o.headers.Authorization,'Bearer private-session');
+  if(url.endsWith('/api/auth/session'))return new Response(JSON.stringify({authenticated:true,permissions:['orchestration:read']}));
   if(url.endsWith('/websocket-ticket'))return new Response(JSON.stringify({ticket:'ephemeral'}));
   if(url.endsWith('/shell'))return new Response(JSON.stringify({projects:[{...project,defaultModelSelection:{instanceId:'codex',model:'default'}}],threads:[]}));
   const c=JSON.parse(o.body);commands.push(c);if(c.type==='message.dispatch'&&lose){lose=false;throw Error('lost reply');}return new Response('{}');

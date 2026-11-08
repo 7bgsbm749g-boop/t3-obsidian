@@ -635,6 +635,7 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 .send-to-t3-run-picker { height: min(500px, calc(100dvh - 100px)); display: flex; flex-direction: column; }
 .send-to-t3-run-picker .prompt-results { flex: 1; min-height: 0; max-height: none; overflow-y: auto; overflow-anchor: none; }
 .send-to-t3-run-row { padding: 10px 12px; }
+.send-to-t3-import-status { padding: 6px 12px; color: var(--text-muted); font-size: var(--font-smaller); }
 .send-to-t3-run-heading { display: flex; align-items: center; gap: 10px; min-height: 24px; }
 .send-to-t3-run-status { display: inline-flex; flex: 0 0 17px; width: 17px; height: 17px; border: 1.5px dashed currentColor; border-radius: 50%; align-items: center; justify-content: center; color: var(--text-warning); }
 .send-to-t3-run-status[data-status="Completed"] { color: var(--color-green); }

@@ -94,10 +94,10 @@ export class SharedThreadStreams {
   private refresh(source:Source){
     if(!source.readers.size||this.stopped)return;
     if(source.refresh){source.refreshAgain=true;return;}
-    const controller=source.controller=new AbortController(),timeout=scheduleTimeout(()=>controller.abort(),20_000);
+    const controller=source.controller=new AbortController();
     const work=source.access().then(async access=>{
       try{
-        if(controller.signal.aborted)throw Error('T3 response recovery read timed out or was cancelled.');
+        if(controller.signal.aborted)throw Error('T3 response recovery read was cancelled.');
         const snapshot=await readInlineSnapshot({...access,api:(path,payload)=>access.api(path,payload,{signal:controller.signal})},source.threadId,undefined,this.targets(source));
         source.attempt=0;if(source.readers.size&&!this.stopped&&!controller.signal.aborted)this.deliver(source,{kind:'snapshot',snapshot});
       }finally{await access.close?.();}
@@ -111,7 +111,7 @@ export class SharedThreadStreams {
         source.retry=scheduleTimeout(()=>{source.retry=undefined;if(!source.readers.size||this.stopped||source.watch)return;source.started=false;this.pending.push(source);this.drain();},delay);
       }
     }).finally(()=>{
-      cancelTimeout(timeout);if(source.controller===controller)source.controller=undefined;
+      if(source.controller===controller)source.controller=undefined;
       if(source.refresh===work)source.refresh=undefined;
       if(source.refreshAgain){source.refreshAgain=false;if(!source.retry)this.refresh(source);}
     });

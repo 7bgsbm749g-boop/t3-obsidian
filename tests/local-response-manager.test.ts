@@ -83,6 +83,18 @@ test('an explicit checked destination choice can return an attachment to its pre
   const h=fixture();await h.manager.register(h.binding);h.manager.renamed(h.binding.notePath,'Moved.md');
   await h.manager.register(h.binding,true);assert.equal(h.manager.request(h.binding.id)?.notePath,'Test.md');h.manager.dispose();
 });
+test('an imported answer seed waits for local recovery and reaches the first preview tick',async()=>{
+  const h=fixture(),events:string[]=[];
+  let restore!:(value:undefined)=>void;
+  h.io.loadLocalCompletion=()=>new Promise(resolve=>restore=resolve);
+  const snapshot={thread:{id:h.binding.threadId,projectId:h.binding.projectId,messages:[],activities:[]},snapshotSequence:1};
+  const manager=new LocalResponseManager('test','vault',h.io,h.notes,undefined,()=>({
+    seedImport:(value:unknown)=>{assert.equal(value,snapshot);events.push('seed');},tick:()=>events.push('tick'),
+    update:()=>{},delivery:()=>{},reconnect:()=>{},suspend:()=>{},dispose:()=>{},
+  }) as any);
+  await manager.register(h.binding,false,snapshot);assert.deepEqual(events,['seed']);
+  restore(undefined);await drain();assert.deepEqual(events,['seed','tick']);manager.dispose();h.manager.dispose();
+});
 
 test('unchanged different panes retain separate parse caches without invalidating save retries',async()=>{
   const h=fixture();await h.manager.register(h.binding);
@@ -255,13 +267,13 @@ test('a closed imported response retries its save when Sync becomes ready',async
   assert.equal(h.manager.status(h.binding.id)?.pendingSaveReason,'sync');
   h.ready(true);h.manager.tick();await drain();assert.equal(h.writes(),1);assert.deepEqual(await h.manager.waitForSave(h.binding.id,0),{saved:true});h.manager.dispose();
 });
-test('import completion waits for the verified note write and bounds a pending verification',async()=>{
+test('import completion reports missing verification and waits for a checked write without a deadline',async()=>{
   const h=fixture();await h.manager.register(h.binding);
   const start=Date.now(),unverified=await h.manager.waitForSave(h.binding.id,20);
   assert.deepEqual(unverified,{saved:false,reason:'verification'});assert.ok(Date.now()-start<1000);assert.equal(h.writes(),0);
   const compare=h.notes.compareAndSet;let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
   h.notes.compareAndSet=async(...args)=>{await gate;return compare(...args);};
-  h.emit();await drain();let completed=false;const wait=h.manager.waitForSave(h.binding.id,1000).then(result=>{completed=true;return result;});
+  h.emit();await drain();let completed=false;const wait=h.manager.waitForSave(h.binding.id,0).then(result=>{completed=true;return result;});
   await drain();assert.equal(completed,false);assert.equal(h.writes(),0);release();
   assert.deepEqual(await wait,{saved:true});assert.equal(h.writes(),1);h.manager.dispose();
 });

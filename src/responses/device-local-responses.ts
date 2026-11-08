@@ -2,6 +2,7 @@ import {LocalResponseManager,type LocalFinalNoteIO} from './local-response-manag
 import type {ResponseRequest,ResponseStorageTarget} from './response-model';
 import type {ResponseRecord} from './response-record';
 import type {DirectInlineUpdate} from './direct-inline-preview';
+import type {ThreadSnapshot} from '../connection/wire-types';
 import type {ThreadAccess,ThreadAccessCloseReason} from '../conversations/thread-stream';
 import type {InlineStartRequest} from '../conversations/inline-thread';
 import type {SteeringInput} from '../conversations/inline-steering';
@@ -59,7 +60,7 @@ export class DeviceResponseManager {
   private stops:Set<string>;
   constructor(readonly actor:string,private vaultId:string,private io:DeviceResponseIO){const stopped=io.loadStops?.();this.stops=new Set(Array.isArray(stopped)?stopped:[]);}
   private manager(){if(!this.local){if(!this.io.localFinalNotes)throw Error('Local reply saving is unavailable.');this.local=new LocalResponseManager(this.io.completionActor??this.actor,this.vaultId,this.io,this.io.localFinalNotes);}return this.local;}
-  register(request:ResponseRequest){if(this.stopped||!request.localOnly)throw Error('Legacy reply creation was retired.');return this.manager().register(request);}
+  register(request:ResponseRequest,importedSnapshot?:ThreadSnapshot){if(this.stopped||!request.localOnly)throw Error('Legacy reply creation was retired.');return this.manager().register(request,false,importedSnapshot);}
   delivered(_host:ResponseStorageTarget,id:string,delivery:InlineStartRequest){this.local?.delivered(id,delivery);return Promise.resolve();}
   stopLocally(id:string){this.stops.add(id);this.io.saveStops?.([...this.stops]);this.local?.stopLocally(id);}
   failResponse(_host:ResponseStorageTarget,id:string){return this.local?.cancel(id)??Promise.resolve();}
@@ -68,7 +69,7 @@ export class DeviceResponseManager {
   health(){return this.local?.health();}
   frozenBody(id:string){return this.local?.frozenBody(id);}
   retrySave(binding:ResponseRequest,hash:string,frozenBody?:string){if(this.stopped)throw Error('The plugin is disabled.');return this.manager().retrySave(binding,hash,frozenBody);}
-  waitForSave(id:string,timeoutMs?:number):Promise<LocalResponseSaveResult>{return this.stopped||!this.local?Promise.resolve({saved:false,reason:'plugin-unavailable'}):this.local.waitForSave(id,timeoutMs);}
+  waitForSave(id:string,_legacyWait?:number):Promise<LocalResponseSaveResult>{return this.stopped||!this.local?Promise.resolve({saved:false,reason:'plugin-unavailable'}):this.local.waitForSave(id);}
   localResponse(id:string){const record=this.local?.record(id);return record?{record,host:record.request.host}:undefined;}
   cachedResponse(id:string){return this.localResponse(id);}
   async relocateResponse(_host:ResponseStorageTarget,record:ResponseRecord,path:string){await this.manager().register({...record.request,notePath:path},true);return this.local!.record(record.request.id)!;}

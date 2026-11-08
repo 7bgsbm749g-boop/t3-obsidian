@@ -189,15 +189,15 @@ test('large notes without question markers do not invoke the Markdown code parse
   assert.equal(markdownCodeCacheStatus().sourceParses,before);
 });
 
-test('a timed-out read releases the shared slot and cannot apply a late snapshot',async context=>{
+test('a slow shared read accepts its result after the former deadline',async context=>{
   context.mock.timers.enable({apis:['setTimeout']});
   let entered!:()=>void,release!:(value:any)=>void,signal:AbortSignal|undefined,reads=0;
   const started=new Promise<void>(resolve=>{entered=resolve;});
-  const controller=new QuestionController(async()=>({origin:'test',api:async(_path,_payload,options)=>{signal=options?.signal;if(++reads===1)return new Promise(resolve=>{release=resolve;entered();});return {thread:{id:target.threadId,activities:[opened()]}};}}),{load:()=>[],save:()=>{}},()=> 'command');
-  const first=controller.refresh([target]);await started;context.mock.timers.tick(8000);await first;
-  assert.equal(signal?.aborted,true);assert.equal(controller.view(target).status,'error');
-  await controller.refresh([target]);assert.equal(reads,2);assert.equal(controller.view(target).status,'pending');
-  release({thread:{id:target.threadId,activities:[resolved()]}});await Promise.resolve();assert.equal(controller.view(target).status,'pending');controller.dispose();
+  const controller=new QuestionController(async()=>({origin:'test',api:async(_path,_payload,options)=>{signal=options?.signal;reads++;return new Promise(resolve=>{release=resolve;entered();});}}),{load:()=>[],save:()=>{}},()=> 'command');
+  const first=controller.refresh([target]);await started;const second=controller.refresh([target]);context.mock.timers.tick(80_000);
+  assert.equal(signal?.aborted,false);assert.equal(reads,1);
+  release({thread:{id:target.threadId,activities:[opened()]}});await Promise.all([first,second]);
+  assert.equal(controller.view(target).status,'pending');assert.equal(controller.view(target).fresh,true);controller.dispose();
 });
 
 test('resolution or disposal while acquiring dispatch access prevents a stale mutation',async()=>{

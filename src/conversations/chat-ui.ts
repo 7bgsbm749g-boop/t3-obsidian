@@ -1,4 +1,4 @@
-import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout,clockForDocument} from '../shared/clock';
+import {clockForDocument} from '../shared/clock';
 import {resolveJobOptions,overrideCount,type JobOverrides,type ResolvedJobOptions,type InlineDefaults} from './job-options';
 import {logEvent,logFailure} from '../app/diagnostics';
 import {App, FuzzySuggestModal, Modal, Notice, Setting} from 'obsidian';
@@ -7,7 +7,6 @@ import {RequestDeliveryError} from '../app/bridge';
 import {ProjectCreationCancelled} from '../projects/project-create-ui';
 import {abortableRead,cancelledRequest} from '../connection/t3-api';
 
-export const DESTINATION_CHECK_TIMEOUT_MS=5000;
 
 export interface ChatDestination {
   threadId?:string;
@@ -92,17 +91,15 @@ class SendDestinationModal extends NoteTabPanel {
   private field?:HTMLTextAreaElement;
   private projectKey?:string;
   private composing:boolean;
-  private check?:{key?:string;controller:AbortController;work:Promise<ChatDestination>;started:number};
+  private check?:{key?:string;controller:AbortController;work:Promise<ChatDestination>};
   constructor(app:App,private host:ChatHost,private prompt?:string){super(app,host.getNotePath());this.composing=prompt===undefined;this.projectKey=host.getDefaultProjectKey?.();}
   private cancelCheck(){this.check?.controller.abort(cancelledRequest('Conversation check cancelled.'));this.check=undefined;}
   private checkDestination(key?:string){
-    if(this.check&&this.check.key===key&&!this.check.controller.signal.aborted&&Date.now()-this.check.started<DESTINATION_CHECK_TIMEOUT_MS)return this.check.work;
-    this.cancelCheck();const controller=new AbortController(),started=Date.now();
-    const timer=clockForDocument(this.contentEl.ownerDocument).setTimeout(()=>controller.abort(Error('The conversation check took too long. Retry or choose another thread.')),DESTINATION_CHECK_TIMEOUT_MS);
+    if(this.check&&this.check.key===key&&!this.check.controller.signal.aborted)return this.check.work;
+    this.cancelCheck();const controller=new AbortController();
     const work=abortableRead(Promise.resolve().then(async()=>{if(controller.signal.aborted)throw controller.signal.reason;const destination=await this.host.getDefaultDestination!(key,controller.signal);if(!destination.unavailable&&this.host.hasNewContent&&!await this.host.hasNewContent(destination,this.prompt??''))return {...destination,empty:true};return destination;}),controller.signal)
-      .catch((error):ChatDestination=>({label:'Thread unavailable',unavailable:true,detail:controller.signal.aborted&&!this.opened?'Conversation check cancelled.':error instanceof Error?error.message:'Cannot check this conversation. Reconnect T3 or choose another thread.'}))
-      .finally(()=>clockForDocument(this.contentEl.ownerDocument).clearTimeout(timer));
-    this.check={key,controller,work,started};return work;
+      .catch((error):ChatDestination=>({label:'Thread unavailable',unavailable:true,detail:controller.signal.aborted&&!this.opened?'Conversation check cancelled.':error instanceof Error?error.message:'Cannot check this conversation. Reconnect T3 or choose another thread.'}));
+    this.check={key,controller,work};return work;
   }
   onOpen(){
     this.opened=true;const revision=++this.revision;
@@ -236,9 +233,7 @@ async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
       let destination:ChatDestination|undefined;
       if(host.getDefaultDestination){
         const controller=new AbortController();
-        const timer=setTimeout(()=>controller.abort(Error('The conversation check took too long. Hold Control and send again to retry or choose another thread.')),DESTINATION_CHECK_TIMEOUT_MS);
-        try{destination=await abortableRead(host.getDefaultDestination(key,controller.signal),controller.signal);}
-        finally{clearTimeout(timer);}
+        destination=await abortableRead(host.getDefaultDestination(key,controller.signal),controller.signal);
         if(destination.unavailable)throw new RequestDeliveryError(destination.detail??'This conversation is unavailable. Hold Control and send again to choose another thread.',false);
         if(host.hasNewContent&&!await host.hasNewContent(destination,prompt)){new SendDestinationModal(app,host,prompt).open();return;}
       }

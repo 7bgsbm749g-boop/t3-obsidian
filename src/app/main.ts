@@ -1,4 +1,5 @@
 import {RouteStatus} from '../connection/route-status';
+import {readImportThreads,readImportRuns,readImportRun,readImportPreview,importHistoryState} from '../conversations/import-source';
 import {orderedRoutes,routeGroups,routePairing,routeMethod,localRoute,routeNames,type ConnectionMethod} from '../connection/routes';
 import {forEachBounded} from '../shared/bounded-work';
 import {AgentSetup,type AgentProvider} from '../agents/setup';
@@ -64,7 +65,7 @@ import {readInlineSnapshot,watchThread,type ThreadAccess} from '../conversations
 import {isRecoveryCommand} from '../responses/recovery-command';
 import {abortableRead,requestAborted} from '../connection/t3-api';
 import {mountToolGroups} from '../responses/response-tool-presentation';
-import {availableImportRun,importRunPreview,importRuns,importBindingId,importFollowId,type RunImportResult} from '../conversations/run-import';
+import {importRuns,importBindingId,importFollowId,type RunImportResult,type ImportRun} from '../conversations/run-import';
 import {renderRunImportPreview} from '../conversations/run-import-preview';
 import {findRunImport,runImportReceipt} from '../conversations/run-import-receipt';
 import {openRunImport,ImportStreamsModal} from '../conversations/run-import-ui';
@@ -82,6 +83,7 @@ import {streamMemory} from './stream-memory-diagnostics';
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from '../connection/cloud';
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from '../connection/native-account';
 import {pair,readDirect,commandId,environmentApi,endpoint,type PairedConnection,type PairedSession} from '../connection/direct';
+import {RouteAuthorizationCache,verifyOrchestrationRead} from '../connection/route-authorization';
 import {environmentAccess} from '../connection/environment-access';
 import {setIcon, App, FileSystemAdapter, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type SettingDefinition,type SettingDefinitionItem,type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, MarkdownRenderer,  requestUrl } from 'obsidian';
 import { Buffer } from 'buffer/';
@@ -93,7 +95,7 @@ import { collectImages, imageReferenceDefinitions, MAX_IMAGE_BYTES } from '../no
 import {vaultHost,loadVaultHost,mergeVaultHost,type VaultHost} from './vault-host';
 import {ensureNoProject,NO_PROJECT,isNoProjectKey,noProjectKey,noProjectMachine} from '../projects/no-project';
 import {CompletionSettings,CompletionJob,contentHash} from '../responses/completion';
-import {Connection,Project,Request,RequestDeliveryError,acceptedRequestThread,parseProjects,runBridge,sendRequest,configureBridge,retiredConnection,projectKey,projectLabel,withTimeout} from './bridge';
+import {Connection,Project,Request,RequestDeliveryError,acceptedRequestThread,parseProjects,runBridge,sendRequest,configureBridge,retiredConnection,projectKey,projectLabel} from './bridge';
 import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,type FolderLink} from '../projects/folder-link';
 import {loadFolderLinkChanges,mergeFolderLinkChanges,applyFolderLinkChanges,changedFolderLinks,mergeLegacyFolderLinks,type FolderLinkChange} from '../projects/folder-link-sync';
 import {installPaletteChat,type PaletteChatController} from '../conversations/palette-chat';
@@ -202,7 +204,8 @@ export default class SendToT3 extends Plugin {
   private projectCreateModal?:ProjectCreateModal;
   private commandHosts=new Map<string,{host:ConnectCommandHost;rpc:Awaited<ReturnType<typeof connectT3Rpc>>;files:CommandFiles}>();
   private commandProjects=new Map<string,Project>();
-  private verifiedConnections=new Map<string,{work:Promise<void>;until:number}>();
+  private verifiedConnections=new RouteAuthorizationCache<Awaited<ReturnType<typeof environmentApi>>>();
+  private importPreparation=new Set<AbortController>();
   private commandSerial:Promise<void>=Promise.resolve();
   private noteEdits?:CheckedNoteEdits;
   private threadDisplays?:ThreadDisplays;
@@ -422,7 +425,7 @@ export default class SendToT3 extends Plugin {
     if(typeof this.registerMarkdownCodeBlockProcessor==='function'){
       const prefix=`html-result:v1:${this.settings.vaultId}:`;
       const store=new HtmlResultStore({read:key=>deviceState(prefix+key),write:async(key,value)=>{await deviceState(prefix+key,value);}},environmentId=>this.inlineThreadAccess(environmentId),async url=>{
-        const response=await withTimeout(requestUrl({url,headers:{Accept:'text/html'},throw:false}),30_000);
+        const response=await requestUrl({url,headers:{Accept:'text/html'},throw:false});
         return {status:response.status,mimeType:Object.entries(response.headers).find(([key])=>key.toLowerCase()==='content-type')?.[1]??'',bytes:response.arrayBuffer};
       },{isSignInError:signInRequired,onDiagnostic:diagnostic=>logEvent('html.result.failure',diagnostic as unknown as Record<string,unknown>,'warning')});
       this.htmlResults=new HtmlResultViews(this.app,store,{onSignIn:()=>this.openSettings()});this.htmlResults.install(this);
@@ -1214,15 +1217,38 @@ export default class SendToT3 extends Plugin {
       new ExistingThreadModal(this.app,threads,thread=>this.sendNote(file,thread.id,projectKey(project),false,overrideKey,resolve?.(),insertion),undefined,undefined,back).open();
     }catch(error){if(back)throw error;new Notice(`T3 Code: ${message(error)}`,10000);}
   }
+  private prepareImportAccess(){
+    const environments=[...new Set(this.settings.paired.map(connection=>connection.environmentId))].slice(0,4);
+    const controller=new AbortController();this.importPreparation.add(controller);
+    void forEachBounded(environments,2,async environmentId=>{
+      try{const access=await this.inlineThreadAccess(environmentId);try{await access.api.prepareImportCatalog?.(controller.signal);}finally{await access.close?.();}}catch{/* Selection reports a current route failure. */}
+    }).finally(()=>{this.importPreparation.delete(controller);});
+  }
   openRunImport(file:TFile){
     if(this.stopped||this.busy)return;
     const insertion=this.noteSendInsertion(file);
+    const catalogs=new WeakMap<ImportRun,ImportRun[]>();
+    const threadSources=new Map<string,ThreadAccess['api']>();
+    const read=async<T>(project:Project,operation:(access:ThreadAccess,environmentId:string)=>Promise<T>)=>{
+      const environmentId=this.connection(project).environmentId??await this.localInlineEnvironment(),access=await this.inlineThreadAccess(environmentId);
+      try{return await operation(access,environmentId);}finally{await access.close?.();}
+    };
+    this.prepareImportAccess();
     openRunImport(this.app,file.path,{
       projects:()=>this.projects(),projectLabel:project=>this.projectChoiceLabel(project),
-      threads:async project=>this.availableModeThreads(file.path,project,projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id)),
-      runs:async(project,thread)=>{const history=await this.readImportHistory(project,thread.id);return importRuns(history.state).filter(availableImportRun).map(run=>({...run,preview:importRunPreview(history.state,run,history.source.environmentId,thread.id)}));},
-      preview:(_project,_thread,run,el,child,signal)=>renderRunImportPreview(this.app,run,el,child,signal,this.htmlResults),
-      attach:(project,thread,run,follow)=>this.importRun(file.path,project,thread.id,run.messageId,follow,insertion),
+      threads:(project,signal)=>read(project,async access=>{threadSources.set(projectKey(project),access.api);return this.availableModeThreads(file.path,project,await readImportThreads(access,project.id,signal));}),
+      watchThreads:(project,changed)=>{const api=threadSources.get(projectKey(project));return api?.watchImportThreads?.(project.id,()=>{const threads=api.cachedImportThreads?.(project.id);if(threads)void this.availableModeThreads(file.path,project,threads).then(changed).catch(()=>{});})??(()=>{});},
+      runs:async(project,thread,signal,progress)=>{const remember=(runs:ImportRun[])=>{for(const run of runs)catalogs.set(run,runs);return runs;};return remember(await read(project,access=>readImportRuns(access,thread.id,project.id,signal,runs=>progress?.(remember(runs)))));},
+      prepareSelection:async(project,thread,run)=>{
+        if(!this.htmlResults||!run.turnId)return;
+        run.preview??=await read(project,(access,environmentId)=>readImportPreview(access,thread.id,project.id,run,environmentId));
+        const first=run.preview.html[0];if(first)await this.htmlResults.prefetch(first,activeDocument);
+      },
+      preview:async(project,thread,run,el,child,signal)=>{
+        if(!run.preview&&run.turnId)run.preview=await read(project,(access,environmentId)=>readImportPreview(access,thread.id,project.id,run,environmentId,signal));
+        if(!signal.aborted)await renderRunImportPreview(this.app,run,el,child,signal,this.htmlResults);
+      },
+      attach:(project,thread,run,follow)=>this.importRun(file.path,project,thread.id,run.messageId,follow,insertion,catalogs.get(run)),
     });
   }
   async openImportStreams(file:TFile){
@@ -1251,24 +1277,34 @@ export default class SendToT3 extends Plugin {
   }
 
   private async executeImportRead(_command:import('../responses/response-command').ResponseCommand,_target:ResponseStorageTarget):Promise<never>{throw Error('Legacy lease imports were retired. Imports read T3 directly.');}
-  private async readImportHistory(project:Project,threadId:string){
+  private async readImportHistory(project:Project,threadId:string,messageId:string,catalog?:ImportRun[]){
     if(this.stopped)throw Error('The plugin is disabled.');
     const connection=this.connection(project),environmentId=connection.environmentId??await this.localInlineEnvironment();
     const source={threadId,projectId:project.id,environmentId},access=await this.inlineThreadAccess(environmentId);
     let snapshot:ThreadSnapshot;
-    try{snapshot=await readInlineSnapshot(access,threadId,project.id,undefined,true,true);}finally{await access.close?.();}
+    let index:Awaited<ReturnType<typeof readImportRuns>>;
+    try{
+      index=catalog??await readImportRuns(access,threadId,project.id);
+      const selected=index.find(run=>run.messageId===messageId);
+      if(!selected?.turnId)throw Error('This response is no longer in the T3 run index.');
+      // Register the exact root and complete answer once. The response feed
+      // reuses this snapshot while retrieving the selected history separately.
+      snapshot=(await readImportRun(access,threadId,project.id,selected.turnId,{firstPageOnly:true,selected})).snapshot;
+      const turn=snapshot.thread.turns?.[selected.turnId]??(snapshot.thread.latestTurn?.turnId===selected.turnId?snapshot.thread.latestTurn:undefined);
+      if(typeof turn?.messageId==='string'?turn.messageId!==messageId:!snapshot.thread.messages.some(message=>message.id===messageId&&message.role==='user'&&message.turnId===selected.turnId))throw Error('The selected run no longer belongs to this source prompt.');
+    }finally{await access.close?.();}
     if(snapshot.thread.deletedAt||snapshot.thread.archivedAt)throw Error('This source thread is no longer available.');
-    const state:InlineThreadState=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
-    return {source,state,title:String(snapshot.thread.title??'T3 response').slice(0,200)};
+    const selectedState=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
+    return {source,snapshot,...importHistoryState(index,selectedState,messageId),title:String(snapshot.thread.title??'T3 response').slice(0,200)};
   }
   /** Attach without sending input, then use the imported thread for later sends. */
-  async importRun(notePath:string,project:Project,threadId:string,messageId:string,follow=false,insertion?:CursorInsertion|null):Promise<RunImportResult>{
+  async importRun(notePath:string,project:Project,threadId:string,messageId:string,follow=false,insertion?:CursorInsertion|null,catalog?:ImportRun[]):Promise<RunImportResult>{
     if(this.stopped||this.busy||!this.deviceInline)throw Error('Obsidian is unavailable or sending another request.');
     this.busy=true;
     try{
 
       await this.assertNoteMode(notePath,{...this.connection(project),projectId:project.id,threadId});
-      const history=await this.readImportHistory(project,threadId),run=importRuns(history.state).find(run=>run.messageId===messageId);
+      const history=await this.readImportHistory(project,threadId,messageId,catalog),run=history.run??importRuns(history.state).find(run=>run.messageId===messageId);
       if(!run||run.unavailable||!run.turnId||!run.turn)throw Error(run?.unavailable??'This response is no longer in the T3 history.');
       const document=await deviceNoteIO(this.app).readNote(notePath);if(document===undefined)throw Error('Destination note not found.');
       const previous=findRunImport(document,history.source,messageId);
@@ -1283,7 +1319,7 @@ export default class SendToT3 extends Plugin {
         const request:ResponseRequest={version:4,id,localOnly:true,nativeProjection:true,responseContainer:true,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath,threadId,messageId,projectId:project.id,threadEnvironmentId:history.source.environmentId,createdAt:run.createdAt,threadTitle:history.title,independent:true,importTurn:run.turn,initialInput:isT3MessageId(messageId)?{messageId,text:prompt.text,label:incomingLabel(prompt)}:undefined,initialHash:initialRegion(id).bodyHash,keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode,finalAnswerFormat:policy.finalAnswerFormat};
         const io=deviceNoteIO(this.app),receipt=runImportReceipt({version:1,bindingId:id,...history.source,messageId,runId:run.turnId});
         const inserted=await editorStream(request,notePath,{...io,updateNote:(path,change,allowed)=>io.updateNote(path,current=>{const next=change(current);return findRunImport(next,history.source,messageId)?next:next+(next.endsWith('\n')?'':'\n')+receipt+'\n';},allowed)},()=>!this.stopped,id,insertion??undefined);
-        await this.deviceInline.register(inserted);
+        await this.deviceInline.register(inserted,history.snapshot);
         bindingId=id;
       }
       await this.ensureNoteIdentity(notePath);
@@ -1644,18 +1680,15 @@ export default class SendToT3 extends Plugin {
   private async pairedThreadAccess(paired:PairedConnection,forceRefresh=false):Promise<ThreadAccess>{
     const environmentId=paired.environmentId;
     const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId,connectionId:paired.id};
-    let session=await this.sessionFor(paired.id,forceRefresh),api=await environmentApi(connection,session);
+    let session=await this.sessionFor(paired.id,forceRefresh);
     // Verify authorization before exposing a candidate to sends or writes.
     // A failed open can try another endpoint for the same machine; the caller
     // operation is never part of this fallback.
     const key=JSON.stringify([paired.url,environmentId,session?.token,session?.expiresAt,session?.dpopKeyId]);
-    let verified=this.verifiedConnections.get(key);
-    if(forceRefresh||!verified||verified.until<=Date.now()){
-      const work=this.routeStatus.request(paired.id,()=>api('/api/orchestration/shell')).then(()=>{});verified={work,until:Date.now()+30_000};this.verifiedConnections.set(key,verified);
-      while(this.verifiedConnections.size>16)this.verifiedConnections.delete(this.verifiedConnections.keys().next().value!);
-      void work.catch(()=>{if(this.verifiedConnections.get(key)?.work===work)this.verifiedConnections.delete(key);});
-    }
-    await verified.work;
+    let api=await this.verifiedConnections.open(key,async()=>{
+      const candidate=await environmentApi(connection,session);
+      await this.routeStatus.request(paired.id,()=>verifyOrchestrationRead(candidate));return candidate;
+    },forceRefresh,(session?.expiresAt??0)-5000);
     if(!Platform.isMobile&&localRoute(paired))this.eventLocalEnvironmentId=environmentId;
     let renewing:Promise<void>|undefined;
     const routed:ThreadAccess['api']=async(path,payload,options)=>this.routeStatus.request(paired.id,async()=>{
@@ -1676,9 +1709,13 @@ export default class SendToT3 extends Plugin {
           }
           return await api(path,payload,options);
         }
-      }catch(error){this.routeFailures.set(paired.id,message(error));throw error;}
+      }catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403))this.verifiedConnections.delete(key);this.routeFailures.set(paired.id,message(error));throw error;}
     });
     routed.trackConnection=connection=>this.routeStatus.track(paired.id,connection);
+    routed.cachedImportThreads=projectId=>api.cachedImportThreads?.(projectId);
+    Object.defineProperty(routed,'importCacheIdentity',{get:()=>api.importCacheIdentity});
+    routed.prepareImportCatalog=signal=>api.prepareImportCatalog?.(signal)??Promise.resolve();
+    routed.watchImportThreads=(projectId,changed)=>api.watchImportThreads?.(projectId,changed)??(()=>{});
     return {origin:endpoint(paired.url),diagnosticRoute:{routeId:paired.id,environmentId,routeKind:localRoute(paired)?'local':'remote'},get expiresAt(){return session?.expiresAt;},api:routed};
   }
   private async localInlineEnvironment():Promise<string>{
@@ -2825,7 +2862,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }
   }
-  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async monitorCompletions() {
     if(this.monitoring||this.stopped||this.busy)return;
     this.monitoring=true;try{await this.monitorSettlements();}finally{this.monitoring=false;}

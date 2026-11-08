@@ -1,4 +1,3 @@
-import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import {hasControlCharacters,isRecord,records,toError} from '../shared/values';
 import {connectT3Rpc} from '../connection/t3-rpc';
 import {ThreadAccessCache} from '../conversations/thread-access-cache';
@@ -8,25 +7,27 @@ import {relativeCodebasePath,catalogCodebases} from './codebase-core';
 
 export interface CodebaseTiming {operation:string;milliseconds:number}
 export interface CodebaseTransport extends CodebaseIO {timings:CodebaseTiming[]}
-interface Options {connect?:typeof connectT3Rpc;now?:()=>number;timeout?:number}
+interface Options {connect?:typeof connectT3Rpc;now?:()=>number}
 /** One credential owner and multiplexed socket per machine. No file bytes persist. */
 export function codebaseTransport(createAccess:(environmentId:string,reason?:ThreadAccessCloseReason)=>Promise<ThreadAccess>,options:Options={}):CodebaseTransport {
-  const now=options.now??Date.now,connect=options.connect??connectT3Rpc,timeout=options.timeout??10000;
+  const now=options.now??Date.now,connect=options.connect??connectT3Rpc;
   const access=new ThreadAccessCache(createAccess,now),timings:CodebaseTiming[]=[];
   type Rpc=Awaited<ReturnType<typeof connectT3Rpc>>;
   const sockets=new Map<string,{rpc:Rpc;origin:string;until:number}>(),opening=new Map<string,Promise<{rpc:Rpc;origin:string;until:number}>>();
   const catalogs=new Map<string,{value:Record<string,unknown>;at:number}>(),catalogPending=new Map<string,Promise<Record<string,unknown>>>();
   let stopped=false;
   async function measured<T>(operation:string,work:()=>Promise<T>):Promise<T>{const start=now();try{return await work();}finally{timings.push({operation,milliseconds:now()-start});if(timings.filter(value=>value.operation===operation).length>200)timings.splice(timings.findIndex(value=>value.operation===operation),1);}}
-  function bounded<T>(work:Promise<T>,late?:(value:T)=>void):Promise<T>{return new Promise((resolve,reject)=>{let expired=false;const timer=setTimeout(()=>{expired=true;reject(Error('The project machine did not respond. Cached folders remain available.'));},timeout);work.then(value=>{clearTimeout(timer);if(expired)late?.(value);else resolve(value);},error=>{clearTimeout(timer);reject(toError(error));});});}
+  async function active<T>(work:Promise<T>,late?:(value:T)=>void):Promise<T>{
+    const value=await work;if(stopped){late?.(value);throw Error('The project connection is stopped.');}return value;
+  }
   async function connection(environmentId:string){
     if(stopped)throw Error('The project connection is stopped.');
     const cached=sockets.get(environmentId);if(cached&&!cached.rpc.closed&&cached.until>now())return cached;
     const pending=opening.get(environmentId);if(pending)return pending;
     const work=measured('connect',async()=>{
       cached?.rpc.close();sockets.delete(environmentId);
-      const borrowed=await bounded(access.get(environmentId));
-      const rpc=await bounded(connect((path,payload)=>bounded(borrowed.api(path,payload)),borrowed.origin),late=>late.close());
+      const borrowed=await active(access.get(environmentId));
+      const rpc=await active(connect((path,payload)=>active(borrowed.api(path,payload)),borrowed.origin),late=>late.close());
       if(stopped){rpc.close();throw Error('The project connection is stopped.');}
       const result={rpc,origin:borrowed.origin,until:now()+170000};sockets.set(environmentId,result);return result;
     });
@@ -35,21 +36,21 @@ export function codebaseTransport(createAccess:(environmentId:string,reason?:Thr
   async function catalog(environmentId:string,fresh=false){
     const cached=catalogs.get(environmentId);if(!fresh&&cached&&now()-cached.at<15000)return cached.value;
     const pending=catalogPending.get(environmentId);if(pending){if(!fresh)return pending;try{await pending;}catch{/* A fresh read replaces the failed request below. */}if(stopped)throw Error('The project connection is stopped.');}
-    const work=measured('catalog',async()=>{const borrowed=await bounded(access.get(environmentId)),value:unknown=await bounded(borrowed.api('/api/orchestration/shell'));if(!isRecord(value))throw Error('T3 returned an invalid project catalog.');if(stopped)throw Error('The project connection is stopped.');catalogs.set(environmentId,{value,at:now()});return value;});
+    const work=measured('catalog',async()=>{const borrowed=await active(access.get(environmentId)),value:unknown=await active(borrowed.api('/api/orchestration/shell'));if(!isRecord(value))throw Error('T3 returned an invalid project catalog.');if(stopped)throw Error('The project connection is stopped.');catalogs.set(environmentId,{value,at:now()});return value;});
     catalogPending.set(environmentId,work);try{return await work;}finally{if(catalogPending.get(environmentId)===work)catalogPending.delete(environmentId);}
   }
   async function verify(scope:CodebaseScope,fresh=false,allowMissing=false){const shell=await catalog(scope.environmentId,fresh),project=records(shell.projects).find(p=>p.id===scope.projectId&&!p.deletedAt),thread=scope.threadId?records(shell.threads).find(t=>t.id===scope.threadId&&t.projectId===scope.projectId&&!t.deletedAt):undefined;if(!project&&allowMissing)return undefined;const known=catalogCodebases(scope.environmentId,shell).some(value=>value.projectId===scope.projectId&&value.threadId===scope.threadId&&value.root===scope.root);if(!project||!known||scope.threadId&&!thread)throw Error('The project workspace changed or is unavailable. Refresh project locations before opening files.');return project;}
-  async function call(scope:CodebaseScope,tag:string,payload:unknown){return measured(tag,async()=>{const [socket]=await Promise.all([connection(scope.environmentId),verify(scope,tag==='projects.writeFile')]);const value=await bounded(socket.rpc.call(tag,payload));if(!isRecord(value))throw Error('T3 returned an invalid project file response.');return value;});}
+  async function call(scope:CodebaseScope,tag:string,payload:unknown){return measured(tag,async()=>{const [socket]=await Promise.all([connection(scope.environmentId),verify(scope,tag==='projects.writeFile')]);const value=await active(socket.rpc.call(tag,payload));if(!isRecord(value))throw Error('T3 returned an invalid project file response.');return value;});}
   async function projectCommand(scope:CodebaseScope,change:{title:string}|{deleted:true}){
     if(scope.threadId)throw Error('Choose the project root to change a project.');
     const current=await verify(scope,true,'deleted' in change);
     if('deleted' in change&&!current||'title' in change&&current?.title===change.title)return;
     if(stopped)throw Error('The project connection is stopped.');
-    const borrowed=await bounded(access.get(scope.environmentId));
+    const borrowed=await active(access.get(scope.environmentId));
     const command={commandId:crypto.randomUUID(),projectId:scope.projectId,...('title' in change?{type:'project.meta.update',title:change.title}:{type:'project.delete',force:true})};
     // One attempt only. A lost reply is reconciled by the fresh project catalog.
     let failure:unknown;
-    try{await bounded(borrowed.api('/api/orchestration/dispatch',command));}catch(error){failure=error;}
+    try{await active(borrowed.api('/api/orchestration/dispatch',command));}catch(error){failure=error;}
     catalogs.delete(scope.environmentId);
     const shell=await catalog(scope.environmentId,true),project=records(shell.projects).find(p=>p.id===scope.projectId);
     const confirmed='title' in change?project?.workspaceRoot===scope.root&&project?.title===change.title:!project;

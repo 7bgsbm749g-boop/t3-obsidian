@@ -66,6 +66,7 @@ function viewerDocument(html:string,doc:Document):string {
 export class HtmlResultViews {
   private mounted=new Set<Mounted>();private stopped=false;
   private prepared=new Map<string,string>();private preparedCharacters=0;
+  private prefetching=0;
   constructor(private app:App,private store:HtmlResultStore,private options:HtmlResultViewOptions={}){}
   private prepare(html:string,doc:Document){
     const cached=this.prepared.get(html);if(cached!==undefined){this.prepared.delete(html);this.prepared.set(html,cached);return cached;}
@@ -75,6 +76,13 @@ export class HtmlResultViews {
       while(this.prepared.size>16||this.preparedCharacters>8_000_000){const [source,value]=this.prepared.entries().next().value!;this.prepared.delete(source);this.preparedCharacters-=source.length+value.length;}
     }
     return prepared;
+  }
+  /** Warm one explicitly selected result while its import confirmation is
+   * open. Preparing inert bytes creates no iframe or authored script runtime. */
+  async prefetch(reference:HtmlResultReference,doc:Document):Promise<void>{
+    if(this.stopped||this.prefetching>=2)return;
+    this.prefetching++;
+    try{const html=await this.store.get(reference);if(!this.stopped)this.prepare(html,doc);}finally{this.prefetching--;}
   }
   install(plugin:Plugin){
     plugin.registerMarkdownCodeBlockProcessor(HTML_RESULT_LANGUAGE,(source,el,ctx)=>{
@@ -142,7 +150,12 @@ export class HtmlResultViews {
       loading=(async()=>{
       try{
         const html=await this.store.get(reference);if(disposed||this.stopped||current!==generation)return;
-        const next=doc.win.createEl('iframe');next.title=reference.title;next.setAttribute('sandbox',options.passive?'allow-scripts':'allow-scripts allow-forms');next.referrerPolicy='no-referrer';next.loading=options.passive?'eager':'lazy';next.className='send-to-t3-html-frame';
+        const next=doc.win.createEl('iframe');next.title=reference.title;next.setAttribute('sandbox',options.passive?'allow-scripts':'allow-scripts allow-forms');next.referrerPolicy='no-referrer';
+        const box=root.isConnected?root.getBoundingClientRect():undefined;
+        // A selected visible result must not wait for the browser's lazy-frame
+        // scheduling window. Off-screen results still defer their runtimes.
+        const visible=box&&box.width>0&&box.height>0&&box.bottom>0&&box.top<win.innerHeight&&box.right>0&&box.left<win.innerWidth;
+        next.loading=options.passive||visible?'eager':'lazy';next.className='send-to-t3-html-frame';
         if(options.passive){next.inert=true;next.tabIndex=-1;}
         const theme=themeFor(doc);next.style.colorScheme=theme.appearance;
         blob=win.URL.createObjectURL(new win.Blob([this.prepare(html,doc)],{type:'text/html;charset=utf-8'}));
