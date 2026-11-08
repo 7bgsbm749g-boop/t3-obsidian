@@ -146,9 +146,11 @@ export default class ImportPerformanceLab extends Plugin {
    routing?.prepareImportAccess();
    this.start=performance.now();this.action++;
    let catalog:ReturnType<typeof importRuns>|undefined;
+   let threadApi:ThreadAccess['api']|undefined;
    openRunImport(this.app,notePath,{
     projects:()=>this.projects,projectLabel:project=>project.title+(this.projects.filter(other=>other.title===project.title).length>1?' · '+project.id.slice(0,8):''),
-    threads:(project,signal)=>timed('threads',()=>read(async access=>this.optimized?readImportThreads(access,project.id,signal):projectThreads({threads:readThreadList(await access.api('/api/orchestration/shell'))},project.id))),
+    threads:(project,signal)=>timed('threads',()=>read(async access=>{threadApi=access.api;return this.optimized?readImportThreads(access,project.id,signal):projectThreads({threads:readThreadList(await access.api('/api/orchestration/shell'))},project.id);})),
+    watchThreads:(project,changed)=>threadApi?.watchImportThreads?.(project.id,()=>{const threads=threadApi?.cachedImportThreads?.(project.id);if(threads)changed(threads);})??(()=>{}),
     runs:(_project,thread,signal)=>timed('runs',async()=>{
      const record=(runs:ReturnType<typeof importRuns>)=>{catalog=runs;this.write({kind:'run-catalog',source:source.label,threadId:thread.id,projectId:thread.projectId,runs:runs.map(run=>({runId:run.turnId,messageId:run.messageId,ordinal:run.turn?.ordinal}))});return runs;};
      if(this.optimized)return record(await read(access=>readImportRuns(access,thread.id,thread.projectId,signal)));

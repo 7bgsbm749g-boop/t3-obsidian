@@ -23,6 +23,12 @@ async function readHistory(access:ThreadAccess,threadId:string,projectId:string,
 export async function readImportThreads(access:ThreadAccess,projectId:string,signal?:AbortSignal):Promise<ThreadChoice[]>{
  requestAborted(signal);
  const cached=access.api.cachedImportThreads?.(projectId);if(cached)return cached;
+ if(access.api.prepareImportCatalog){
+  // Join project discovery or the app-owned warm-up. Closing one picker only
+  // cancels its wait; it cannot cancel another consumer's background read.
+  await abortableRead(access.api.prepareImportCatalog(),signal);requestAborted(signal);
+  const prepared=access.api.cachedImportThreads?.(projectId);if(prepared)return prepared;
+ }
  const shell=await abortableRead(access.api('/api/orchestration/shell',undefined,{signal}),signal);
  return projectThreads({threads:readThreadList(shell)},projectId);
 }

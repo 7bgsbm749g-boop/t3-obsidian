@@ -114,3 +114,17 @@ test('native close-before-choose keeps selection alive while cancelled and repla
  pending.resolve([thread]);await drain();assert.equal(opened.at(-1),replacement,'late results cannot reopen an old flow');
  replacement.close();await drain();replacement.select(project);await drain();assert.equal(signals.at(-1)?.aborted,true);assert.equal(opened.at(-1),replacement);
 });
+
+test('a thread picker receives fresh rows without losing its filter or choosing a source, and stops watching on close',async()=>{
+ const opened:any[]=[],inputEvents:any[]=[],module={exports:{} as any},realRequire=createRequire(import.meta.url);let update!:(items:any[])=>void,stops=0,runs=0;
+ class Modal {open(){opened.push(this);this.onOpen();}close(){this.onClose();}onOpen(){}onClose(){}}
+ class Suggest extends Modal {placeholder='';inputEl={value:'typed filter',dispatchEvent(event:Event){inputEvents.push({type:event.type,value:this.value});}};setPlaceholder(value:string){this.placeholder=value;}select(item:unknown){this.close();(this as any).onChooseItem(item);}}
+ runInNewContext((await bundle).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{FuzzySuggestModal:Suggest,Modal,Notice:class{}}:realRequire(id),AbortController,Event,queueMicrotask});
+ const app={},project={id:'project'},thread={id:'old',projectId:'project',title:'Old',status:'Idle'},fresh={...thread,id:'new',title:'New'};
+ const host={projects:()=>[project],projectLabel:()=>'',threads:async()=>[thread],watchThreads:(_project:unknown,changed:(items:any[])=>void)=>{update=changed;return ()=>{stops++;};},runs:async()=>{runs++;return [];},attach:async()=>{throw Error('No import requested');}};
+ module.exports.openRunImport(app,'Synthetic.md',host);opened.at(-1).select(project);await drain();const picker=opened.at(-1);
+ update([thread,fresh]);assert.deepEqual(picker.getItems().map((item:any)=>item.id),['old','new']);assert.equal(picker.inputEl.value,'typed filter');assert.deepEqual(inputEvents,[{type:'input',value:'typed filter'}]);assert.equal(runs,0);
+ picker.close();await drain();assert.equal(stops,1);update([fresh]);assert.equal(inputEvents.length,1);
+ module.exports.openRunImport(app,'Synthetic.md',host);opened.at(-1).select(project);await drain();const abandoned=opened.at(-1),late=update;
+ module.exports.openRunImport(app,'Synthetic.md',host);assert.equal(stops,2);late([fresh]);assert.equal(inputEvents.length,1);assert.equal(abandoned.inputEl.value,'typed filter');
+});

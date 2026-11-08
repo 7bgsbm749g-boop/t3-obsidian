@@ -203,6 +203,7 @@ export default class SendToT3 extends Plugin {
   private commandHosts=new Map<string,{host:ConnectCommandHost;rpc:Awaited<ReturnType<typeof connectT3Rpc>>;files:CommandFiles}>();
   private commandProjects=new Map<string,Project>();
   private verifiedConnections=new RouteAuthorizationCache<Awaited<ReturnType<typeof environmentApi>>>();
+  private importPreparation=new Set<AbortController>();
   private commandSerial:Promise<void>=Promise.resolve();
   private noteEdits?:CheckedNoteEdits;
   private threadDisplays?:ThreadDisplays;
@@ -1184,14 +1185,16 @@ export default class SendToT3 extends Plugin {
   }
   private prepareImportAccess(){
     const environments=[...new Set(this.settings.paired.map(connection=>connection.environmentId))].slice(0,4);
+    const controller=new AbortController();this.importPreparation.add(controller);
     void forEachBounded(environments,2,async environmentId=>{
-      try{const access=await this.inlineThreadAccess(environmentId);await access.close?.();}catch{/* Selection reports a current route failure. */}
-    });
+      try{const access=await this.inlineThreadAccess(environmentId);try{await access.api.prepareImportCatalog?.(controller.signal);}finally{await access.close?.();}}catch{/* Selection reports a current route failure. */}
+    }).finally(()=>{this.importPreparation.delete(controller);});
   }
   openRunImport(file:TFile){
     if(this.stopped||this.busy)return;
     const insertion=this.noteSendInsertion(file);
     const catalogs=new WeakMap<ImportRun,ImportRun[]>();
+    const threadSources=new Map<string,ThreadAccess['api']>();
     const read=async<T>(project:Project,operation:(access:ThreadAccess,environmentId:string)=>Promise<T>)=>{
       const environmentId=this.connection(project).environmentId??await this.localInlineEnvironment(),access=await this.inlineThreadAccess(environmentId);
       try{return await operation(access,environmentId);}finally{await access.close?.();}
@@ -1199,7 +1202,8 @@ export default class SendToT3 extends Plugin {
     this.prepareImportAccess();
     openRunImport(this.app,file.path,{
       projects:()=>this.projects(),projectLabel:project=>this.projectChoiceLabel(project),
-      threads:(project,signal)=>read(project,async access=>this.availableModeThreads(file.path,project,await readImportThreads(access,project.id,signal))),
+      threads:(project,signal)=>read(project,async access=>{threadSources.set(projectKey(project),access.api);return this.availableModeThreads(file.path,project,await readImportThreads(access,project.id,signal));}),
+      watchThreads:(project,changed)=>{const api=threadSources.get(projectKey(project));return api?.watchImportThreads?.(project.id,()=>{const threads=api.cachedImportThreads?.(project.id);if(threads)void this.availableModeThreads(file.path,project,threads).then(changed).catch(()=>{});})??(()=>{});},
       runs:async(project,thread,signal)=>{const runs=await read(project,access=>readImportRuns(access,thread.id,project.id,signal));for(const run of runs)catalogs.set(run,runs);return runs;},
       preview:async(project,thread,run,el,child,signal)=>{
         if(!run.preview&&run.turnId)run.preview=await read(project,(access,environmentId)=>readImportPreview(access,thread.id,project.id,run,environmentId,signal));
@@ -1667,6 +1671,8 @@ export default class SendToT3 extends Plugin {
     routed.trackConnection=connection=>this.routeStatus.track(paired.id,connection);
     routed.cachedImportThreads=projectId=>api.cachedImportThreads?.(projectId);
     Object.defineProperty(routed,'importCacheIdentity',{get:()=>api.importCacheIdentity});
+    routed.prepareImportCatalog=signal=>api.prepareImportCatalog?.(signal)??Promise.resolve();
+    routed.watchImportThreads=(projectId,changed)=>api.watchImportThreads?.(projectId,changed)??(()=>{});
     return {origin:endpoint(paired.url),get expiresAt(){return session?.expiresAt;},api:routed};
   }
   private async localInlineEnvironment():Promise<string>{
@@ -2798,7 +2804,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }
   }
-  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
+  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();configureDiagnostics();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;}
   async monitorCompletions() {
     if(this.monitoring||this.stopped||this.busy)return;
     this.monitoring=true;try{await this.monitorSettlements();}finally{this.monitoring=false;}

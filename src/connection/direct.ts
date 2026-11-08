@@ -91,11 +91,20 @@ export async function environmentApi(c:Connection,s:PairedSession|undefined,fetc
  const transport=fetcher??browserFetch;let catalog=threadCatalogs.get(transport);if(!catalog){catalog=new ThreadCatalogCache();threadCatalogs.set(transport,catalog);}
  const identity=JSON.stringify([url,c.environmentId,s.token,s.expiresAt,s.dpopKeyId,s.accountId,s.permissions]),cache=catalog;
  const routed:import('./t3-rpc').T3Api=async(path,payload,options)=>{
-  try{const value=await api(path,payload,options);if(path==='/api/orchestration/shell'&&payload===undefined){try{cache.remember(identity,value,s.expiresAt);}catch{cache.delete(identity);}}return value;}
+  try{
+   const work=api(path,payload,options).then(value=>{if(path==='/api/orchestration/shell'&&payload===undefined){try{cache.remember(identity,value,s.expiresAt);}catch{cache.delete(identity);}}return value;});
+   if(path==='/api/orchestration/shell'&&payload===undefined)cache.observe(identity,work);
+   return await work;
+  }
   catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403))cache.delete(identity);throw error;}
  };
  routed.cachedImportThreads=projectId=>cache.read(identity,projectId);
  routed.importCacheIdentity=cache.scope(identity);
+ routed.prepareImportCatalog=signal=>{requestAborted(signal);return cache.prepare(identity,()=>routed('/api/orchestration/shell',undefined,{signal}));};
+ routed.watchImportThreads=(projectId,changed)=>{
+  let previous=JSON.stringify(cache.read(identity,projectId));
+  return cache.watch(identity,()=>{const next=JSON.stringify(cache.read(identity,projectId));if(next!==previous){previous=next;changed();}});
+ };
  return routed;
 }
 interface CachedReadApi {work:Promise<AbortableT3Api>;controller:AbortController;users:number;settled:boolean;expires:number}
