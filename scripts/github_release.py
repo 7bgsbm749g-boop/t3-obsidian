@@ -76,15 +76,31 @@ def prepare(repo: str, selected: str, source: str) -> None:
     print(f'Dispatched release {selected} at {source}.')
 
 
+def find_release(repo: str, selected: str):
+    published = api(f'repos/{repo}/releases/tags/{selected}', missing=True)
+    if published is not None:
+        return published
+    # The tag endpoint returns published releases only. Drafts must be found
+    # through the authenticated release list, including after a partial upload.
+    for page in range(1, 51):
+        releases = api(f'repos/{repo}/releases?per_page=100&page={page}')
+        for candidate in releases:
+            if candidate['tag_name'] == selected:
+                return candidate
+        if len(releases) < 100:
+            return None
+    raise ValueError('Release lookup exceeded 5,000 entries; refusing to create a duplicate draft.')
+
+
 def publish(repo: str, selected: str, source: str) -> None:
     if tag_commit(repo, selected) != source:
         raise ValueError('The remote release tag no longer matches this build.')
-    release = api(f'repos/{repo}/releases/tags/{selected}', missing=True)
+    release = find_release(repo, selected)
     if release is None:
         command('gh', 'release', 'create', selected, '--repo', repo, '--verify-tag', '--target', source,
                 '--title', release_title(ROOT, selected), '--notes', 'Source commit: ' + source,
                 '--generate-notes', '--draft', *ASSETS.values())
-        release = api(f'repos/{repo}/releases/tags/{selected}')
+        release = find_release(repo, selected)
     else:
         present = {asset['name'] for asset in release['assets']}
         absent = [path for name, path in ASSETS.items() if name not in present]
@@ -92,7 +108,9 @@ def publish(repo: str, selected: str, source: str) -> None:
             if not release['draft']:
                 raise ValueError('An existing published release has missing assets; refusing to replace it.')
             command('gh', 'release', 'upload', selected, '--repo', repo, *absent)
-            release = api(f'repos/{repo}/releases/tags/{selected}')
+            release = find_release(repo, selected)
+    if release is None:
+        raise ValueError('The uploaded release draft is not visible; retry without replacing its assets.')
     assets = {asset['name']: asset for asset in release['assets']}
     if set(assets) != set(ASSETS):
         raise ValueError('The release must contain exactly the three attested plugin assets.')

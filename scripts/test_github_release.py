@@ -82,8 +82,21 @@ class AutomaticPublicationTests(unittest.TestCase):
             self.assertEqual(command.call_args.args[:3], ('gh', 'release', 'upload'))
             self.assertNotIn('--clobber', command.call_args.args)
 
+    def test_draft_lookup_falls_back_to_the_authenticated_release_list(self):
+        draft = {**self.draft(), 'tag_name': '0.0.999'}
+        with patch.object(release, 'api', side_effect=[None, [draft]]) as api:
+            self.assertEqual(release.find_release('owner/repo', '0.0.999'), draft)
+            self.assertEqual(api.call_args.args[0], 'repos/owner/repo/releases?per_page=100&page=1')
+
+    def test_draft_lookup_does_not_duplicate_or_hide_listing_errors(self):
+        with patch.object(release, 'api', side_effect=[None, []]):
+            self.assertIsNone(release.find_release('owner/repo', '0.0.999'))
+        with patch.object(release, 'api', side_effect=[None, RuntimeError('Forbidden')]):
+            with self.assertRaisesRegex(RuntimeError, 'Forbidden'):
+                release.find_release('owner/repo', '0.0.999')
+
     def test_new_release_uploads_a_draft_before_publication(self):
-        with patch.object(release, 'tag_commit', return_value='a' * 40), patch.object(release, 'api', side_effect=[None, self.draft(), {'tag_name': '0.0.998'}]), patch.object(release, 'command') as command:
+        with patch.object(release, 'tag_commit', return_value='a' * 40), patch.object(release, 'find_release', side_effect=[None, self.draft()]), patch.object(release, 'api', return_value={'tag_name': '0.0.998'}), patch.object(release, 'command') as command:
             release.publish('owner/repo', '0.0.999', 'a' * 40)
             create, publish = [call.args for call in command.call_args_list]
             self.assertEqual(create[:4], ('gh', 'release', 'create', '0.0.999'))
