@@ -25,6 +25,17 @@ receipt. The release-tag workflow runs the same gates before building. Every
 main push dispatches a tag build and publication; pull requests check that the
 version is aligned and newer than their base before merge.
 
+An official GitHub installation can lack a local deployment receipt. A maintainer
+can retain its verified source identity separately as
+`<evidenceRoot>/releases/VERSION/installed-source.json`, with `version`, the exact
+`gitCommit`, and `runtimeSha256` for `main.js`, `manifest.json` and `styles.css`.
+Verify the published assets and immutable source tag first, retaining that
+provenance and any loader-added comment comparison outside the checkout. The
+record describes the installed source, not a completed local release or smoke
+test. Check selection accepts it only while every installed runtime hash and
+the source commit's manifest version match. A local deployment receipt takes
+precedence. Unknown or changed installed bytes still block baseline recovery.
+
 ## Necessary capabilities and overrides
 
 The plugin uses authenticated network requests and WebSockets for T3 and
