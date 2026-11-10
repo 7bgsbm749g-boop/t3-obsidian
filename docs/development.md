@@ -31,7 +31,7 @@ excluded from Git.
 
 The installed plugin needs `main.js`, `manifest.json`, and `styles.css` in the
 `t-three-code` plugin folder. Its manifest display name is **T3 Code**. GitHub
-releases use **t3-obsidian VERSION (Alpha)**; the release title does not set the
+releases use **t3-obsidian VERSION**; the release title does not set the
 Obsidian display name.
 
 Follow the [alpha policy](versioning.md): versions are plain `0.0.BUILD` until
@@ -69,7 +69,7 @@ or installation. An updated release engine still restarts the worker before
 validation or publication.
 
 After delivery, publish GitHub assets from the exact immutable release archive,
-using its plain numeric version as the tag and `t3-obsidian VERSION (Alpha)` as
+using its plain numeric version as the tag and `t3-obsidian VERSION` as
 the title. Publish a regular GitHub release for Obsidian distribution; the
 project remains in alpha. Mark the new release as latest so the larger legacy
 version numbers do not keep the old release selected. Never rebuild the published

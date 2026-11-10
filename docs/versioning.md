@@ -3,7 +3,7 @@
 The project remains in **alpha**, with plain **`0.0.BUILD`** versions in the
 Obsidian manifest, package files, compatibility map, archive, and matching Git tag.
 Each newly packaged release advances BUILD once. The GitHub title is
-**t3-obsidian VERSION (Alpha)**. Alpha is a display label, not a version suffix.
+**t3-obsidian VERSION**, without a development-stage label.
 The Obsidian display name stays **T3 Code**.
 
 [release-policy.json](../release-policy.json) enforces this rule. Stay in alpha
@@ -51,7 +51,7 @@ does **not** change the published alpha format, including for prepared candidate
 
 These comparison rules follow the chosen historical interpretations of
 [Semantic Versioning](https://semver.org/), rather than claim that the old
-numbers prove one uniquely correct reconstruction. The current alpha label is
+numbers prove one uniquely correct reconstruction. The current alpha stage is
 an explicit development policy, not a promise of a stable public interface.
 
 ## Historical transitions and distribution
@@ -67,7 +67,7 @@ use the retained history.
 Every push to `main`, including a merged PR or maintenance-only change, must
 carry a strictly newer, unused numeric version in all version files. The GitHub
 workflow creates the matching tag, builds and attests its assets, then publishes
-a regular release with Alpha in its title. It does not bump versions itself.
+a regular release titled `t3-obsidian VERSION`. It does not bump versions itself.
 Feature-branch pushes do not create releases. The local delivery queue remains
 separate; its eventual replacement by PR-based delivery is not part of this change.
 The GitHub prerelease flag is not the

@@ -100,6 +100,7 @@ class AutomaticPublicationTests(unittest.TestCase):
             release.publish('owner/repo', '0.0.999', 'a' * 40)
             create, publish = [call.args for call in command.call_args_list]
             self.assertEqual(create[:4], ('gh', 'release', 'create', '0.0.999'))
+            self.assertEqual(create[create.index('--title') + 1], 't3-obsidian 0.0.999')
             self.assertIn('--draft', create)
             self.assertIn('--verify-tag', create)
             self.assertEqual(create[create.index('--target') + 1], 'a' * 40)

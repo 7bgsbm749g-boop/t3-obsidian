@@ -82,7 +82,7 @@ class ReleaseHistoryTests(unittest.TestCase):
         self.request = {**self.request, 'commit': 'numeric-release', 'bump': 'minor'}
         record = self.refresh('0.0.378')
         self.assertEqual(record['counters'], {'first': '24.9.0', 'zero': '0.112.0', 'build': 378})
-        self.assertEqual(record['releaseTitle'], 't3-obsidian 0.0.378 (Alpha)')
+        self.assertEqual(record['releaseTitle'], 't3-obsidian 0.0.378')
         self.assertEqual(self.refresh('0.0.378')['counters'], record['counters'])
         history.refresh(self.release, self.job, original_request, '0.0.377-alpha')
         with table.open(newline='') as stream:
