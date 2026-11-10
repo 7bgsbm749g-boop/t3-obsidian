@@ -51,8 +51,7 @@ def is_alpha_version(root: Path, version: str) -> bool:
 
 
 def release_title(root: Path, version: str) -> str:
-    suffix = ' (Alpha)' if ALPHA_NUMERIC.fullmatch(version) and is_alpha_version(root, version) else ''
-    return f't3-obsidian {version}{suffix}'
+    return f't3-obsidian {version}'
 
 
 def transition(root: Path, new: str, old: str) -> bool:

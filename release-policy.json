@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "stage": "alpha",
   "versionFormat": "0.0.BUILD",
-  "releaseTitle": "t3-obsidian VERSION (Alpha)",
+  "releaseTitle": "t3-obsidian VERSION",
   "githubPrerelease": false,
   "firstAlphaVersion": "0.0.377-alpha",
   "transitionFrom": "2.45.81",
