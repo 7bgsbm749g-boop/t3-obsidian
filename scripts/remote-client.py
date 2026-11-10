@@ -20,7 +20,7 @@ def mailbox(config: dict, command: dict, *, retry: bool = False, cleanup: bool =
     # A client connected only to its own T3 machine uses the same helper there.
     # Legacy HTTP below is restricted to the first reload from an older plugin.
     if command.get('kind') not in ['client-status', 'send-failure-log', 'reload-client']:
-        raise ValueError('The release helper accepts maintenance commands only.')
+        raise ValueError('The remote transport accepts maintenance commands only.')
     # Send one bounded Python program directly over SSH. Nesting Python's
     # stdin pipe inside a PowerShell ReadToEnd bootstrap can hang before the
     # legacy bridge is reached, leaving a successfully synced client stale.

@@ -179,5 +179,4 @@ and dependency identities with native behavior evidence; retain logs outside
 the checkout. Failed installs and changed inputs cannot count as successful
 validation. Release and deployment work is no longer part of local completion.
 
-
 The released file-opening baseline was merged before submission because it changed shared Codebase code and styles. The one import conflict in the Codebase lab retained both test suites. Native verification is repeated for those exact shared inputs; final evidence is under `evidence/language-expansion-20261027/native-1137-integrated/`, `native-1145-integrated/`, and `codebase-1145-integrated/` in the task worktree. Earlier successful runs remain under `native-1137-final/`, `native-1145-colors/`, and `codebase-1145/`. The batch's hashed evidence summary is `evidence/language-expansion-20261027/behavior.json`. Final automated validation and the queue's release/client receipt are separate from these synthetic native checks.

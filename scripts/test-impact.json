@@ -111,6 +111,9 @@
     "tests/orchestration-v2.test.ts": [
       "tests/native/orchestration-v2-live.ts"
     ],
+    "scripts/release_policy.py": [
+      "release-policy.json"
+    ],
     "tests/checked-note-edits.test.ts": [
       "tests/native/connect-note-edits-lab.ts",
       "scripts/build-connect-command-lab.mjs"
@@ -125,9 +128,6 @@
     ],
     "tests/diagnostic-archive.test.ts": [
       "tests/native/stream-memory-lab.ts"
-    ],
-    "scripts/release_policy.py": [
-      "release-policy.json"
     ]
   }
 }

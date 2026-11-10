@@ -2,8 +2,9 @@
 
 The project remains in **alpha**, with plain **`0.0.BUILD`** versions in the
 Obsidian manifest, package files, compatibility map, and matching release tag.
-The GitHub title is **t3-obsidian VERSION**, without a development-stage label. Alpha is the
-development stage; do not add it to new titles, versions, or tags. The Obsidian display name stays **T3 Code**.
+The GitHub title is **t3-obsidian VERSION**, without a development-stage label.
+Alpha is the development stage; do not add it to new titles, versions, or tags.
+The Obsidian display name stays **T3 Code**.
 
 Only an explicit user instruction can end alpha. A breaking change, large
 feature, or high build number does not authorize graduation. Keep all version
@@ -13,8 +14,9 @@ files aligned for a release and preserve every published version.
 
 Ordinary development work ends in a reviewed commit and PR. Every PR needs a
 strictly newer unused `0.0.BUILD` aligned across all version files before merge,
-including documentation and workflow-only changes. Release work stays on GitHub after PR review. The local version allocator,
-queue, packaging, deployment and publication tools have been removed. This
+including documentation and workflow-only changes. Release work stays on GitHub
+after PR review. The local version allocator, queue, packaging, deployment and
+publication tools have been removed. This
 change adds no replacement release automation. See
 [Review and release checks](review-and-release.md).
 

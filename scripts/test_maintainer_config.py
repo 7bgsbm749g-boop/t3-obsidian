@@ -41,8 +41,10 @@ class MaintainerConfigurationTests(unittest.TestCase):
 
     def test_external_evidence_still_cannot_use_a_real_synced_vault(self):
         from unittest.mock import patch
-        config = {'canonicalRoot': '/synthetic/source', 'evidenceRoot': '/synthetic/vault/evidence',
-                  'productionPlugins': '/synthetic/vault/.obsidian/plugins'}
+        root = Path('/synthetic/source').resolve()
+        vault = root.parent / 'vault'
+        config = {'canonicalRoot': str(root), 'evidenceRoot': str(vault / 'evidence'),
+                  'productionPlugins': str(vault / '.obsidian/plugins')}
         with patch.object(maintainer_config, 'configuration', return_value=config):
             with self.assertRaisesRegex(ValueError, 'outside synced vaults'):
-                maintainer_config.evidence_root(Path('/synthetic/source'))
+                maintainer_config.evidence_root(root)
