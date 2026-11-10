@@ -444,11 +444,11 @@ export default class SendToT3 extends Plugin {
       localFinalNotes:deviceFinalNoteIO(this.app,()=>!this.stopped),
       rememberResponse:async(request,body,before,after,offset)=>{if(await rememberResponse(this.smartData(),request.notePath,request.id,body,before,after,offset))await this.save(true);},
       rememberNoteEdits:async(request,before,after)=>{if(await rememberNoteEdits(this.smartData(),request.notePath,request.id,before,after))await this.save(true);},
-      loadLocalCompletion:async request=>{const receipt=await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`);return isRecord(receipt)&&receipt.identity===localFinalIdentity(request)&&typeof receipt.saved==='boolean'?{saved:receipt.saved,...(receipt.removed===true?{removed:true}:{})}:undefined;},
+      loadLocalCompletion:async request=>{const receipt=await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`);return isRecord(receipt)&&receipt.identity===localFinalIdentity(request)&&typeof receipt.saved==='boolean'?{saved:receipt.saved}:undefined;},
       isVisible:path=>this.app.workspace.getActiveViewOfType(MarkdownView)?.file?.path===path,
       knownCompleted:request=>this.settings.responseBindings?.[request.id]?.completion?.identity===localFinalIdentity(request),
       retainLocalCompletion:async(request,saved,update)=>{
-        await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`,{version:1,identity:localFinalIdentity(request),saved,...(!saved?{removed:true}:{})});
+        await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`,{version:1,identity:localFinalIdentity(request),saved});
         if(saved&&update?.turnId){this.responseBindingReplica=completeResponseBinding(this.responseBindingReplica,request,update.turnId,contentHash(update.body),this.deviceId);this.settings.responseBindings=this.responseBindingReplica;await this.save(true);}
       },
       localBindings:()=>responseBindingRequests(this.settings.responseBindings??this.responseBindingReplica),
