@@ -12,9 +12,41 @@ class MaintainerConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary) / 'home'
             root = home / 'projects/source'
-            with patch.object(maintainer_config, 'configuration', return_value={'canonicalRoot': str(root)}), patch.object(Path, 'home', return_value=home):
+            with patch.object(maintainer_config, 'configuration', return_value={'canonicalRoot': str(root)}), patch.object(Path, 'home', return_value=home), patch.object(maintainer_config, 'linked_worktrees', return_value=[root]):
                 self.assertEqual(maintainer_config.evidence_root(root), home / '.local/state/t3-obsidian/evidence')
             self.assertFalse(home.exists())
+
+    def test_evidence_cannot_use_another_linked_worktree_for_configured_or_default_storage(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            root = directory / 'canonical'
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            (root / 'README.md').write_text('fixture')
+            subprocess.run(['git', '-C', str(root), 'add', '.'], check=True)
+            subprocess.run(['git', '-C', str(root), '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'base'], check=True)
+            task, peer = directory / 'task', directory / 'other task'
+            for branch, path in [('task', task), ('peer', peer)]:
+                subprocess.run(['git', '-C', str(root), 'worktree', 'add', '-qb', branch, str(path)], check=True)
+            private = root / '.git/t3-obsidian'
+            private.mkdir()
+            for configured in [True, False]:
+                (private / 'maintainer.json').write_text(json.dumps({'evidenceRoot': str(peer / 'evidence')} if configured else {}))
+                for caller in [root, task]:
+                    with self.subTest(configured=configured, caller=caller), patch.object(Path, 'home', return_value=peer):
+                        with self.assertRaisesRegex(ValueError, 'outside source checkouts'):
+                            maintainer_config.evidence_root(caller)
+            self.assertFalse((peer / 'evidence').exists())
+            self.assertFalse((peer / '.local').exists())
+            self.assertEqual(set(maintainer_config.linked_worktrees(task)), {path.resolve() for path in [root, task, peer]})
+
+    def test_worktree_enumeration_failure_blocks_evidence_resolution(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'source'
+            config = {'canonicalRoot': str(root), 'evidenceRoot': str(Path(temporary) / 'external')}
+            with patch.object(maintainer_config, 'configuration', return_value=config), patch.object(maintainer_config.subprocess, 'check_output', side_effect=subprocess.CalledProcessError(1, ['git'])):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    maintainer_config.evidence_root(root)
+            self.assertFalse(Path(config['evidenceRoot']).exists())
 
     def test_default_evidence_cannot_be_inside_a_checkout_or_protected_vault(self):
         with tempfile.TemporaryDirectory() as temporary:

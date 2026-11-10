@@ -28,6 +28,17 @@ def canonical_root(root: Path = ROOT) -> Path:
     return Path(configuration(root)['canonicalRoot']).expanduser().resolve()
 
 
+def linked_worktrees(root: Path = ROOT) -> list[Path]:
+    """Read every linked checkout, with paths left unquoted by Git."""
+    output = subprocess.check_output(['git', 'worktree', 'list', '--porcelain', '-z'],
+                                     cwd=root, timeout=10)
+    paths = [Path(os.fsdecode(field[len(b'worktree '):])).resolve()
+             for field in output.split(b'\0') if field.startswith(b'worktree ')]
+    if not paths:
+        raise ValueError('Could not enumerate source checkouts for the evidence guard.')
+    return paths
+
+
 def evidence_root(root: Path = ROOT) -> Path:
     """Resolve an external evidence store before any validation writes."""
     value = configuration(root)
@@ -39,6 +50,8 @@ def evidence_root(root: Path = ROOT) -> Path:
     for name in ('developmentPlugins', 'productionPlugins'):
         if value.get(name) and directory.resolve().is_relative_to(Path(value[name]).expanduser().resolve().parent.parent):
             raise ValueError('Configure evidenceRoot outside synced vaults.')
+    if any(directory.resolve().is_relative_to(checkout) for checkout in linked_worktrees(root)):
+        raise ValueError('Configure an absolute evidenceRoot outside source checkouts.')
     return directory.resolve()
 
 

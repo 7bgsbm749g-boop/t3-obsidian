@@ -2,10 +2,13 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+from scripts import maintainer_config
 
 spec = importlib.util.spec_from_file_location('install_obsidian_skill', Path(__file__).with_name('install-obsidian-skill.py'))
 installer = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(installer)
+with patch.dict('sys.modules', {'maintainer_config': maintainer_config}):
+    spec.loader.exec_module(installer)
 
 
 class SkillInstallationTests(unittest.TestCase):
