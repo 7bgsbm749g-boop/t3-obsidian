@@ -76,7 +76,7 @@ automatic tag build and publication succeed before reporting a main push complet
 The main-push workflow validates version alignment, reserves the exact source
 commit's numeric tag, and explicitly dispatches its tag workflow. The tag workflow
 runs lint, builds and attests the exact release assets, then publishes a regular
-Alpha release. Pull requests check the version before merge. Do not overwrite
+release. Pull requests check the version before merge. Do not overwrite
 existing tags or release assets. Source-only maintenance remains available on
 feature branches; merging or pushing it to main requires a new version. See
 [Review and release checks](docs/review-and-release.md).
@@ -97,9 +97,9 @@ version assignment, validation, packaging, installation, and client checks.
 Publication is incomplete until the required behavior and cleanup proof pass.
 Follow the private maintainer instructions for the configured delivery route.
 
-The project remains Alpha. New versions use numeric `0.0.BUILD`; Alpha is a
-separate release-title label. Keep all version files aligned and preserve
-published history. Feature-branch source contributions need no version bump;
+The project remains Alpha. New versions use numeric `0.0.BUILD`; release titles
+use `t3-obsidian VERSION` without a development-stage label. Keep all version
+files aligned and preserve published history. Feature-branch source contributions need no version bump;
 every main push requires one. Only explicit user direction can end the Alpha stage.
 
 ## Issue diagnostics

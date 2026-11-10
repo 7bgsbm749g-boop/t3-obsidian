@@ -55,7 +55,7 @@ class AlphaPolicyTests(unittest.TestCase):
             policy.bump(self.root, '2.45.81', 'patch')
         self.assertFalse(policy.newer(self.root, '0.0.382', '0.0.382'))
         self.assertGreater(policy.order_key(self.root, '0.0.382'), policy.order_key(self.root, '2.45.81'))
-        self.assertEqual(policy.release_title(self.root, '0.0.382'), 't3-obsidian 0.0.382 (Alpha)')
+        self.assertEqual(policy.release_title(self.root, '0.0.382'), 't3-obsidian 0.0.382')
         self.assertEqual(policy.release_title(self.root, '0.0.381-alpha'), 't3-obsidian 0.0.381-alpha')
         self.assertEqual(policy.reload_request_version(self.root, '0.0.382', '2.45.81'), '0.0.382')
         self.assertEqual(policy.reload_request_version(self.root, '0.0.382', '0.0.381-alpha'), '0.0.382')

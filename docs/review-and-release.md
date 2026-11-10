@@ -97,7 +97,7 @@ push commit and explicitly dispatches the same workflow at that tag. GitHub's
 repository token does not trigger tag-push workflows by itself, so the explicit
 dispatch is required. The tag workflow checks alignment, installs dependencies,
 runs lint and builds before attesting all three assets. It uploads them to a
-draft, checks their SHA-256 digests, and then publishes a regular Alpha release.
+draft, checks their SHA-256 digests, and then publishes a regular release.
 An existing draft can resume missing uploads; existing bytes are never replaced.
 Rerunning a published version verifies the same bytes without replacing it.
 
@@ -134,7 +134,7 @@ New main pushes publish automatically and do not need this manual procedure.
    client version, immutable archive hashes and the remote tag. For every asset
    it verifies the exact source ref, source commit and signer workflow using
    [`gh attestation verify`](https://cli.github.com/manual/gh_attestation_verify).
-   It then creates a regular release with the Alpha display label. Existing
+   It then creates a regular release titled `t3-obsidian VERSION`. Existing
    tags and assets are never overwritten. Without `--publish`, it only verifies.
 4. Obsidian detects new GitHub releases periodically; an existing listing does
    not need a new submission for each update. Request a manual directory check

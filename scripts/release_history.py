@@ -179,7 +179,7 @@ def render(root: Path, state: dict) -> None:
                 writer.writeheader(); writer.writerows(values)
             temporary_csv.replace(csv_path)
             version_format = release_policy.policy(root).get('versionFormat', '0.0.BUILD-alpha')
-            text = ['# Private alpha release history', '', f'The release queue maintains this table. Historical comparisons stay unchanged; new rows record assigned, packaged, installed and completed states separately. The approved version format is `{version_format}` while the project remains in alpha; Alpha is a display label for numeric releases.', '',
+            text = ['# Private alpha release history', '', f'The release queue maintains this table. Historical comparisons stay unchanged; new rows record assigned, packaged, installed and completed states separately. The approved version format is `{version_format}` while the project remains in alpha; release titles use `t3-obsidian VERSION` without a development-stage label.', '',
                     '| ' + ' | '.join(headers) + ' |', '| ' + ' | '.join('---' for _ in headers) + ' |']
             text.extend('| ' + ' | '.join(str(row.get(k, '')).replace('\n', ' ').replace('|', '\\|') for k in headers) + ' |' for row in values)
             temp = directory / (name + '.md.tmp')

@@ -85,7 +85,7 @@ jobs:
             dist/main.js
             manifest.json
             styles.css
-      - name: Publish the attested assets as a regular Alpha release
+      - name: Publish the attested assets as a regular release
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/github_release.py publish

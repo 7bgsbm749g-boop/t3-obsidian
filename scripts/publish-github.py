@@ -54,7 +54,7 @@ def main():
     parser.add_argument('--gh', default='gh', help='A current verified official GitHub CLI binary')
     parser.add_argument('--notes-file', type=Path, required=True)
     parser.add_argument('--evidence', type=Path, required=True)
-    parser.add_argument('--publish', action='store_true', help='Create the regular Alpha release after verification')
+    parser.add_argument('--publish', action='store_true', help='Create the regular release after verification')
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     evidence = publication_directory(root, args.evidence)
