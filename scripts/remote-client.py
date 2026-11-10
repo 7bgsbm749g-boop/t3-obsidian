@@ -77,4 +77,3 @@ $answer | ConvertTo-Json -Depth 20 -Compress
     result = subprocess.run([*remote, 'powershell.exe -NoProfile -NonInteractive -EncodedCommand ' + encoded],
                             capture_output=True, text=True, check=True, timeout=15)
     return json.loads(result.stdout.lstrip('\ufeff'))
-
