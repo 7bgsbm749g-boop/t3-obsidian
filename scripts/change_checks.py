@@ -96,6 +96,22 @@ def default_base(root: Path) -> str:
         receipt = RECEIPTS / version / 'deployment.json'
         if receipt.is_file():
             return json.loads(receipt.read_bytes())['gitCommit']
+        # Official GitHub installs have no local deployment receipt. A separately
+        # verified source record can identify them without claiming a deployment
+        # or smoke check that this machine did not perform.
+        baseline = RECEIPTS / version / 'installed-source.json'
+        if baseline.is_file():
+            value = json.loads(baseline.read_bytes())
+            commit = value.get('gitCommit', '')
+            hashes = value.get('runtimeSha256', {})
+            if (value.get('version') != version or not re.fullmatch(r'[a-f0-9]{40}', commit)
+                    or set(hashes) != {'main.js', 'manifest.json', 'styles.css'}
+                    or any(not (QLO2.parent / name).is_file() or digest((QLO2.parent / name).read_bytes()) != checksum
+                           for name, checksum in hashes.items())):
+                raise SystemExit('The installed source record does not match the current plugin files.')
+            if json.loads(git(root, 'show', commit + ':manifest.json'))['version'] != version:
+                raise SystemExit('The installed source commit has a different version.')
+            return commit
     raise SystemExit('No installed release baseline is available. Supply --base COMMIT.')
 
 

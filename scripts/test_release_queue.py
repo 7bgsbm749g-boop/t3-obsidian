@@ -217,6 +217,56 @@ class ReleaseQueueTests(unittest.TestCase):
         queue.write(directory / 'state.json', {'status': 'queued', 'version': '0.0.382', 'reservedVersions': ['0.0.383', '2.45.81']})
         self.assertEqual(queue.next_version(self.release, directory, {'bump': 'none'}), '0.0.384')
 
+    def test_assignment_accounts_for_installed_history_tags_and_immutable_artifacts(self):
+        job = self.submit(self.source('version-floors'))
+        directory = queue.job_path(self.store, job['jobId'])
+        self.release.QLO2_PLUGIN = self.directory / 'production-plugin'
+        self.release.DEV_PLUGIN = self.directory / 'development-plugin'
+        queue.write(self.release.QLO2_PLUGIN / 'manifest.json', {'version': '1.0.2'})
+        self.assertEqual(queue.next_version(self.release, directory, {'bump': 'patch'}), '1.0.3')
+        queue.write(self.release.DEV_PLUGIN / 'manifest.json', {'version': '1.0.3'})
+        self.assertEqual(queue.next_version(self.release, directory, {'bump': 'patch'}), '1.0.4')
+        queue.write(self.root / 'versions.json', {'1.0.4': '1.8.7'})
+        self.assertEqual(queue.next_version(self.release, directory, {'bump': 'patch'}), '1.0.5')
+        self.git('tag', '1.0.5'); self.git('tag', 'unrelated-label')
+        self.assertEqual(queue.next_version(self.release, directory, {'bump': 'patch'}), '1.0.6')
+        archives = self.root / 'release'; archives.mkdir()
+        (archives / 'send-to-t3-code-1.0.6.zip').write_bytes(b'immutable')
+        self.assertEqual(queue.next_version(self.release, directory, {'bump': 'patch'}), '1.0.7')
+        (self.backups / 'releases/1.0.7').mkdir(parents=True)
+        self.assertEqual(queue.next_version(self.release, directory, {'bump': 'patch'}), '1.0.8')
+
+    def test_restarted_worker_reassigns_a_stale_unshipped_version_with_a_checked_integration(self):
+        source = self.source('old-worker-version')
+        submitted = self.submit(source)
+        directory = queue.job_path(self.store, submitted['jobId'])
+        request = queue.read(directory / 'request.json'); state = queue.read(directory / 'state.json')
+        self.release.QLO2_PLUGIN = self.directory / 'production-plugin'
+        queue.write(self.release.QLO2_PLUGIN / 'manifest.json', {'version': '1.0.3'})
+        with patch.object(queue, 'next_version', return_value='1.0.1'):
+            queue.integrate_job(self.release, directory, request, state)
+        first = state['integratedCommit']
+        queue.integrate_job(self.release, directory, request, state)
+        self.assertEqual(state['version'], '1.0.4')
+        self.assertEqual(state['reservedVersions'], ['1.0.1'])
+        self.assertNotEqual(state['integratedCommit'], first)
+        self.assertTrue(queue.ancestor(self.root, first, 'HEAD'))
+        self.assertEqual((self.root / 'old-worker-version.ts').read_bytes(), (source / 'old-worker-version.ts').read_bytes())
+        self.assertFalse(self.release.archive_path('1.0.1').exists())
+        self.assertEqual(self.published, [])
+
+    def test_reassignment_refuses_to_replace_existing_immutable_bytes(self):
+        submitted = self.submit(self.source('immutable-old-version'))
+        directory = queue.job_path(self.store, submitted['jobId'])
+        request = queue.read(directory / 'request.json'); state = queue.read(directory / 'state.json')
+        queue.integrate_job(self.release, directory, request, state)
+        archive = self.release.archive_path(state['version']); archive.write_bytes(b'keep exact bytes')
+        self.release.QLO2_PLUGIN = self.directory / 'production-plugin'
+        queue.write(self.release.QLO2_PLUGIN / 'manifest.json', {'version': state['version']})
+        with self.assertRaisesRegex(SystemExit, 'immutable'):
+            queue.integrate_job(self.release, directory, request, state)
+        self.assertEqual(archive.read_bytes(), b'keep exact bytes')
+
     def test_bootstrap_integrates_only_the_exact_fifo_tooling_repair_then_restarts(self):
         source = self.tooling_source()
         submitted = self.submit(source)

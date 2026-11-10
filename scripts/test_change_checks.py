@@ -85,6 +85,46 @@ class ImpactSelectionTests(unittest.TestCase):
 
 
 class ValidationCacheTests(unittest.TestCase):
+    def installed_source_fixture(self):
+        plugin = self.root / 'installed-plugin'
+        plugin.mkdir()
+        for name, body in {'main.js': b'published runtime\n/* nosourcemap */',
+                           'manifest.json': b'{"version":"1.0.0"}', 'styles.css': b'published styles'}.items():
+            (plugin / name).write_bytes(body)
+        (self.root / 'manifest.json').write_bytes((plugin / 'manifest.json').read_bytes())
+        subprocess.run(['git', 'add', 'manifest.json'], cwd=self.root, check=True)
+        subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'source version'], cwd=self.root, check=True)
+        commit = checks.git(self.root, 'rev-parse', 'HEAD').decode().strip()
+        receipts = self.root / 'receipts'
+        record = receipts / '1.0.0/installed-source.json'; record.parent.mkdir(parents=True)
+        record.write_text(json.dumps({'version': '1.0.0', 'gitCommit': commit,
+                                     'runtimeSha256': {path.name: checks.digest(path.read_bytes()) for path in plugin.iterdir()}}))
+        return plugin, receipts, record, commit
+
+    def test_verified_installed_source_record_supplies_the_exact_baseline(self):
+        plugin, receipts, record, commit = self.installed_source_fixture()
+        with patch.object(checks, 'QLO2', plugin / 'manifest.json'), patch.object(checks, 'RECEIPTS', receipts):
+            self.assertEqual(checks.default_base(self.root), commit)
+            (plugin / 'main.js').write_bytes(b'unrecorded replacement')
+            with self.assertRaisesRegex(SystemExit, 'current plugin files'):
+                checks.default_base(self.root)
+
+    def test_installed_source_record_requires_all_runtime_files_and_a_matching_source_version(self):
+        plugin, receipts, record, commit = self.installed_source_fixture()
+        value = json.loads(record.read_text())
+        with patch.object(checks, 'QLO2', plugin / 'manifest.json'), patch.object(checks, 'RECEIPTS', receipts):
+            value['runtimeSha256'].pop('styles.css'); record.write_text(json.dumps(value))
+            with self.assertRaisesRegex(SystemExit, 'current plugin files'):
+                checks.default_base(self.root)
+            value['runtimeSha256']['styles.css'] = checks.digest((plugin / 'styles.css').read_bytes())
+            (self.root / 'manifest.json').write_text('{"version":"2.0.0"}')
+            subprocess.run(['git', 'add', 'manifest.json'], cwd=self.root, check=True)
+            subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'other source version'], cwd=self.root, check=True)
+            value['gitCommit'] = checks.git(self.root, 'rev-parse', 'HEAD').decode().strip()
+            record.write_text(json.dumps(value))
+            with self.assertRaisesRegex(SystemExit, 'different version'):
+                checks.default_base(self.root)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         directory = Path(self.temporary.name)
