@@ -3,6 +3,7 @@ import type {Project} from '../app/bridge';
 import type {ThreadChoice} from './thread-target';
 import {availableImportRun,runImportResultMessage,type ImportRun,type RunImportResult} from './run-import';
 import type {ThreadDisplay} from './thread-display';
+import type {CatchUpThread} from './response-catch-up';
 
 export interface RunImportHost {
   projects():Project[];projectLabel(project:Project):string;
@@ -206,6 +207,34 @@ export class ImportStreamsModal extends Modal {
       const count=display.destinations.filter(destination=>!destination.removed).length;
       new Setting(this.contentEl).setName(display.title).setDesc(`${display.enabled?'Following future runs':'Paused; runs started while paused are skipped'}${count>1?`. Pause and resume affect all ${count} destination notes. Remove affects only this note.`:''}`).addButton(button=>button.setButtonText(display.enabled?'Pause':'Resume').onClick(apply(display.enabled?'pause-thread-stream':'resume-thread-stream'))).addButton(button=>button.setButtonText('Remove from this note').onClick(apply('remove-stream-destination')));
     }
+  }
+  onClose(){this.contentEl.empty();}
+}
+
+export function openResponseCatchUp(app:App,notePath:string,threads:CatchUpThread[],execute:(threads:CatchUpThread[])=>Promise<void>){
+  const run=(selected:CatchUpThread[])=>{
+    void execute(selected).catch(error=>new Notice(`Catch up on responses: ${error instanceof Error?error.message:String(error)}`,10000));
+  };
+  if(threads.length===1){run(threads);return;}
+  if(threads.length)new ResponseCatchUpModal(app,notePath,threads,run).open();
+}
+export class ResponseCatchUpModal extends Modal {
+  private selected:Set<CatchUpThread>;
+  private submitted=false;
+  constructor(app:App,private notePath:string,private threads:CatchUpThread[],private execute:(threads:CatchUpThread[])=>void){super(app);this.selected=new Set(threads);}
+  onOpen(){
+    this.titleEl.setText('Catch up on responses');
+    this.contentEl.createEl('p',{text:`Import responses after the last response streamed from each selected thread into ${this.notePath}. No new prompt is sent. Future stream settings stay the same.`});
+    let update=()=>{};
+    for(const thread of this.threads)new Setting(this.contentEl).setName(thread.title).setDesc(`${thread.environmentId} · ${thread.threadId}`).addToggle(toggle=>toggle.setValue(this.selected.has(thread)).onChange(value=>{if(value)this.selected.add(thread);else this.selected.delete(thread);update();}));
+    new Setting(this.contentEl).addButton(button=>button.setButtonText('Cancel').onClick(()=>this.close())).addButton(button=>{
+      update=()=>button.setDisabled(!this.selected.size);update();
+      button.setButtonText('Catch up on responses').setCta().onClick(()=>{
+        if(this.submitted||!this.selected.size)return;
+        this.submitted=true;button.setDisabled(true);
+        const selected=this.threads.filter(thread=>this.selected.has(thread));this.close();this.execute(selected);
+      });
+    });
   }
   onClose(){this.contentEl.empty();}
 }
