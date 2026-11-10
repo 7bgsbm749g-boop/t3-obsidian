@@ -672,6 +672,21 @@ def next_version(release, directory: Path, request: dict, *, root: Path | None =
     """An assigned version belongs to its job, even when validation fails."""
     root = root or release.ROOT
     versions = [release.read_json(root / 'manifest.json')['version']]
+    # A checkout can lag the installed or published release. Neither its
+    # manifest nor this queue's journals alone describe all occupied builds.
+    for name in ('QLO2_PLUGIN', 'DEV_PLUGIN'):
+        plugin = getattr(release, name, None)
+        if plugin and (Path(plugin) / 'manifest.json').is_file():
+            versions.append(release.read_json(Path(plugin) / 'manifest.json')['version'])
+    history = release.ROOT / 'versions.json'
+    occupied = list(release.read_json(history)) if history.is_file() else []
+    occupied.extend(git(release.ROOT, 'tag', '--list').splitlines())
+    occupied.extend(path.name.removeprefix('send-to-t3-code-').removesuffix('.zip')
+                    for path in (release.ROOT / 'release').glob('send-to-t3-code-*.zip'))
+    receipts = release.BACKUPS / 'releases'
+    if receipts.is_dir():
+        occupied.extend(path.name for path in receipts.iterdir() if path.is_dir())
+    versions.extend(value for value in occupied if release_policy.NUMERIC.fullmatch(value) or release_policy.ALPHA.fullmatch(value))
     queue = directory.parent.parent
     with locked(queue / 'queue.lock'):
         states = [read(path / 'state.json') for path in jobs(queue)]
@@ -718,7 +733,17 @@ def integrate_job(release, directory: Path, request: dict, state: dict) -> None:
         return
     if (state.get('integratedSourceCommit') == request['commit'] and not state.get('rollbackCommits')
             and ancestor(root, state['integratedCommit'], 'HEAD')):
-        return
+        installed = getattr(release, 'QLO2_PLUGIN', None)
+        manifest = Path(installed) / 'manifest.json' if installed else None
+        if (request['maintenanceOnly'] or request.get('validation') or not state.get('version')
+                or not manifest or not manifest.is_file()
+                or release_policy.newer(root, state['version'], release.read_json(manifest)['version'])):
+            return
+        # An older worker can assign a stale build before loading this repair.
+        # Reassign only through a new journalled integration, before packaging.
+        if release.archive_path(state['version']).exists() or (release.release_receipt_dir(state['version']) / 'deployment.json').exists():
+            raise SystemExit('A stale assigned version has immutable release bytes; use collision recovery.')
+        update(directory, state, reservedVersions=sorted(set([*state.get('reservedVersions', []), state['version']])))
     if (request['maintenanceOnly'] and state.get('integratedCommit') and not state.get('rollbackCommits')
             and ancestor(root, request['commit'], 'HEAD')):
         # A pre-upgrade worker may have already merged this tooling update.
