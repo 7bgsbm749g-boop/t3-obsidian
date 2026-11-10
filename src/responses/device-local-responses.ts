@@ -27,7 +27,7 @@ export interface DeviceResponseIO {
   localFinalDraft?(document:string,request:ResponseRequest):Promise<string>;
   retainLocalFinal?(update:DirectInlineUpdate):Promise<void>;
   loadLocalFinal?(request:ResponseRequest):Promise<DirectInlineUpdate|undefined>;
-  loadLocalCompletion?(request:ResponseRequest):Promise<{saved:boolean}|undefined>;
+  loadLocalCompletion?(request:ResponseRequest):Promise<{saved:boolean;removed?:boolean}|undefined>;
   retainLocalCompletion?(request:ResponseRequest,saved:boolean,update?:DirectInlineUpdate):Promise<void>;
   knownCompleted?(request:ResponseRequest):boolean;
   isVisible?(path:string):boolean;
