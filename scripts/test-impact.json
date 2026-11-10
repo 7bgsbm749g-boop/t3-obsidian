@@ -1,5 +1,8 @@
 {
   "dependencies": {
+    "tests/response-catch-up.test.ts": [
+      "tests/native/response-catch-up-lab.ts"
+    ],
     "src/conversations/run-import-ui.ts": [
       "styles.css"
     ],
