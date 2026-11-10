@@ -1,7 +1,5 @@
 import {browserFetch} from './browser-fetch';
 import {isRecord,parseJson} from '../shared/values';
-import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
-import {T3_RESPONSE_MAX_BYTES} from './t3-response-limits';
 import {Buffer} from 'buffer/';
 import {endpoint,descriptor,type PairedSession,type Fetcher} from './direct';
 import {proofKey,proof,thumbprint} from './dpop';
@@ -13,15 +11,14 @@ export interface DeviceLogin {deviceCode:string;userCode:string;verificationUrl:
 export interface CloudMachine {environmentId:string;name:string;url:string}
 export class CloudError extends Error {constructor(public code:string,public status=0){super(code==='environment_setup_access_required'?'This T3 connection does not permit MCP setup. Reconnect this computer with agent configuration access.':code==='environment_note_access_required'?'This T3 connection does not permit note access. Reconnect this machine with filesystem read and write access.':code==='access_denied'?'T3 sign-in was denied.':code==='expired_token'?'T3 sign-in expired. Start again.':code==='invalid_grant'?'T3 sign-in expired or was revoked. Sign in again.':`T3 Connect request failed (${code}).`);}}
 async function request(url:string,options:RequestInit={},fetcher:Fetcher=browserFetch):Promise<Record<string,unknown>>{
- const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),30000);
+ const ctrl=new AbortController();
  try{
   const r=await fetcher(url,{...options,credentials:'omit',redirect:'error',cache:'no-store',signal:ctrl.signal});
-  if(Number(r.headers.get('content-length')||0)>T3_RESPONSE_MAX_BYTES)throw new CloudError('response_too_large');
-  const text=await r.text();if(Buffer.byteLength(text)>T3_RESPONSE_MAX_BYTES)throw new CloudError('response_too_large');
+  const text=await r.text();
   let body:Record<string,unknown>;try{const parsed=parseJson(text);if(!isRecord(parsed))throw Error('Expected an object.');body=parsed;}catch{throw new CloudError('invalid_response',r.status);}
   if(!r.ok){const code=typeof body.error==='string'&&/^[a-z_]{1,60}$/.test(body.error)?body.error:'http_'+r.status;throw new CloudError(code,r.status);}
   return body;
- }catch(e){if(e instanceof CloudError)throw e;throw new CloudError('network_unavailable');}finally{clearTimeout(timer);}
+ }catch(e){if(e instanceof CloudError)throw e;throw new CloudError('network_unavailable');}
 }
 const form=(data:Record<string,string>):RequestInit=>({method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(data).toString()});
 function account(body:Record<string,unknown>,old?:CloudAccount):CloudAccount{

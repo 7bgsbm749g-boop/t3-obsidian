@@ -1,5 +1,4 @@
 import {isRecord} from '../shared/values';
-import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import type {SmartCapture} from '../notes/smart-send';
 import type {ResolvedJobOptions} from '../conversations/job-options';
 import type {NoteCommand} from '../notes/note-command';
@@ -37,11 +36,6 @@ export function configureBridge(value:Runtime) {runtime=value;}
 // The retired value remains readable only to reject old persisted work safely.
 export function retiredConnection(c:Connection){return c.transport!=='direct';}
 export const RETIRED_MESSAGE='The old companion mode was removed. Check this request in T3 before sending again through Direct T3 pairing; it may already have started. The note is kept.';
-export async function withTimeout<T>(promise:Promise<T>, milliseconds:number):Promise<T> {
-  let timer:ReturnType<typeof setTimeout>|undefined;
-  try{return await Promise.race([promise,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('Request timed out. Retry the saved request with its original ID.')),milliseconds);})]);}
-  finally{clearTimeout(timer);}
-}
 export async function runBridge(connection:Connection,args:string[],input='',options:DirectReadOptions={}):Promise<unknown> {
   const operation=args[0],started=Date.now();logEvent('transport.operation.started',{operation,control:options.control,transport:connection.transport??'desktop',environmentId:connection.environmentId});
   try{

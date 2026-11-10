@@ -76,7 +76,7 @@ function neverBlank(h:ReturnType<typeof fixture>){for(const frames of h.frames)a
 
 test('the size failure is visible only on its response and retained text survives until recovery',async()=>{
  const h=fixture();await start(h);const failed=record(id,2);failed.state!.streamFailure={kind:'response-too-large',operation:'snapshot'};failed.state!.status='error';await h.manager.receive(failed);
- assert.match(h.visible(),/Reply not saved: T3 data exceeds the 8 MB limit/);assert.ok(h.visible().includes(body));assert.ok(h.visible().includes(otherBody));assert.equal(h.visible().split(RESPONSE_SIZE_FAILURE).length-1,1);assert.ok(h.visible().startsWith('Before\n'));assert.ok(h.visible().endsWith('After\n'));
+ assert.match(h.visible(),/Reply not saved: T3 rejected the response size/);assert.ok(h.visible().includes(body));assert.ok(h.visible().includes(otherBody));assert.equal(h.visible().split(RESPONSE_SIZE_FAILURE).length-1,1);assert.ok(h.visible().startsWith('Before\n'));assert.ok(h.visible().endsWith('After\n'));
  h.manager.stream({request:failed.request,messageId:failed.request.messageId,sequence:10,body,phase:'complete',completionVerified:true});assert.equal(h.visible().includes(RESPONSE_SIZE_FAILURE),false);assert.ok(h.visible().includes(body));h.manager.dispose();
 });
 

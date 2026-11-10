@@ -29,7 +29,8 @@ existing synthetic Sync lab for development checks when Sync behavior changes.
 
 See [Review and release checks](review-and-release.md) for validation and the
 commit-and-PR flow. Use an explicit push refspec and disable tag following.
-Do not merge, bump a version, install, tag, or publish as a normal completion step.
+Prepare the newer aligned version required by the GitHub PR check. Do not
+merge, install, tag, or publish locally as a normal completion step.
 Keep private evidence and historical release records outside GitHub.
 
 ## Existing release services

@@ -4,7 +4,6 @@ import {parseJson,isRecord} from '../shared/values';
 import {readThreadSnapshot,type ThreadSnapshot} from '../connection/wire-types';
 import {cancelTimeout as clearTimeout,scheduleTimeout as setTimeout} from '../shared/clock';
 import {logEvent,diagnosticEnabled} from '../app/diagnostics';
-import {Buffer} from 'buffer/';
 import {contentHash} from '../responses/completion';
 import {applyThreadItem,turnForMessage,type InlineThreadState} from './inline-thread';
 import {T3_PROTOCOL_VERSION,normalizeV2StreamItem,normalizeV2Snapshot,normalizeV2TitleItem} from '../connection/orchestration-v2';
@@ -40,8 +39,8 @@ export async function readInlineSnapshot(access:ThreadAccess,threadId:string,pro
 }
 
 /** Bounded, one-shot protocol replay for exact start/turn evidence absent from
- * canonical latestTurn. The caller's native freshness deadline owns aborting
- * this operation; no renderer timer, polling loop, or database is involved. */
+ * canonical latestTurn. The caller owns lifecycle cancellation; no elapsed
+ * deadline, polling loop, or database is involved. */
 export async function readInlineEvents(access:ThreadAccess,threadId:string,afterSequence:number,signal:AbortSignal,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url)):Promise<ThreadStreamItem[]> {
   const issued=await access.api('/api/auth/websocket-ticket',{});
   if(signal.aborted)throw Error('T3 binding recovery canceled.');
@@ -55,7 +54,7 @@ export async function readInlineEvents(access:ThreadAccess,threadId:string,after
     signal.addEventListener('abort',abort,{once:true});
     socket.onopen=()=>{if(signal.aborted){abort();return;}access.api.trackConnection?.({get closed(){return finished;}});socket.send(JSON.stringify({_tag:'Request',id:'1',tag:'orchestration.subscribeThread',payload:{threadId,afterSequence,requestCompletionMarker:true,acceptBoundedSnapshot:true,acceptCompactTurnItems:true},headers:[]}));};
     socket.onmessage=message=>{try{
-      if(typeof message.data!=='string'||Buffer.byteLength(message.data)>16_000_000)throw Error('T3 stream frame is too large.');
+      if(typeof message.data!=='string')throw Error('T3 returned an incompatible stream frame.');
       const decoded=parseJson(message.data);
       for(const frame of Array.isArray(decoded)?decoded:[decoded]){
         if(!isRecord(frame))throw Error('Invalid T3 stream frame.');
@@ -152,9 +151,8 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       const url=new URL('/ws',ready.origin);url.protocol=url.protocol==='https:'?'wss:':'ws:';
       url.searchParams.set('wsTicket',issued.ticket);url.searchParams.set('orchestrationProtocol',String(T3_PROTOCOL_VERSION));
       stage='socket-create';const openedSocket=socket=ws=makeSocket(url.href);
-      const opening=setTimeout(()=>fail(Error('T3 thread stream did not connect.'),'open-timeout'),15_000);
       openedSocket.onopen=()=>{
-        clearTimeout(opening);if(stopped||ended){openedSocket.close();return;}
+        if(stopped||ended){openedSocket.close();return;}
         ready.api.trackConnection?.({get closed(){return ended||stopped;}});
         socketOpen=true;
         state.openedAt=Date.now();report(state,'stream.connected',{connectMs:Date.now()-state.startedAt});attempt=0;
@@ -170,7 +168,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
         if(stopped||ended)return;
         const diagnostic=Date.now()-lastFrameDiagnostic>=1000&&diagnosticEnabled('response.source.frame'),started=diagnostic?performance.now():0;
         try{
-          if(typeof message.data!=='string'||Buffer.byteLength(message.data)>16_000_000)throw Error('T3 stream frame is too large.');
+          if(typeof message.data!=='string')throw Error('T3 returned an incompatible stream frame.');
           const decoded=parseJson(message.data),frames=Array.isArray(decoded)?decoded:[decoded];
           state.lastFrameAt=Date.now();
           for(const frame of frames){
@@ -207,7 +205,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
         finally{if(diagnostic){lastFrameDiagnostic=Date.now();logEvent('response.source.frame',{threadId,monitorId,streamId:state.id,lastReceivedSequence:state.lastReceivedSequence,lastEventOccurredAt:state.lastEventOccurredAt,frameLength:typeof message.data==='string'?message.data.length:undefined,processingMs:performance.now()-started});}}
       };
       openedSocket.onerror=()=>fail(Error('T3 thread stream connection failed.'),'socket-error');
-      openedSocket.onclose=event=>{clearTimeout(opening);const fields={closeCode:event?.code,closeReason:event?.reason,wasClean:event?.wasClean};if(!state.closeReported){state.closeReported=true;report(state,'stream.closed',{cause:state.cause??(stopped?'caller-stopped':'socket-close'),...fields});}if(!ended&&!stopped)fail(Error('T3 thread stream closed.'),'socket-close',fields);};
+      openedSocket.onclose=event=>{const fields={closeCode:event?.code,closeReason:event?.reason,wasClean:event?.wasClean};if(!state.closeReported){state.closeReported=true;report(state,'stream.closed',{cause:state.cause??(stopped?'caller-stopped':'socket-close'),...fields});}if(!ended&&!stopped)fail(Error('T3 thread stream closed.'),'socket-close',fields);};
     }catch(error){retry(error instanceof Error?error:Error('Cannot open T3 thread stream.'),state,stage);}
   };
   void connect();

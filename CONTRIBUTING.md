@@ -17,4 +17,5 @@ changes, then push the task branch and open a PR. Include the results and any
 remaining limits; use a draft if required checks are incomplete. Do not defer
 validation to publication. Read [the development checks](docs/review-and-release.md)
 and [version policy](docs/versioning.md). Release work stays on GitHub after
-PR review; ordinary contributions do not bump versions or install the plugin.
+PR review. Prepare the newer aligned version required by the GitHub PR check;
+do not install the plugin as a completion step.

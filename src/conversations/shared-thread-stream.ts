@@ -2,6 +2,7 @@ import {watchThread,readInlineSnapshot,type InlineHistoryTargets,type ThreadAcce
 import type {ThreadStreamItem} from '../connection/thread-events';
 import {scheduleTimeout,cancelTimeout} from '../shared/clock';
 import {logEvent,logFailure} from '../app/diagnostics';
+import {streamMemory} from '../app/stream-memory-diagnostics';
 import {responseTooLarge} from '../connection/t3-response-limits';
 
 type Watch=typeof watchThread;
@@ -41,7 +42,7 @@ export class SharedThreadStreams {
       if(this.stopped)return {stop(){}};
       let source=this.sources.get(key);
       if(!source){source={key,threadId,access,readers:new Set(),events:[],characters:0,started:false};this.sources.set(key,source);}
-      const current=source,reader:Reader={callbacks,targets,replay,completed,priority};current.readers.add(reader);
+      const current=source,reader:Reader={callbacks,targets,replay,completed,priority};current.readers.add(reader);this.memory('start',current);
       logEvent('response.source.readers',{threadId,sourceKey:key,readers:current.readers.size,sources:this.sources.size});
       if(current.started&&!current.watch&&!completed){current.slot?.();if(current.retry)cancelTimeout(current.retry);current.retry=undefined;current.started=false;}
       if(!current.started){if(!this.pending.includes(current))this.pending.push(current);queueMicrotask(()=>this.drain());}
@@ -56,11 +57,16 @@ export class SharedThreadStreams {
         if(!current.readers.delete(reader)||current.readers.size)return;
         this.sources.delete(key);this.pending=this.pending.filter(value=>value!==current);
         current.watch?.stop();current.slot?.();current.controller?.abort();if(current.retry)cancelTimeout(current.retry);if(current.timeout)cancelTimeout(current.timeout);
-        current.events=[];current.snapshot=undefined;
+        current.events=[];current.snapshot=undefined;current.characters=0;this.memory('end',current);
       }};
     };
   }
 
+  private memory(checkpoint:'sample'|'start'|'end'|'dispose',source?:Source){
+    streamMemory.sample(checkpoint,()=>{
+      const status=this.status();return {threadId:source?.threadId,sourceCount:status.sources,readerCount:status.readers,openingCount:status.opening,queuedCount:status.queued,canonicalReadCount:status.canonicalReads,retryTimerCount:status.retryTimers,cacheCharacters:status.cacheCharacters,replayEventCount:source?.events.length};
+    });
+  }
   private targets(source:Source):InlineHistoryTargets {
     const targets=[...source.readers].map(reader=>reader.targets?.());
     return {messageIds:[...new Set(targets.flatMap(target=>target?.messageIds??[]))],turnIds:[...new Set(targets.flatMap(target=>target?.turnIds??[]))]};
@@ -88,10 +94,10 @@ export class SharedThreadStreams {
   private refresh(source:Source){
     if(!source.readers.size||this.stopped)return;
     if(source.refresh){source.refreshAgain=true;return;}
-    const controller=source.controller=new AbortController(),timeout=scheduleTimeout(()=>controller.abort(),20_000);
+    const controller=source.controller=new AbortController();
     const work=source.access().then(async access=>{
       try{
-        if(controller.signal.aborted)throw Error('T3 response recovery read timed out or was cancelled.');
+        if(controller.signal.aborted)throw Error('T3 response recovery read was cancelled.');
         const snapshot=await readInlineSnapshot({...access,api:(path,payload)=>access.api(path,payload,{signal:controller.signal})},source.threadId,undefined,this.targets(source));
         source.attempt=0;if(source.readers.size&&!this.stopped&&!controller.signal.aborted)this.deliver(source,{kind:'snapshot',snapshot});
       }finally{await access.close?.();}
@@ -105,7 +111,7 @@ export class SharedThreadStreams {
         source.retry=scheduleTimeout(()=>{source.retry=undefined;if(!source.readers.size||this.stopped||source.watch)return;source.started=false;this.pending.push(source);this.drain();},delay);
       }
     }).finally(()=>{
-      cancelTimeout(timeout);if(source.controller===controller)source.controller=undefined;
+      if(source.controller===controller)source.controller=undefined;
       if(source.refresh===work)source.refresh=undefined;
       if(source.refreshAgain){source.refreshAgain=false;if(!source.retry)this.refresh(source);}
     });
@@ -133,5 +139,5 @@ export class SharedThreadStreams {
     }
   }
   status(){return {sources:this.sources.size,readers:[...this.sources.values()].reduce((count,source)=>count+source.readers.size,0),opening:this.opening,queued:this.pending.length,canonicalReads:[...this.sources.values()].filter(source=>!!source.refresh).length,retryTimers:[...this.sources.values()].filter(source=>!!source.retry).length,cacheCharacters:[...this.sources.values()].reduce((sum,source)=>sum+source.characters,0)};}
-  dispose(){this.stopped=true;for(const source of this.sources.values()){source.readers.clear();source.watch?.stop();source.slot?.();source.controller?.abort();if(source.retry)cancelTimeout(source.retry);if(source.timeout)cancelTimeout(source.timeout);}this.sources.clear();this.scopedReads.clear();this.pending=[];}
+  dispose(){this.stopped=true;for(const source of this.sources.values()){source.readers.clear();source.watch?.stop();source.slot?.();source.controller?.abort();if(source.retry)cancelTimeout(source.retry);if(source.timeout)cancelTimeout(source.timeout);}this.sources.clear();this.scopedReads.clear();this.pending=[];this.memory('dispose');}
 }

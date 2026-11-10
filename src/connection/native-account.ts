@@ -1,5 +1,4 @@
 import {isRecord,parseJson} from '../shared/values';
-import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import {Buffer} from 'buffer/';
 import type {Fetcher} from './direct';
 import type {CloudAccount} from './cloud';
@@ -21,9 +20,9 @@ const messages:Record<string,string>={
 };
 async function request(path:string,state:ClientState,body:Record<string,string>|undefined,fetcher:Fetcher,changed?:()=>Promise<void>):Promise<{data:Record<string,unknown>;client:Record<string,unknown>|undefined}>{
  const url=ORIGIN+path+'?__clerk_api_version=2026-05-12&_is_native=1';
- const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
+ const controller=new AbortController();
  try{
-  const response=await Promise.race([fetcher(url,{method:body?'POST':'GET',headers:{...(state.clientToken?{Authorization:'Bearer '+state.clientToken}:{}),...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},...(body?{body:new URLSearchParams(body).toString()}:{}),credentials:'omit',redirect:'error',signal:controller.signal}),new Promise<never>((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new SignInError('T3 sign-in timed out. Try again.'));},30000);})]);
+  const response=await fetcher(url,{method:body?'POST':'GET',headers:{...(state.clientToken?{Authorization:'Bearer '+state.clientToken}:{}),...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},...(body?{body:new URLSearchParams(body).toString()}:{}),credentials:'omit',redirect:'error',signal:controller.signal});
   const text=await response.text();if(Buffer.byteLength(text)>1_000_000)throw new SignInError('T3 sign-in response is too large.');
   let data:Record<string,unknown>;try{const parsed=parseJson(text);if(!isRecord(parsed))throw Error('Expected a sign-in object.');data=parsed;}catch{throw new SignInError('T3 sign-in returned an invalid response.');}
   const rotated=response.headers.get('authorization')?.replace(/^Bearer /i,'');
@@ -35,7 +34,7 @@ async function request(path:string,state:ClientState,body:Record<string,string>|
   const result=data.response??data,client=data.client??undefined;
   if(!isRecord(result)||client!==undefined&&!isRecord(client))throw new SignInError('T3 sign-in returned an invalid response.');
   return {data:result,client};
- }catch(e){if(e instanceof SignInError||e instanceof SignInRequiredError)throw e;throw new SignInError('Cannot reach T3 sign-in. Check your internet connection.');}finally{clearTimeout(timer);}
+ }catch(e){if(e instanceof SignInError||e instanceof SignInRequiredError)throw e;throw new SignInError('Cannot reach T3 sign-in. Check your internet connection.');}
 }
 export async function beginEmailLogin(email:string,fetcher:Fetcher=defaultNativeAccountFetch):Promise<EmailLogin>{
  email=email.trim();if(email.length>320||!/^\S+@\S+\.\S+$/.test(email))throw new SignInError('Enter the email address you use for T3.');

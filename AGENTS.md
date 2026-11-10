@@ -13,6 +13,20 @@ Investigation and review are read-only unless implementation is requested.
 Commit all intended tracked changes, including instruction and skill files,
 before reporting them complete. Report failed checks and unfinished work.
 
+## Start from current source
+
+Before editing, fetch the PR target with `git fetch --no-tags origin main` and
+check `git status`, the branch, and its relation to `origin/main`. A new clean
+worktree with no task commits must fast-forward to the fetched target. An
+existing task branch must merge the target and resolve conflicts while keeping
+its intended changes. Do not reset active branches or discard local work.
+
+Keep T3 Auto-pull enabled for this project. Before new worktrees are made, the
+main project checkout must be clean and current: fetch, then
+`git merge --ff-only origin/main` while it is on `main`. Auto-pull does not
+update existing task worktrees. Fetch and check again before final validation
+and PR creation; if the target changed, integrate it and repeat affected checks.
+
 ## Development and validation
 
 Use Node.js 22, npm, and Python 3. Preserve the existing lockfile and resolved
@@ -23,8 +37,8 @@ The developing agent owns all validation before completion. Use
 `npm run test:plan` and `npm test` for affected checks, and `npm run build` for
 product changes. The default baseline is the merge-base with `origin/main`
 (or local `main`); `--base COMMIT` selects another PR target. Fetch the target
-before final validation. Do not run the full suite by default. Add regression
-coverage when requested; preserve and run existing affected checks.
+before final validation. Do not run the full suite by default. Add meaningful
+regression coverage for behavior changes. Preserve and run existing affected checks.
 
 Complete all required behavior, integration, native-client and Sync checks in
 the developing agent run. Do not defer testing to a queue, release worker, or
@@ -55,8 +69,9 @@ notes, threads, apps, and helpers after retaining evidence.
 ## Documentation and skills
 
 Documentation and skill-instruction changes use the same commit-and-PR flow,
-without plugin builds, version changes, or installation. Review the diff and
-relevant links.
+without local installation. Review the diff and relevant links. All PRs need
+the aligned version required by the existing GitHub flow before merge; this
+includes documentation and workflow-only changes.
 
 The MCP editing skill and server are bundled product assets. Changes to
 `skills/obsidian-t3/SKILL.md`, `agent/mcp_server.py`, or its transport that change
@@ -72,10 +87,12 @@ remaining limits in the PR. Use a draft PR if required validation is incomplete.
 Do not merge the PR unless the user requests it.
 
 `push`, `push to GitHub`, and `push to main` authorize source uploads only.
-They do not authorize version changes, release tags, vault installation, GitHub
-release publication, or Obsidian directory submission or review. The local
-release process has been removed. GitHub owns release work after PR review;
-developing agents stop at the PR unless the user gives a separate instruction.
+Feature-branch pushes do not publish. Every main push, including a merged PR,
+authorizes the existing automatic GitHub release and needs a strictly newer,
+unused numeric `0.0.BUILD` aligned across all version files. This includes
+documentation and workflow changes. The workflow validates versions; it does
+not assign them. Vault installation and Obsidian directory submission or review
+remain separate. Developing agents finish at the PR unless directed otherwise.
 
 Before a push, read any shared private instructions with
 `python3 scripts/maintainer_config.py --instructions`. Use an explicit refspec
@@ -84,9 +101,20 @@ or `--mirror`, upload historical private refs, or create release tags for source
 work. See [Review and release checks](docs/review-and-release.md).
 
 The project remains Alpha. Published versions use numeric `0.0.BUILD`; Alpha is
-a separate release-title label. Keep version files aligned and preserve
-published history. Do not bump versions for ordinary contributions. Only
-explicit user direction can end the Alpha stage.
+the development stage, not a release-title label. Titles use
+`t3-obsidian VERSION`. Keep all version files aligned and preserve published
+history. Feature-branch work can defer its version until PR preparation; every
+main push requires a new version. Only explicit user direction can end Alpha.
+
+## Issue diagnostics
+
+When asked about a plugin issue, read the existing automatic per-device JSONL
+logs before requesting more diagnostics. The checked `client-status` result's
+`diagnosticLog` gives the exact T3 machine/workspace/directory. Logs live below
+`<No project workspace>/.t3-obsidian/diagnostics/<vault UUID>/<device UUID>/`.
+They are ordinary agent-readable files, retained until the user deletes them;
+do not ask the user to export/copy logs. Read only relevant time ranges with
+bounded memory. See [Automatic diagnostic log files](docs/stream-memory-diagnostics.md).
 
 ## Evidence and completion
 
@@ -99,5 +127,6 @@ credentials, real vault content, and private thread records out of GitHub.
 
 A task checkout and local branch can be removed only through the owning app,
 after the work is merged, tracked and untracked files are clean, no active work
-uses the checkout, and all local files are disposable or retained elsewhere. Preserve dirty or advanced branches and report the blocker.
+uses the checkout, and all local files are disposable or retained elsewhere. Preserve dirty or advanced branches and report the
+blocker.
 Deleting a worktree alone does not delete its branch.

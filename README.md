@@ -30,7 +30,7 @@ For a local, HTTPS/Tailscale, or existing SSH tunnel connection, choose that met
 ## Connect notes and projects
 
 - **Link a folder.** Right-click it, choose **Link to T3 Code**, then choose a project. Notes below it use that project when you send them.
-- **Import a response.** Use **Import T3 run into this note…** from the editor menu or command palette. Choose an existing response without sending a new message. Hover on a run for half a second to preview its response, including HTML, or use the arrow keys. Status icons keep the list compact, and unavailable runs are hidden.
+- **Import a response.** Use **Import T3 run into this note…** from the editor menu or command palette. Choose an existing response without sending a new message. Search or cancel while earlier runs load. Hover on a run or use the arrow keys to preview its response, including HTML. Status icons keep the list compact, and unavailable runs are hidden. Imports use standard T3 Code connections and preserve the complete saved response.
 - **Browse project files.** Run **Open Codebase view** from the command palette to work with code, Markdown, images, and supported documents.
 
 Use **Settings → T3 Code → Replies** to adjust reply behaviour, and **Projects** to manage folder links. **Advanced** includes troubleshooting.
@@ -46,3 +46,5 @@ Agents can prepare and submit checked note edits through the running plugin. Com
 ---
 
 Your chosen note content and attachments go to the connected T3 computer and its configured model provider. Optional agent setup writes the bundled MCP tools and changes the selected agent’s launch settings on that computer through the authenticated T3 connection, outside the vault. Obsidian does not run the helper or open an incoming command port. T3 and provider accounts or usage charges are separate from this free plugin. [Report an issue](https://github.com/7bgsbm749g-boop/t3-obsidian/issues) · [MIT license](LICENSE)
+
+Streaming RAM capture: [device-local streaming memory diagnostics](docs/stream-memory-diagnostics.md).

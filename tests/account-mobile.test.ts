@@ -40,6 +40,7 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
   if(url.endsWith('/environment'))return response({environmentId:id,label:id,orchestrationProtocolVersion:2});
   if(url.endsWith('/oauth/token')){const form=new URLSearchParams(o.body);const manual=form.get('subject_token')==='synthetic-code';assert.equal(form.get('scope'),manual?AGENT_SETUP_PERMISSIONS.join(' '):PLUGIN_SCOPE);return response({token_type:manual?'Bearer':'DPoP',access_token:manual?'manual-private-'+id:'environment-private-'+id,expires_in:600,scope:form.get('scope')});}
   if(o.headers.Authorization!=='Bearer manual-private-'+id){assert.equal(o.headers.Authorization,'DPoP environment-private-'+id);assert.ok(o.headers.DPoP);}
+  if(url.endsWith('/api/auth/session'))return response({authenticated:true,permissions:PLUGIN_PERMISSIONS});
   if(url.endsWith('/websocket-ticket'))return response({ticket:'ephemeral'});
   if(url.endsWith('/shell'))return response({projects:[{id:'p-'+id,title:'Project '+id,workspaceRoot:'/',defaultModelSelection:{instanceId:'codex',model:'default'}}],threads:[]});
   dispatches.push(JSON.parse(o.body));return response({});

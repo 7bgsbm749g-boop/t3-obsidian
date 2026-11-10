@@ -1,4 +1,3 @@
-import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import {elapsedRun} from './response-presentation';
 import {markdownCodeRanges} from './reply-html';
 import {contentHash} from './completion';
@@ -65,21 +64,13 @@ export function stopResponseEdit(document:string,id:string){
   return region?finalizeRegion(document,id,contentHash(region.body),stoppedResponseBody(region.body)):null;
 }
 
-export async function boundedStopOperation<T>(work:Promise<T>,timeoutMs=10_000):Promise<T>{
-  let timer:ReturnType<typeof setTimeout>|undefined;
-  try{return await Promise.race([work,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error('Remote stop timed out.')),timeoutMs);})]);}
-  finally{if(timer)clearTimeout(timer);}
-}
-
-/** A deadline bounds access creation and dispatch; late access cannot dispatch. */
-export async function interruptStoppedResponse(accessFor:()=>Promise<ThreadAccess>,requestId:string,threadId:string,turnId?:string,timeoutMs=10_000,messageId?:string,projectId?:string,createdAt=new Date().toISOString(),knownTerminal=false){
+export async function interruptStoppedResponse(accessFor:()=>Promise<ThreadAccess>,requestId:string,threadId:string,turnId?:string,_legacyWait?:number,messageId?:string,projectId?:string,createdAt=new Date().toISOString(),knownTerminal=false){
   if(knownTerminal)return;
-  let expired=false,access:ThreadAccess|undefined,timer:ReturnType<typeof setTimeout>|undefined;
+  let access:ThreadAccess|undefined;
   let closed=false;
   const close=(reason:'stop-complete'|'stop-timeout')=>{if(!access||closed)return;closed=true;try{void Promise.resolve(access.close?.(reason)).catch(()=>{});}catch{/* Cleanup must not change the stop result. */}};
   const work=(async()=>{
     access=await accessFor();
-    if(expired){close('stop-timeout');return;}
     try{
       if(!turnId&&!messageId)throw Error('The stopped response has no bound T3 turn.');
       const snapshot=await readInlineSnapshot(access,threadId,projectId,{messageIds:messageId?[messageId]:[],turnIds:turnId?[turnId]:[]});
@@ -91,21 +82,20 @@ export async function interruptStoppedResponse(accessFor:()=>Promise<ThreadAcces
       let turn=state.turns?.[turnId]??(state.latestTurn?.turnId===turnId?state.latestTurn:undefined);
       if(continuation.moving&&turn?.state==='interrupted')throw Error('T3 has not identified the worktree continuation to stop. Retry Stop.');
       if(turn?.state==='queued'){
-        if(expired)return;
+
         // Cancel only this verified continuation. If it starts concurrently,
         // re-read its exact identity and interrupt that run instead.
-        try{await access.api('/api/orchestration/dispatch',{type:'queued-run.cancel',commandId:commandId(requestId,'cancel:'+turnId),threadId,runId:turnId});}catch(error){if(expired)throw error;}
+        try{await access.api('/api/orchestration/dispatch',{type:'queued-run.cancel',commandId:commandId(requestId,'cancel:'+turnId),threadId,runId:turnId});}catch{/* Re-read the exact queued run after an uncertain cancellation. */}
         const latest=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:await readInlineSnapshot(access,threadId,projectId,{messageIds:messageId?[messageId]:[],turnIds:[turnId]})}).state;
         turn=latest.turns?.[turnId]??(latest.latestTurn?.turnId===turnId?latest.latestTurn:undefined);
         if(!turn||turn.state==='queued')throw Error('T3 did not confirm cancellation of the worktree continuation. Retry Stop.');
       }
       if(turn&&['completed','interrupted','cancelled','error'].includes(turn.state)||state.checkpoints?.some(checkpoint=>checkpoint.turnId===turnId&&checkpoint.status==='ready'&&!!checkpoint.completedAt))return;
       if(turn?.state!=='running'&&state.session?.activeTurnId&&state.session.activeTurnId!==turnId)throw Error('The response turn is no longer active; its final state is waiting for confirmation.');
-      if(expired)return;
+
       const handedOff=Object.values(state.worktreeHandoffs??{}).some(handoff=>handoff.turnId===turnId);
       try{await access.api('/api/orchestration/dispatch',{type:'thread.turn.interrupt',commandId:commandId(requestId,handedOff?'interrupt:'+turnId:'interrupt'),threadId,turnId,createdAt});}
       catch(error){
-        if(expired)throw error;
         // The exact run can finish between the read and interrupt. Confirm that
         // outcome with a read; never replay the interrupt or touch a newer run.
         const latest=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:await readInlineSnapshot(access,threadId,projectId,{messageIds:messageId?[messageId]:[],turnIds:[turnId]})}).state;
@@ -115,6 +105,5 @@ export async function interruptStoppedResponse(accessFor:()=>Promise<ThreadAcces
       }
     }finally{close('stop-complete');}
   })();
-  try{await Promise.race([work,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{expired=true;close('stop-timeout');reject(Error('The response was finished in the note, but T3 did not acknowledge the interrupt.'));},timeoutMs);})]);}
-  finally{if(timer)clearTimeout(timer);}
+  await work;
 }

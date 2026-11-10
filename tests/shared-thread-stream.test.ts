@@ -79,3 +79,17 @@ test('read sharing works across newly acquired route APIs and preserves signals 
   a.api.trackConnection?.({closed:false});assert.equal(tracked,1);
   await Promise.all([a.api('/api/orchestration/turn-item',{}, {signal:new AbortController().signal}),b.api('/api/orchestration/turn-item',{}, {signal:new AbortController().signal})]);assert.equal(calls,3);h.pool.dispose();
 });
+test('a slow shared recovery read survives elapsed time and stops on its last reader cancellation',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const h=fixture(),received:unknown[]=[],errors:unknown[]=[];
+  let signal!:AbortSignal,release!:(value:unknown)=>void;
+  const access=async()=>({origin:'https://synthetic.invalid',api:async(_path:string,_payload?:unknown,options?:{signal?:AbortSignal})=>{signal=options!.signal!;return new Promise(resolve=>release=resolve);}}) as ThreadAccess;
+  const subscribe=(key:string)=>h.pool.forSource(key,true)('thread',access,{item:item=>received.push(item),reconnecting:error=>errors.push(error)});
+  const first=subscribe('slow');await drain();t.mock.timers.tick(60_000);await drain();
+  assert.equal(signal.aborted,false);assert.equal(errors.length,0);
+  release({thread:{id:'thread',projectId:'project',messages:[],activities:[]},snapshotSequence:1});await drain();
+  assert.equal(received.length,1);first.stop();
+  const second=subscribe('cancelled');await drain();second.stop();assert.equal(signal.aborted,true);
+  release({thread:{id:'thread',projectId:'project',messages:[],activities:[]},snapshotSequence:2});await drain();
+  assert.equal(received.length,1);assert.equal(errors.length,0);h.pool.dispose();
+});

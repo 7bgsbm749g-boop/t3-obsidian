@@ -2,8 +2,8 @@
 
 The project remains in **alpha**, with plain **`0.0.BUILD`** versions in the
 Obsidian manifest, package files, compatibility map, and matching release tag.
-The GitHub title is **t3-obsidian VERSION (Alpha)**. Alpha is a display label,
-not a version suffix. The Obsidian display name stays **T3 Code**.
+The GitHub title is **t3-obsidian VERSION**, without a development-stage label. Alpha is the
+development stage; do not add it to new titles, versions, or tags. The Obsidian display name stays **T3 Code**.
 
 Only an explicit user instruction can end alpha. A breaking change, large
 feature, or high build number does not authorize graduation. Keep all version
@@ -11,16 +11,22 @@ files aligned for a release and preserve every published version.
 
 ## PRs and releases
 
-Ordinary development work ends in a reviewed commit and PR without a version
-bump. Release work stays on GitHub after PR review. The local version allocator,
+Ordinary development work ends in a reviewed commit and PR. Every PR needs a
+strictly newer unused `0.0.BUILD` aligned across all version files before merge,
+including documentation and workflow-only changes. Release work stays on GitHub after PR review. The local version allocator,
 queue, packaging, deployment and publication tools have been removed. This
 change adds no replacement release automation. See
 [Review and release checks](review-and-release.md).
 
-The existing GitHub provenance workflow verifies the exact numeric tag against
+The existing GitHub workflow validates PR versions. Every main push, including
+a merged PR, authorizes automatic publication: reserve the numeric tag for the
+exact source commit, dispatch its build, attest the assets, then publish. The
+workflow does not assign versions. It verifies the numeric tag against
 `manifest.json`, `package.json`, both package-lock version fields, and the
 `versions.json` compatibility entry before building and attesting assets.
-A source push or PR does not authorize a release tag or publication.
+Feature-branch pushes do not publish. Developing agents stop at the PR; GitHub
+owns publication after merge. [release-policy.json](../release-policy.json) and
+`scripts/release_policy.py` remain inputs to this GitHub workflow.
 
 ## Historical records
 

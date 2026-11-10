@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select affected test files, cache successful checks, and attest release inputs."""
+"""Select affected development tests and cache successful checks."""
 from __future__ import annotations
 
 import argparse
@@ -85,7 +85,7 @@ def semantic_bytes(name: str, value: bytes | None) -> bytes | None:
         return json_bytes(item)
     if name == 'versions.json':
         # Obsidian's version history has no executable behavior. Its release
-        # alignment is checked separately by the release entry point.
+        # alignment is checked separately by the GitHub release workflow.
         return b'version-history'
     return value
 
@@ -105,7 +105,7 @@ def resolve_reference(owner: str, reference: str, names: set[str]) -> set[str]:
         return set()
     result = set()
     for base in (Path(owner).parent, Path('.')):
-        candidate = os.path.normpath(str(base / reference))
+        candidate = os.path.normpath(str(base / reference)).replace(os.sep, '/')
         for suffix in ('', '.ts', '.tsx', '.js', '.mjs', '.json', '/index.ts', '/index.js'):
             if candidate + suffix in names:
                 result.add(candidate + suffix)

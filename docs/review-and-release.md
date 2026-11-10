@@ -21,8 +21,9 @@ build refuses test adapters and retired filesystem dependencies in its inputs.
 `npm test` runs and caches these gates before the affected tests. Cache keys
 include installed dependency bytes, runtime, source and configuration. Passing
 bounded test batches retain their own logs; failed batches have no success
-receipt. The release-tag workflow runs the same gates before building; branch
-pushes and pull requests do not run a GitHub build workflow.
+receipt. GitHub checks PR versions before merge. Its release-tag workflow runs
+lint and build before attesting and publishing; feature-branch pushes do not
+publish releases.
 
 ## Necessary capabilities and overrides
 
@@ -67,8 +68,9 @@ store. A desktop result does not prove native mobile behavior. If required
 validation is blocked or incomplete, report it in a draft PR. No later release
 worker will perform these checks.
 
-Documentation changes need a diff and link review, without a plugin build,
-version change or installation. Tooling changes need their affected checks.
+Documentation changes need a diff and link review without local installation.
+Tooling changes need their affected checks. All PRs need the aligned version
+required by the existing GitHub flow before merge, including docs and workflows.
 
 ## Commit, push and open a PR
 
@@ -94,12 +96,17 @@ finish with a commit and PR. There is no local release command to run after it.
 Historical tags, archives, receipts and private comparison records remain intact.
 
 Release work stays on GitHub after PR review. The existing
-[release provenance workflow](../.github/workflows/release-provenance.yml) accepts
-numeric `0.0.BUILD` tags, checks version alignment, installs dependencies, lints,
-builds, and attests `main.js`, `manifest.json` and `styles.css`. Source pushes and
-PRs do not trigger that workflow. No new GitHub release automation is added here.
+[release workflow](../.github/workflows/release-provenance.yml) checks that every
+PR carries a strictly newer aligned `0.0.BUILD`, including docs and workflow
+changes. After merge, the main-push job reserves that commit's unused numeric
+tag and explicitly dispatches the tag build. GitHub installs dependencies,
+lints, builds, attests `main.js`, `manifest.json` and `styles.css`, then publishes
+a regular release titled `t3-obsidian VERSION`. Existing tags and assets cannot
+be overwritten. This change adds no GitHub release automation.
 
-A source push or PR does not authorize a version bump, release tag, vault
-installation, GitHub release publication, or Obsidian directory submission or
-review. Keep the [alpha version policy](versioning.md); publication needs a
-separate request or an explicitly authorized GitHub release workflow.
+Feature-branch pushes do not publish. Every push to `main`, including a merged
+PR, authorizes this existing automatic GitHub publication. Prepare its newer
+aligned version before merge; the workflow does not choose or bump versions.
+Developing agents stop at the PR. Vault installation and Obsidian directory
+submission or review need separate instructions. Keep the
+[alpha version policy](versioning.md).

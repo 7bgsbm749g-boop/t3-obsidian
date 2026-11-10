@@ -22,6 +22,19 @@
 The build bundles `src/app/main.ts` into `dist/main.js`; source folders are not
 copied into an installed plugin.
 
+## Start with current main
+
+Keep T3 Auto-pull enabled for the project. In its main checkout, fetch with
+`git fetch --no-tags origin main`, then use `git merge --ff-only origin/main`
+while on a clean `main`. Do this before creating new worktrees. Do not reset
+branches or overwrite local edits to update them.
+
+Each developing agent must fetch and check its worktree before editing. A clean
+new branch without task commits can fast-forward to `origin/main`. Merge the
+fetched target into an existing task branch and resolve conflicts while keeping
+its work. Fetch again before final validation and PR creation. Auto-pull does
+not update existing worktrees.
+
 ## Commands
 
 Install the locked dependencies with `npm ci`. Use `npm run test:plan` to inspect
@@ -31,7 +44,7 @@ excluded from Git.
 
 The installed plugin needs `main.js`, `manifest.json`, and `styles.css` in the
 `t-three-code` plugin folder. Its manifest display name is **T3 Code**. GitHub
-releases use **t3-obsidian VERSION (Alpha)**; the release title does not set the
+releases use **t3-obsidian VERSION**; the release title does not set the
 Obsidian display name.
 
 ## Complete work with a PR
@@ -56,10 +69,11 @@ Do not cherry-pick into a shared integration checkout or install into a real
 vault as a completion step. See [Review and release checks](review-and-release.md).
 
 The local release commands, queue, deployment workers and automatic reloads have
-been removed. Release work stays on GitHub after PR review. The existing numeric
-tag workflow builds and attests distributable bytes on GitHub; this change does
-not add release automation. Follow the [alpha policy](versioning.md), and do not
-change versions or publish a release for ordinary source work.
+been removed. Release work stays on GitHub after PR review. The existing GitHub
+PR check requires a newer aligned version before merge, including for docs and
+tooling. Main pushes reserve that version's numeric tag and dispatch the existing
+GitHub build, attestation, and publication workflow. Follow the
+[alpha policy](versioning.md). This change adds no GitHub release automation.
 
 ## References
 
