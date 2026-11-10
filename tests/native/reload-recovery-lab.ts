@@ -87,7 +87,7 @@ export default class ReloadRecoveryLab extends Plugin {
       this.indicators.refresh();await pause(250);
       checks.completionClearsWorking=title()?.hasAttribute('data-t3-active-title')===false;
       checks.completionClearsCircle=title()?.hasAttribute('data-t3-circle')===false;
-      checks.closedFinalWriteVerified=this.writes===1&&this.manager.responses()[0].complete;
+      checks.closedFinalWriteDeferred=this.writes===0&&this.manager.responses()[0].complete;
       await this.capture('03-completed-while-unopened.png');
       checks.testCompleted=true;
     }finally{

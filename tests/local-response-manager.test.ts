@@ -34,7 +34,7 @@ test('reload restores Working and its watch before the saved note is opened',asy
   const runtime=(h.manager as any).jobs.get(binding.id);runtime.preview.tick=()=>ticks++;
   assert.equal(h.registered.length,1);assert.equal(h.manager.responses()[0].active,true);assert.equal(h.writes(),0);
   h.manager.tick();assert.equal(ticks,1,'The recovered closed reply retains its background watch');
-  h.emit('Final answer');await drain();assert.equal(h.manager.responses()[0].active,false);assert.equal(h.manager.responses()[0].complete,true);assert.equal(h.writes(),1,'A peer can finish the closed destination while the sender is suspended');
+  h.emit('Final answer');await drain();assert.equal(h.manager.responses()[0].active,false);assert.equal(h.manager.responses()[0].complete,true);assert.equal(h.writes(),0,'Closed ordinary notes retain the final-save boundary');
   h.open(true);h.manager.resume();await drain();assert.equal(h.writes(),1);h.manager.dispose();
 });
 
@@ -49,29 +49,10 @@ test('settled responses release transcript bodies and retain only exact completi
   assert.match(h.read(),/Large completed transcript/);assert.equal(h.manager.record(h.binding.id)?.state?.body,undefined);
   assert.equal((h.manager as any).jobs.get(h.binding.id).update.body,'');h.manager.dispose();
 });
-test('an absent anchor pauses recovery without recording a permanent removal or replacing user text',async()=>{
+test('observed anchor removal persists a local retirement without writing note content',async()=>{
   const h=fixture(),receipts:boolean[]=[];h.io.retainLocalCompletion=async(_request:ResponseRequest,saved:boolean)=>{receipts.push(saved);};
   await h.manager.register(h.binding);h.write('User deleted the response.');h.manager.changed(h.binding.notePath);await drain();
-  assert.deepEqual(receipts,[]);assert.equal(h.writes(),0);assert.equal(h.read(),'User deleted the response.');assert.equal(h.manager.status(h.binding.id)?.pendingSaveReason,'note-changed');assert.equal(h.manager.responses().length,0);h.manager.dispose();
-});
-test('a transient empty pane retains a verified final and saves when its exact anchor returns',async()=>{
-  const h=fixture(),receipts:boolean[]=[];h.io.retainLocalCompletion=async(_request:ResponseRequest,saved:boolean)=>{receipts.push(saved);};
-  await h.manager.register(h.binding);h.ready(false);h.emit('Retained mobile final');await drain();
-  const opened=h.io.openedNotes,original=h.read();h.io.openedNotes=()=>[{path:h.binding.notePath,document:''}];h.manager.resume();await drain();
-  assert.equal(h.read(),original);assert.deepEqual(receipts,[]);assert.equal(h.finished.length,0);assert.equal(h.manager.status(h.binding.id)?.pendingSaveReason,'note-changed');
-  h.io.openedNotes=opened;h.ready(true);h.manager.resume();await drain();
-  assert.equal(h.writes(),1);assert.match(h.read(),/Retained mobile final/);assert.deepEqual(receipts,[true]);h.manager.dispose();
-});
-test('an intact saved anchor recovers a legacy unsaved retirement without duplicating the prompt',async()=>{
-  const binding=request(),h=fixture(binding,undefined,updateResponseBindingData({},binding,'test'));
-  h.io.loadLocalCompletion=async()=>({saved:false});
-  h.manager.resume();await drain();assert.equal(h.finished.length,0);assert.equal(h.manager.status(binding.id)?.pendingSaveReason,'verification');
-  h.emit('Recovered original run');await drain();assert.equal(h.writes(),1);assert.match(h.read(),/Recovered original run/);h.manager.dispose();
-});
-test('explicit removal receipts still fence returning stale anchors',async()=>{
-  const binding=request(),h=fixture(binding,undefined,updateResponseBindingData({},binding,'test'));
-  h.io.loadLocalCompletion=async()=>({saved:false,removed:true});h.manager.resume();await drain();
-  h.emit('Must not return');await drain();assert.equal(h.writes(),0);assert.equal(h.manager.status(binding.id)?.finalWriterPending,false);assert.doesNotMatch(h.read(),/Must not return/);h.manager.dispose();
+  assert.deepEqual(receipts,[false]);assert.equal(h.writes(),0);h.manager.dispose();
 });
 test('an explicit reconnect restarts one shared source for all of its readers',async()=>{
   const first=request(),second={...request(),threadId:first.threadId,projectId:first.projectId},h=fixture(first,responseAnchor(first.id)+'\n'+responseAnchor(second.id));
@@ -151,12 +132,12 @@ test('closed recovery rejects duplicate, fenced and nonempty anchors without rew
   }
 });
 
-test('closed note changes invalidate one cached path and an absent anchor pauses its watch',async()=>{
+test('closed note changes invalidate one cached path and incoming completion retires its watch',async()=>{
   const binding=request(),h=fixture(binding,'Before',updateResponseBindingData({},binding,'A'));h.open(false);
   let reads=0;h.io.readNote=async()=>{reads++;return h.read();};await recover(h);assert.equal(h.registered.length,0);
   h.write(responseAnchor(binding.id));h.manager.changed(binding.notePath);await recover(h);assert.equal(h.registered.length,1);assert.equal(reads,2);
   h.write('Final answer received through Sync');h.manager.changed(binding.notePath);await recover(h);
-  assert.equal(reads,3);assert.equal(h.manager.responses().length,0);assert.deepEqual(h.finished,[]);assert.equal(h.read(),'Final answer received through Sync');h.manager.dispose();
+  assert.equal(reads,3);assert.equal(h.manager.responses().length,0);assert.deepEqual(h.finished,[binding.id]);h.manager.dispose();
 });
 
 test('closed bindings arriving after startup recover without reopening the note',async()=>{
@@ -269,8 +250,8 @@ test('unverified output and another message cannot replace this response',async(
   const h=fixture();await h.manager.register(h.binding);h.emit('Preview',false);await drain();assert.equal(h.writes(),0);
   h.emit('Other turn',true,randomUUID());await drain();assert.equal(h.writes(),0);h.manager.dispose();
 });
-test('ordinary closed notes finish through checked file IO without reopening',async()=>{
-  const h=fixture();await h.manager.register(h.binding);h.open(false);h.emit();await drain();assert.equal(h.writes(),1);assert.match(h.read(),/Final answer/);
+test('closed notes defer completion until they load again',async()=>{
+  const h=fixture();await h.manager.register(h.binding);h.open(false);h.emit();await drain();assert.equal(h.writes(),0);
   h.open(true);h.manager.tick();await drain();assert.equal(h.writes(),1);h.manager.dispose();
 });
 test('an imported completed run saves through checked note IO after its tab closes',async()=>{
@@ -309,7 +290,7 @@ test('a closed response keeps its completion watch and projects only verified su
   h.open(false);h.manager.tick();assert.equal(ticks,1);assert.equal(suspends,0);
   h.emit('Not verified',false);assert.equal(h.manager.responses()[0].complete,false);
   h.emit('Final answer');await drain();
-  assert.equal(h.writes(),1);assert.equal(h.manager.responses()[0].complete,true);assert.equal(h.manager.responses()[0].active,false);
+  assert.equal(h.writes(),0);assert.equal(h.manager.responses()[0].complete,true);assert.equal(h.manager.responses()[0].active,false);
   const identity=h.manager.responses()[0].completionId;
   const released=suspends;h.manager.tick();assert.ok(suspends>=released,'Verified runs keep their background watch suspended');
   h.open(true);h.manager.tick();await drain();
@@ -492,11 +473,11 @@ test('live completion cannot write before the local question checkpoint has load
  release(undefined);await drain();assert.equal(h.writes(),1);h.manager.dispose();
 });
 
-test('opening a copied anchor cannot move the recorded response or redirect its final write',async()=>{
+test('opening only a copied anchor cannot move a recorded response or start its watch',async()=>{
  const h=fixture();await h.manager.register(h.binding);await drain();
  const original=h.read();h.io.openedNotes=()=>[{path:'Copy.md',document:original}];h.io.isOpen=(path:string)=>path==='Copy.md';
  h.manager.resume();await drain();assert.equal(h.manager.request(h.binding.id)?.notePath,h.binding.notePath);
- h.emit();await drain();assert.equal(h.writes(),1);assert.match(h.read(),/Final answer/);assert.equal(h.manager.request(h.binding.id)?.notePath,h.binding.notePath);h.manager.dispose();
+ h.emit();await drain();assert.equal(h.writes(),0);h.manager.dispose();
 });
 test('a copied historical anchor stays inert when the original has already completed',async()=>{
  const binding=request(),h=fixture(binding,undefined,updateResponseBindingData({},binding,'A'));
