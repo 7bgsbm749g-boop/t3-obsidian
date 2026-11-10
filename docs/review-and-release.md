@@ -21,20 +21,9 @@ build refuses test adapters and retired filesystem dependencies in its inputs.
 `npm test` runs and caches these gates before the affected tests. Cache keys
 include installed dependency bytes, runtime, source and configuration. Passing
 bounded test batches retain their own logs; failed batches have no success
-receipt. The release-tag workflow runs the same gates before building. Every
-main push dispatches a tag build and publication; pull requests check that the
-version is aligned and newer than their base before merge.
-
-An official GitHub installation can lack a local deployment receipt. A maintainer
-can retain its verified source identity separately as
-`<evidenceRoot>/releases/VERSION/installed-source.json`, with `version`, the exact
-`gitCommit`, and `runtimeSha256` for `main.js`, `manifest.json` and `styles.css`.
-Verify the published assets and immutable source tag first, retaining that
-provenance and any loader-added comment comparison outside the checkout. The
-record describes the installed source, not a completed local release or smoke
-test. Check selection accepts it only while every installed runtime hash and
-the source commit's manifest version match. A local deployment receipt takes
-precedence. Unknown or changed installed bytes still block baseline recovery.
+receipt. GitHub checks PR versions before merge. Its release-tag workflow runs
+lint and build before attesting and publishing; feature-branch pushes do not
+publish releases.
 
 ## Necessary capabilities and overrides
 
@@ -45,10 +34,8 @@ provided by Obsidian; plugin copy buttons and custom link suggestions were
 removed. Note, property, folder and job event emissions were removed. Reply
 streaming and explicit following remain.
 Clerk account requests use Obsidian `requestUrl`. The T3 browser transport keeps
-abort, redirect rejection and incremental body reads, which `requestUrl` does
-not expose. Import reads discard unrelated fields while streaming and have no
-response-size or elapsed-time rejection. Explicit cancellation still applies.
-It uses the main window's fetch explicitly. UI listeners and timers
+abort, redirect rejection and incremental body limits, which `requestUrl` does
+not expose. It uses the main window's fetch explicitly. UI listeners and timers
 belong to their workspace document, including popouts.
 
 The temporary response height guard uses an invisible, noninteractive sibling
@@ -65,81 +52,61 @@ from reviewed repository configuration, not notes or network data. Do not force
 incompatible toolchain majors or change runtime dependencies to silence a
 transitive notice. Reassess exposure when updating the pinned upstream checker.
 
-## Push source commits
+## Validate before the PR
 
-A feature-branch push uploads reviewed source without publishing. Every push
-to `main`, including a PR merge, publishes a GitHub release after its checks pass.
-Supply a strictly newer, unused `0.0.BUILD` in `manifest.json`, `package.json`,
-both root version fields in `package-lock.json`, and `versions.json` before
-merging or pushing. This rule includes documentation and maintenance changes.
-Versions are never assigned silently. Read the shared maintainer instructions
-before pushing, use an
-explicit branch refspec, and disable implicit tag following:
+The developing agent completes the checks for its changes before opening a
+ready PR. Fetch the PR target, run `npm run test:plan`, then `npm test` for the
+affected checks. Both commands default to the merge-base with `origin/main`
+(or local `main`); use `--base COMMIT` for another target. Run `npm run build`
+for product changes and keep lint free of errors and warnings.
+
+Complete required native behavior, integration, and Sync checks during the same
+agent run. Use isolated synthetic vaults and the existing Sync lab; do not create
+test content in QLO2. Observe the machine's GUI rules. Retain source hashes,
+behavior results and fixture cleanup proof in the external project evidence
+store. A desktop result does not prove native mobile behavior. If required
+validation is blocked or incomplete, report it in a draft PR. No later release
+worker will perform these checks.
+
+Documentation changes need a diff and link review without local installation.
+Tooling changes need their affected checks. All PRs need the aligned version
+required by the existing GitHub flow before merge, including docs and workflows.
+
+## Commit, push and open a PR
+
+Review the final diff and commit all intended files. Push the task branch with
+an explicit refspec and implicit tag following disabled:
 
 ```sh
 git -c push.followTags=false push origin COMMIT:refs/heads/BRANCH
 ```
 
-Replace `COMMIT` and `BRANCH` with the reviewed commit and intended destination.
-Do not push private queue refs or use `--tags`, `--follow-tags`, or `--mirror`.
-PR validation rejects a version that does not advance its base. Main validation
-also refuses a tag owned by another commit. A failed check stops publication;
-fix the source with another new version rather than replacing a reserved tag.
-No workflow installs into a vault or submits the directory entry. The local
-QLO2 queue remains separate until its replacement is implemented.
+Replace `COMMIT` and `BRANCH` with the reviewed commit and task branch. Read the
+shared private instructions before pushing. Open a PR against `main` (or the
+specified target) and describe the problem, resulting behavior, checks and
+limits. Do not merge without a user request. Do not push historical private
+refs or use `--tags`, `--follow-tags`, or `--mirror`.
 
-## Publish verified assets
+## GitHub owns releases
 
-### Automatic publication from main
+The local release process has been removed, including queue submission,
+canonical-checkout integration, version assignment, packaging, installation,
+Sync delivery, smoke receipts, and automatic client reloads. Developing agents
+finish with a commit and PR. There is no local release command to run after it.
+Historical tags, archives, receipts and private comparison records remain intact.
 
-`.github/workflows/release-provenance.yml` reserves a numeric tag at the exact
-push commit and explicitly dispatches the same workflow at that tag. GitHub's
-repository token does not trigger tag-push workflows by itself, so the explicit
-dispatch is required. The tag workflow checks alignment, installs dependencies,
-runs lint and builds before attesting all three assets. It uploads them to a
-draft, checks their SHA-256 digests, and then publishes a regular release.
-An existing draft can resume missing uploads; existing bytes are never replaced.
-Rerunning a published version verifies the same bytes without replacing it.
+Release work stays on GitHub after PR review. The existing
+[release workflow](../.github/workflows/release-provenance.yml) checks that every
+PR carries a strictly newer aligned `0.0.BUILD`, including docs and workflow
+changes. After merge, the main-push job reserves that commit's unused numeric
+tag and explicitly dispatches the tag build. GitHub installs dependencies,
+lints, builds, attests `main.js`, `manifest.json` and `styles.css`, then publishes
+a regular release titled `t3-obsidian VERSION`. Existing tags and assets cannot
+be overwritten. This change adds no GitHub release automation.
 
-Tag builds use GitHub's bounded concurrency queue (`queue: max`) so a later push
-does not cancel an earlier pending release. Older builds do not replace a newer
-numeric release as Latest. There are no path filters: documentation-only main
-pushes also need a unique version and publish.
-
-### Legacy manual publication
-
-The following helper remains available for previously delivered queue archives.
-New main pushes publish automatically and do not need this manual procedure.
-
-1. Complete the normal release queue, changed-behavior smoke checks, fresh Sync,
-   and exact real-client verification. Keep all fixtures outside the real vault.
-2. Push the reviewed release merge commit, its source history and its exact numeric tag.
-   `.github/workflows/release-provenance.yml` builds that tag and uses GitHub's
-   official provenance action to attest `main.js`, `manifest.json` and
-   `styles.css`. It installs dependencies, runs lint, checks types and builds
-   before attesting and publishing. Manual retries must target that same tag.
-   These release-asset attestations address the directory's missing-attestation
-   recommendation. See the
-   [official release workflow guide](https://github.com/obsidianmd/obsidian-developer-docs/blob/main/en/Plugins/Releasing/Release%20your%20plugin%20with%20GitHub%20Actions.md).
-3. After the workflow succeeds, use a current official GitHub CLI and run:
-
-   ```sh
-   python3 scripts/publish-github.py VERSION \
-     --gh /path/to/verified/gh \
-     --notes-file /path/to/release-notes.txt \
-     --evidence /path/to/external-project-evidence/publication-VERSION --publish
-   ```
-
-   The helper checks delivery receipts, completed smoke evidence, the loaded
-   client version, immutable archive hashes and the remote tag. For every asset
-   it verifies the exact source ref, source commit and signer workflow using
-   [`gh attestation verify`](https://cli.github.com/manual/gh_attestation_verify).
-   It then creates a regular release titled `t3-obsidian VERSION`. Existing
-   tags and assets are never overwritten. Without `--publish`, it only verifies.
-4. Obsidian detects new GitHub releases periodically; an existing listing does
-   not need a new submission for each update. Request a manual directory check
-   or resubmission only when authorized. When verifying a directory review,
-   read the complete report, including later build and obfuscation sections,
-   and confirm actual acceptance and the public install action. A completed
-   review is not proof of acceptance by itself. See the
-   [directory FAQ](https://docs.obsidian.md/community-directory/faq).
+Feature-branch pushes do not publish. Every push to `main`, including a merged
+PR, authorizes this existing automatic GitHub publication. Prepare its newer
+aligned version before merge; the workflow does not choose or bump versions.
+Developing agents stop at the PR. Vault installation and Obsidian directory
+submission or review need separate instructions. Keep the
+[alpha version policy](versioning.md).

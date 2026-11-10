@@ -1,13 +1,48 @@
 from __future__ import annotations
 
 import json
+import errno
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from scripts import change_checks as checks
+
+
+class WindowsValidationLockTests(unittest.TestCase):
+    def test_contention_can_exceed_ten_attempts_before_success(self):
+        runtime = Mock(LK_NBLCK=2)
+        runtime.locking.side_effect = [OSError(errno.EACCES, 'busy')] * 12 + [None]
+        stream = Mock()
+        with patch.object(checks, 'msvcrt', runtime, create=True), patch.object(checks.time, 'monotonic', return_value=0), patch.object(checks.time, 'sleep') as sleep:
+            checks.windows_lock(stream)
+        self.assertEqual(runtime.locking.call_count, 13)
+        self.assertEqual(sleep.call_count, 12)
+        runtime.locking.assert_called_with(stream.fileno(), runtime.LK_NBLCK, 1)
+
+    def test_contention_has_a_deadline_and_unrelated_errors_propagate(self):
+        runtime = Mock(LK_NBLCK=2)
+        for error, expected in [(OSError(errno.EACCES, 'busy'), TimeoutError), (OSError(errno.EBADF, 'bad descriptor'), OSError)]:
+            runtime.locking.side_effect = error
+            with self.subTest(error=error), patch.object(checks, 'msvcrt', runtime, create=True), patch.object(checks.time, 'monotonic', side_effect=[0, 11]), patch.object(checks.time, 'sleep') as sleep:
+                with self.assertRaises(expected) as caught:
+                    checks.windows_lock(Mock(), timeout=10)
+                if expected is OSError:
+                    self.assertIs(caught.exception, error)
+                sleep.assert_not_called()
+
+    def test_windows_lock_releases_after_a_failing_validation(self):
+        runtime = Mock(LK_NBLCK=2, LK_UNLCK=0)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'validation.lock'
+            with patch.object(checks, 'msvcrt', runtime, create=True), patch.object(checks, 'os', SimpleNamespace(name='nt')):
+                with self.assertRaisesRegex(ValueError, 'failed check'):
+                    with checks.lock(path):
+                        raise ValueError('failed check')
+            self.assertEqual([call.args[1] for call in runtime.locking.call_args_list], [runtime.LK_NBLCK, runtime.LK_UNLCK])
 
 
 class ImpactSelectionTests(unittest.TestCase):
@@ -85,46 +120,6 @@ class ImpactSelectionTests(unittest.TestCase):
 
 
 class ValidationCacheTests(unittest.TestCase):
-    def installed_source_fixture(self):
-        plugin = self.root / 'installed-plugin'
-        plugin.mkdir()
-        for name, body in {'main.js': b'published runtime\n/* nosourcemap */',
-                           'manifest.json': b'{"version":"1.0.0"}', 'styles.css': b'published styles'}.items():
-            (plugin / name).write_bytes(body)
-        (self.root / 'manifest.json').write_bytes((plugin / 'manifest.json').read_bytes())
-        subprocess.run(['git', 'add', 'manifest.json'], cwd=self.root, check=True)
-        subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'source version'], cwd=self.root, check=True)
-        commit = checks.git(self.root, 'rev-parse', 'HEAD').decode().strip()
-        receipts = self.root / 'receipts'
-        record = receipts / '1.0.0/installed-source.json'; record.parent.mkdir(parents=True)
-        record.write_text(json.dumps({'version': '1.0.0', 'gitCommit': commit,
-                                     'runtimeSha256': {path.name: checks.digest(path.read_bytes()) for path in plugin.iterdir()}}))
-        return plugin, receipts, record, commit
-
-    def test_verified_installed_source_record_supplies_the_exact_baseline(self):
-        plugin, receipts, record, commit = self.installed_source_fixture()
-        with patch.object(checks, 'QLO2', plugin / 'manifest.json'), patch.object(checks, 'RECEIPTS', receipts):
-            self.assertEqual(checks.default_base(self.root), commit)
-            (plugin / 'main.js').write_bytes(b'unrecorded replacement')
-            with self.assertRaisesRegex(SystemExit, 'current plugin files'):
-                checks.default_base(self.root)
-
-    def test_installed_source_record_requires_all_runtime_files_and_a_matching_source_version(self):
-        plugin, receipts, record, commit = self.installed_source_fixture()
-        value = json.loads(record.read_text())
-        with patch.object(checks, 'QLO2', plugin / 'manifest.json'), patch.object(checks, 'RECEIPTS', receipts):
-            value['runtimeSha256'].pop('styles.css'); record.write_text(json.dumps(value))
-            with self.assertRaisesRegex(SystemExit, 'current plugin files'):
-                checks.default_base(self.root)
-            value['runtimeSha256']['styles.css'] = checks.digest((plugin / 'styles.css').read_bytes())
-            (self.root / 'manifest.json').write_text('{"version":"2.0.0"}')
-            subprocess.run(['git', 'add', 'manifest.json'], cwd=self.root, check=True)
-            subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'other source version'], cwd=self.root, check=True)
-            value['gitCommit'] = checks.git(self.root, 'rev-parse', 'HEAD').decode().strip()
-            record.write_text(json.dumps(value))
-            with self.assertRaisesRegex(SystemExit, 'different version'):
-                checks.default_base(self.root)
-
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         directory = Path(self.temporary.name)
