@@ -34,46 +34,32 @@ The installed plugin needs `main.js`, `manifest.json`, and `styles.css` in the
 releases use **t3-obsidian VERSION (Alpha)**; the release title does not set the
 Obsidian display name.
 
-Follow the [alpha policy](versioning.md): versions are plain `0.0.BUILD` until
-the user explicitly leaves alpha. With `--enqueue`, supply `--thread-id ID` and
-`--summary "CHANGE"`; choose `--release-type patch`, `minor`, `major`, or `none`
-for the private comparison table. The queue always advances the alpha build.
+## Complete work with a PR
 
-## Release commits
+Fetch the PR target, inspect `npm run test:plan`, and run the affected checks in
+this development run. The default baseline is the merge-base of `HEAD` with
+`origin/main`, with local `main` as a fallback. For another target, pass its
+merge-base through `--base COMMIT` to both commands. No installed plugin or
+release receipt is needed to select development checks.
 
-Each new queued plugin release merges the submitted task history into `main`
-without squashing. The release merge commit is titled `Release VERSION: summary`
-and contains the resolved source tree and final version files. Its first parent
-is the previous canonical commit; its second parent is the submitted task tip.
-The queue creates it before checking and packaging, so the archive provenance
-and deployment receipt identify the exact release commit. Supply a useful
-public description with `--summary`.
+The developing agent also owns required integration and native behavior checks,
+including the isolated Sync lab for Sync changes. Respect each machine's GUI
+rules. Keep synthetic fixtures in a separate test vault, retain results and
+cleanup proof outside the checkout, and report any untested platform. If a
+required check cannot run, open a draft PR with that limit. Do not defer it to
+release work.
 
-Task commits keep their original IDs, authors, messages and merge topology in
-the public release ancestry. Local private refs under `refs/t3-release-queue/`
-also retain submitted sources. The queue retains private source ancestry for
-older squashed releases so later work based on those tasks can still integrate.
-Independent changes still merge, and product conflicts still stop that job.
-Do not push the private queue refs.
+Review the final diff, commit all intended changes, push the task branch with
+an explicit refspec and tag following disabled, then open a PR against `main`
+(or the specified target). Include the problem, resulting behavior and validation.
+Do not cherry-pick into a shared integration checkout or install into a real
+vault as a completion step. See [Review and release checks](review-and-release.md).
 
-An interrupted integration resumes the same recorded commit. A publication retry
-uses the same immutable archive, version, and release commit. A failed candidate
-that has not been packaged is removed with an explicit revert; a repaired retry
-creates a new candidate with a newer version. Existing history, tags, archives,
-and receipts are never rewritten. Old in-flight archives keep their original
-provenance and can finish under the previous version-commit scheme.
-
-Documentation and release-tool changes use a `Maintenance: summary` merge that
-also preserves their task commits, with affected checks and no plugin version
-or installation. An updated release engine still restarts the worker before
-validation or publication.
-
-After delivery, publish GitHub assets from the exact immutable release archive,
-using its plain numeric version as the tag and `t3-obsidian VERSION (Alpha)` as
-the title. Publish a regular GitHub release for Obsidian distribution; the
-project remains in alpha. Mark the new release as latest so the larger legacy
-version numbers do not keep the old release selected. Never rebuild the published
-assets or include private evidence in release notes.
+The local release commands, queue, deployment workers and automatic reloads have
+been removed. Release work stays on GitHub after PR review. The existing numeric
+tag workflow builds and attests distributable bytes on GitHub; this change does
+not add release automation. Follow the [alpha policy](versioning.md), and do not
+change versions or publish a release for ordinary source work.
 
 ## References
 

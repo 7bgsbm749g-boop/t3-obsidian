@@ -19,9 +19,6 @@ class MaintainerConfigurationTests(unittest.TestCase):
             self.assertEqual(maintainer_config.canonical_root(task), root)
             self.assertEqual(subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain=v1'], text=True), '')
 
-    def test_deployment_requires_explicit_installation_settings(self):
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(SystemExit, 'Configure local deployment'): maintainer_config.require_deployment(Path(directory))
 
     def test_external_evidence_is_shared_by_worktrees_without_creating_local_stores(self):
         with tempfile.TemporaryDirectory() as directory:

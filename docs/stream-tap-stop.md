@@ -53,7 +53,7 @@ desktop fixture checks, with no native iPhone or Android coverage.
 
 Evidence and tested source hashes are in this task worktree's gitignored
 `evidence/stream-stop-click-20261030/behavior.json`. QLO2 receives no test content;
-its release, fresh Sync and loaded-client verification use the release queue.
+the developing agent completes required native and isolated Sync checks before the PR. Release work stays on GitHub after review.
 
 ## Compact-button correction verified on 2026-10-24
 

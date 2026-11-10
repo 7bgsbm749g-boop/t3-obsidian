@@ -75,13 +75,6 @@
     "src/responses/html-result-view.ts": [
       "styles.css"
     ],
-    "scripts/release-qlo2.py": [
-      "scripts/laptop-reload.py",
-      "scripts/obsidian-command.py"
-    ],
-    "scripts/test_release_qlo2.py": [
-      "scripts/release-qlo2.py"
-    ],
     "scripts/test_evidence_paths.py": [
       "tests/native/local-response-sync-lab.py",
       "scripts/obsidian-sync-lab.py",
@@ -117,12 +110,6 @@
     ],
     "tests/orchestration-v2.test.ts": [
       "tests/native/orchestration-v2-live.ts"
-    ],
-    "scripts/release_policy.py": [
-      "release-policy.json"
-    ],
-    "scripts/test_source_cleanup.py": [
-      "scripts/cleanup-worktree.mjs"
     ],
     "tests/checked-note-edits.test.ts": [
       "tests/native/connect-note-edits-lab.ts",

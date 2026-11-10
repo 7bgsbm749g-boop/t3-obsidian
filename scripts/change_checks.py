@@ -7,7 +7,6 @@ import ast
 from collections import defaultdict, deque
 from contextlib import contextmanager
 import datetime as dt
-import fcntl
 import hashlib
 import io
 import json
@@ -15,11 +14,16 @@ import os
 from pathlib import Path
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
+if os.name == 'nt':
+    import msvcrt
+else:
+    import fcntl
 try:
     from . import maintainer_config
 except ImportError:
@@ -27,10 +31,6 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent
 CACHE = maintainer_config.evidence_root() / 'checks'
-RECEIPTS = maintainer_config.evidence_root() / 'releases'
-QLO2 = maintainer_config.path_setting('productionPlugins', ROOT / '.unconfigured/production/plugins') / 't-three-code/manifest.json'
-if not QLO2.exists():
-    QLO2 = QLO2.parent.with_name('send-to-t3-code') / 'manifest.json'
 RELEASE_FILES = ('manifest.json', 'versions.json', 'styles.css', 'README.md', 'LICENSE')
 RUNNER_INPUTS = {'tests/fixtures/desktop-sdk.cjs', 'tests/desktop-sdk-port.mjs', 'scripts/change_checks.py', 'scripts/test-impact.json', 'scripts/lint.mjs',
                  'eslint.config.mjs', 'scripts/check-platform-boundaries.mjs',
@@ -91,12 +91,13 @@ def semantic_bytes(name: str, value: bytes | None) -> bytes | None:
 
 
 def default_base(root: Path) -> str:
-    if QLO2.is_file():
-        version = json.loads(QLO2.read_bytes())['version']
-        receipt = RECEIPTS / version / 'deployment.json'
-        if receipt.is_file():
-            return json.loads(receipt.read_bytes())['gitCommit']
-    raise SystemExit('No installed release baseline is available. Supply --base COMMIT.')
+    """Development checks cover the branch's changes against the PR target."""
+    for reference in ('origin/main', 'main'):
+        result = subprocess.run(['git', 'merge-base', 'HEAD', reference], cwd=root,
+                                capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.strip()
+    raise SystemExit('No PR target baseline is available. Fetch origin/main or supply --base COMMIT.')
 
 
 def resolve_reference(owner: str, reference: str, names: set[str]) -> set[str]:
@@ -186,7 +187,7 @@ def select_tests(current: dict[str, bytes], previous: dict[str, bytes], *, all_t
 
 def environment() -> dict:
     return {'node': subprocess.check_output(['node', '--version'], text=True).strip(),
-            'npm': subprocess.check_output(['npm', '--version'], text=True).strip(),
+            'npm': subprocess.check_output([shutil.which('npm') or 'npm', '--version'], text=True).strip(),
             'python': sys.version, 'platform': platform.platform(), 'machine': platform.machine()}
 
 
@@ -202,13 +203,27 @@ def dependency_hash(root: Path) -> str:
 @contextmanager
 def lock(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('a') as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
-        yield
+    with path.open('a+b') as stream:
+        if os.name == 'nt':
+            if path.stat().st_size == 0:
+                stream.write(b'\0')
+                stream.flush()
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            fcntl.flock(stream, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == 'nt':
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def checked_command(root: Path, command: list[str], log: Path, timeout: int = 900) -> None:
     print('+', ' '.join(command), flush=True)
+    if os.name == 'nt':
+        command = [shutil.which(command[0]) or command[0], *command[1:]]
     with log.open('xb') as output:
         result = subprocess.run(command, cwd=root, stdout=output, stderr=subprocess.STDOUT, timeout=timeout)
     if result.returncode:
@@ -323,7 +338,7 @@ def run_validation(root: Path = ROOT, *, base: str | None = None, all_tests: boo
             if javascript:
                 for offset in range(0, len(javascript), 8):
                     batch = javascript[offset:offset + 8]
-                    commands.append((batch, [str(root / 'node_modules/.bin/tsx'), '--import', './tests/desktop-sdk-port.mjs', '--test', '--test-concurrency=2', *batch]))
+                    commands.append((batch, ['node', str(root / 'node_modules/tsx/dist/cli.mjs'), '--import', './tests/desktop-sdk-port.mjs', '--test', '--test-concurrency=2', *batch]))
             if python:
                 commands.append((python, [sys.executable, '-m', 'unittest', *[name.removesuffix('.py').replace('/', '.') for name in python]]))
             for index, (tests, command) in enumerate(commands):
@@ -371,7 +386,7 @@ def verify_validation(path: Path, root: Path = ROOT, *, require_build: bool = Fa
     if result['context'] != {'environment': environment(), 'dependenciesSha256': dependency_hash(root)}:
         raise SystemExit('Dependencies or runtime changed after validation. Prepare again.')
     if require_build and not result.get('bundle'):
-        raise SystemExit('Validation has no release build. Run release:qlo2 -- --prepare first.')
+        raise SystemExit('Validation has no plugin build. Run npm run build and repeat validation with require_build=True.')
     if result.get('bundle') and digest(Path(result['bundle']).read_bytes()) != result['bundleSha256']:
         raise SystemExit('Validated bundle does not match its proof.')
     for name, checksum in result.get('testResultsSha256', {}).items():
@@ -386,7 +401,7 @@ def verify_validation(path: Path, root: Path = ROOT, *, require_build: bool = Fa
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--base', help='Compare against this commit; default: installed release source.')
+    parser.add_argument('--base', help='Compare against this commit; default: merge-base with origin/main (or local main).')
     parser.add_argument('--all', action='store_true', help='Explicitly run the complete test suite.')
     parser.add_argument('--plan', action='store_true', help='Print selected test files without running checks.')
     args = parser.parse_args()

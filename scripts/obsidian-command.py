@@ -45,7 +45,7 @@ def resolve_vault(value, config_dir='.obsidian'):
 def remote_failure_log(host, vault, command, retry=False):
     # Reuse the existing private Windows SSH command transport. No T3 prompt, GUI input,
     # or plugin settings change is involved.
-    spec = importlib.util.spec_from_file_location('laptop_client_mailbox', Path(__file__).with_name('laptop-reload.py'))
+    spec = importlib.util.spec_from_file_location('remote_client_mailbox', Path(__file__).with_name('remote-client.py'))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.mailbox({'host': host, 'vault': str(vault)}, command, retry=retry)

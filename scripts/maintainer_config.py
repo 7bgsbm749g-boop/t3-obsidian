@@ -1,4 +1,4 @@
-"""Machine-local deployment settings shared by this repository's worktrees."""
+"""Machine-local validation settings shared by this repository's worktrees."""
 from __future__ import annotations
 import argparse
 import json
@@ -39,24 +39,6 @@ def evidence_root(root: Path = ROOT) -> Path:
         if value.get(name) and directory.resolve().is_relative_to(Path(value[name]).expanduser().resolve().parent.parent):
             raise ValueError('Configure evidenceRoot outside synced vaults.')
     return directory.resolve()
-
-
-def path_setting(name: str, default: Path, root: Path = ROOT) -> Path:
-    return Path(configuration(root).get(name, str(default))).expanduser()
-
-
-def setting(name: str, default: str, root: Path = ROOT) -> str:
-    value = configuration(root).get(name, default)
-    if not isinstance(value, str) or not value:
-        raise ValueError(f'Invalid maintainer setting: {name}')
-    return value
-
-
-def require_deployment(root: Path = ROOT) -> None:
-    value = configuration(root)
-    missing = [name for name in ('developmentPlugins', 'productionPlugins', 'syncService', 'obsidianCli') if not value.get(name)]
-    if missing:
-        raise SystemExit('Configure local deployment before publication: ' + ', '.join(missing))
 
 
 def main() -> None:

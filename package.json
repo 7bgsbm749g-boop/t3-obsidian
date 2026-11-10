@@ -16,7 +16,6 @@
     "test:plan": "python3 scripts/change_checks.py --plan",
     "test:all": "python3 scripts/change_checks.py --all",
     "validate:native:prepare": "node scripts/build-native-response-lab.mjs",
-    "release:qlo2": "python3 scripts/release-qlo2.py",
     "lint": "node scripts/lint.mjs",
     "lint:fix": "node scripts/lint.mjs --fix"
   },
