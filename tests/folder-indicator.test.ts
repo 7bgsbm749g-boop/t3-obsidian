@@ -1,7 +1,7 @@
 import {installDomFactories} from './dom-factories';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {decorateLinkedFolders,decorateNoteIndicators} from '../src/projects/folder-indicator';
+import {decorateLinkedFolders,decorateNoteIndicators,installFolderIndicators} from '../src/projects/folder-indicator';
 
 class FakeElement{
   className='';textContent='';title='';parent?:FakeElement;children:FakeElement[]=[];attrs=new Map<string,string>();
@@ -106,4 +106,34 @@ test('note decorations follow transitions, coexist with links, and project folde
   assert.equal(folder.children.length,0,'Folder notes do not retain a completed badge');
   decorateNoteIndicators(root as any,notes);assert.equal(folder.children.length,0,'Optional integration can disappear');
   notes.clear();decorateNoteIndicators(root as any,notes,resolve);assert.equal(file.children.length,0);
+});
+
+test('explorer activity covers added workspace roots and releases only the closed window',()=>{
+  const previous=globalThis.MutationObserver,observed:unknown[]=[],disconnected:unknown[]=[];
+  class Observer {target:unknown;observe(target:unknown){this.target=target;observed.push(target);}disconnect(){disconnected.push(this.target);}}
+  globalThis.MutationObserver=Observer as any;
+  function window(){
+    const row=new FakeElement('Project/Note.md');row.className='nav-file-title';
+    const label=new FakeElement();label.className='nav-file-title-content';row.appendChild(label);
+    const explorer={querySelectorAll:(selector:string)=>selector==='.nav-folder-title[data-path]'?[]:[row]};
+    const root={querySelectorAll:(selector:string)=>{
+      if(selector==='.nav-files-container')return [explorer];
+      if(selector==='[data-t3-completion-glow]')return row.hasAttribute('data-t3-completion-glow')?[row]:[];
+      if(selector.includes('data-t3-active-title'))return label.hasAttribute('data-t3-active-title')?[label]:[];
+      return row.children.filter(child=>child.className==='send-to-t3-note-indicator');
+    }};
+    return {root,explorer,row,label};
+  }
+  const main=window(),popout=window(),roots=new Set([main.root]);let reads=0;
+  try{
+    const controller=installFolderIndicators(()=>roots as any,()=>[],()=>{reads++;return new Map([['Project/Note.md',{active:1,input:0,complete:0,total:1}]]);});
+    assert.equal(main.label.getAttribute('data-t3-active-title'),'true');assert.equal(popout.label.hasAttribute('data-t3-active-title'),false);
+    roots.add(popout.root);controller.refresh();assert.equal(reads,2,'One activity snapshot covers all windows');
+    assert.equal(popout.label.getAttribute('data-t3-active-title'),'true');assert.equal(main.row.children.length,2);assert.equal(popout.row.children.length,2);
+    roots.delete(popout.root);controller.refresh();
+    assert.equal(popout.label.hasAttribute('data-t3-active-title'),false);assert.equal(popout.row.children.length,1);
+    assert.equal(main.label.getAttribute('data-t3-active-title'),'true');assert.deepEqual(disconnected,[popout.explorer]);
+    controller.dispose();assert.equal(main.label.hasAttribute('data-t3-active-title'),false);assert.equal(main.row.children.length,1);
+    assert.deepEqual(observed,[main.explorer,popout.explorer]);assert.deepEqual(disconnected,[popout.explorer,main.explorer]);
+  }finally{globalThis.MutationObserver=previous;}
 });

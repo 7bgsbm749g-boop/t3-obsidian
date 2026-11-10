@@ -31,7 +31,7 @@ export class RunImportPicker extends FuzzySuggestModal<ImportRun>{
     const heading=el.createDiv({cls:'send-to-t3-run-heading'}),icon=heading.createSpan({cls:'send-to-t3-run-status',attr:{'aria-label':run.status,'title':run.status}});
     icon.dataset.status=run.status;
     if(run.status!=='Running')setIcon(icon,run.status==='Completed'?'check':run.status==='Failed'?'x':'pause');
-    heading.createSpan({cls:'send-to-t3-run-name',text:this.getItemText(run)});
+    heading.createSpan({cls:'send-to-t3-run-name',text:this.getItemText(run),attr:{'aria-label':`${run.status}: ${this.getItemText(run)}`}});
     el.addEventListener('pointerenter',()=>{if(!this.keyboardPreview)this.prepare(run,el);});
     el.addEventListener('pointermove',event=>{if(event.movementX||event.movementY){this.keyboardPreview=false;this.prepare(run,el);}});
     el.addEventListener('pointerleave',()=>{if(!this.keyboardPreview)this.exitTimer=el.ownerDocument.defaultView!.setTimeout(()=>this.clear(),140);});
