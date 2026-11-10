@@ -29,11 +29,12 @@ def canonical_root(root: Path = ROOT) -> Path:
 
 
 def evidence_root(root: Path = ROOT) -> Path:
-    """Use the maintainer's external store, with a legacy contributor fallback."""
+    """Resolve an external evidence store before any validation writes."""
     value = configuration(root)
-    path = value.get('evidenceRoot') or str(canonical_root(root) / 'evidence')
+    path = value.get('evidenceRoot') or Path.home() / '.local/state/t3-obsidian/evidence'
     directory = Path(path).expanduser()
-    if value.get('evidenceRoot') and (not directory.is_absolute() or directory.resolve().is_relative_to(canonical_root(root)) or directory.resolve().is_relative_to(root.resolve())):
+    canonical = Path(value['canonicalRoot']).expanduser().resolve()
+    if not directory.is_absolute() or directory.resolve().is_relative_to(canonical) or directory.resolve().is_relative_to(root.resolve()):
         raise ValueError('Configure an absolute evidenceRoot outside source checkouts.')
     for name in ('developmentPlugins', 'productionPlugins'):
         if value.get(name) and directory.resolve().is_relative_to(Path(value[name]).expanduser().resolve().parent.parent):

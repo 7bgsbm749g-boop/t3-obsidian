@@ -7,6 +7,7 @@ import ast
 from collections import defaultdict, deque
 from contextlib import contextmanager
 import datetime as dt
+import errno
 import hashlib
 import io
 import json
@@ -200,6 +201,23 @@ def dependency_hash(root: Path) -> str:
                               for path in sorted(modules.rglob('*')) if path.is_file() and path != modules / '.package-lock.json'}))
 
 
+def windows_lock(stream, timeout: float = 1800) -> None:
+    """Wait for a shared validation lock, with a bounded contention deadline."""
+    deadline = time.monotonic() + timeout
+    while True:
+        stream.seek(0)
+        try:
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            return
+        except OSError as error:
+            if error.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('Timed out waiting for the shared validation lock.') from error
+            time.sleep(min(0.5, remaining))
+
+
 @contextmanager
 def lock(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -208,8 +226,7 @@ def lock(path: Path):
             if path.stat().st_size == 0:
                 stream.write(b'\0')
                 stream.flush()
-            stream.seek(0)
-            msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+            windows_lock(stream)
         else:
             fcntl.flock(stream, fcntl.LOCK_EX)
         try:

@@ -14,6 +14,9 @@ The validation tools use these values:
 - `canonicalRoot`: the main source checkout used to resolve existing local settings.
 - `evidenceRoot`: an absolute directory outside all source checkouts and synced
   vaults. Keep check logs, source hashes, behavior results, and cleanup proof here.
+  When unset, it defaults to `~/.local/state/t3-obsidian/evidence`. Both configured
+  and default paths are checked before validation writes; set an external path
+  if the default is inside a source checkout or a protected vault.
 - `developmentPlugins` and `productionPlugins`: optional protected plugin-parent
   directories. Native lab tools use them to reject real-vault destinations.
 

@@ -3,10 +3,35 @@ import json
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from scripts import maintainer_config
 
 
 class MaintainerConfigurationTests(unittest.TestCase):
+    def test_unconfigured_evidence_defaults_outside_source_without_creating_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary) / 'home'
+            root = home / 'projects/source'
+            with patch.object(maintainer_config, 'configuration', return_value={'canonicalRoot': str(root)}), patch.object(Path, 'home', return_value=home):
+                self.assertEqual(maintainer_config.evidence_root(root), home / '.local/state/t3-obsidian/evidence')
+            self.assertFalse(home.exists())
+
+    def test_default_evidence_cannot_be_inside_a_checkout_or_protected_vault(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary) / 'home'
+            source = Path(temporary) / 'source'
+            task = Path(temporary) / 'task'
+            for canonical, current, plugins, message in [
+                (home, task, None, 'outside source checkouts'),
+                (source, home, None, 'outside source checkouts'),
+                (source, task, home / '.obsidian/plugins', 'outside synced vaults'),
+            ]:
+                config = {'canonicalRoot': str(canonical), 'productionPlugins': str(plugins) if plugins else None}
+                with self.subTest(message=message, current=current), patch.object(maintainer_config, 'configuration', return_value=config), patch.object(Path, 'home', return_value=home):
+                    with self.assertRaisesRegex(ValueError, message):
+                        maintainer_config.evidence_root(current)
+            self.assertFalse(home.exists())
+
     def test_private_configuration_is_shared_by_worktrees_and_stays_out_of_git(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'canonical'; root.mkdir()

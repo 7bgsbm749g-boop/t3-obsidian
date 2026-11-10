@@ -11,7 +11,14 @@ except ModuleNotFoundError:
     from scripts.connect_commands import send_command as connected_command
 
 
+def unconfirmed(command: dict, error: Exception) -> dict:
+    """Preserve request identity without exposing remote output or credentials."""
+    return {'id': command['id'], 'ok': False, 'pending': True,
+            'error': 'The remote client did not confirm this command. Reuse its request ID. ' + type(error).__name__}
+
+
 def mailbox(config: dict, command: dict, *, retry: bool = False, cleanup: bool = False) -> dict:
+    """Use the connected client first, then bounded private maintenance probes."""
     if cleanup:
         return {'ok': True}  # Connected commands clean their exact files after acknowledgement.
     connected = connected_command(config['vault'], command, root=config.get('transportRoot'), client_id=config.get('clientId'), timeout=5, retry=retry)
@@ -27,14 +34,17 @@ def mailbox(config: dict, command: dict, *, retry: bool = False, cleanup: bool =
     payload = base64.b64encode(json.dumps({'vault': config['vault'], 'command': command, 'retry': retry, 'cleanup': cleanup}).encode()).decode()
     helper = Path(__file__).with_name('connect_commands.py').read_text() + "\n_p=json.loads(base64.b64decode('" + payload + "').decode())\ntry:\n _r=send_command(_p['vault'],_p['command'],timeout=5,retry=_p['retry'])\nexcept (ValueError,OSError) as _e:\n _r=dict(id=_p['command']['id'],ok=False,error=str(_e))\nprint(json.dumps(_r))\n"
     remote = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', config['host']]
-    result = subprocess.run([*remote, 'python.exe -c "import sys;exec(sys.stdin.read())"'],
-                            input=helper, capture_output=True, text=True, timeout=15)
-    if result.returncode == 0:
-        answer = json.loads(result.stdout.lstrip('\ufeff'))
-        if answer is not None:
-            return answer
-    elif not any(text in result.stderr.lower() for text in ['not recognized', 'was not found', 'not found']):
-        result.check_returncode()
+    try:
+        result = subprocess.run([*remote, 'python.exe -c "import sys;exec(sys.stdin.read())"'],
+                                input=helper, capture_output=True, text=True, timeout=15)
+        if result.returncode == 0:
+            answer = json.loads(result.stdout.lstrip('\ufeff'))
+            if answer is not None:
+                return answer
+        elif not any(text in result.stderr.lower() for text in ['not recognized', 'was not found', 'not found']):
+            result.check_returncode()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        return unconfirmed(command, error)
     script = r'''
 $ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
@@ -68,12 +78,15 @@ if(-not (Test-Path $endpointPath)) {
 }
 $endpoint=Get-Content $endpointPath -Raw | ConvertFrom-Json
 $uri=[Uri]$endpoint.url
-if($endpoint.version -ne 1 -or $uri.Scheme -ne 'http' -or $uri.Host -ne '127.0.0.1' -or $uri.AbsolutePath -ne '/commands' -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or $endpoint.token -notmatch '^[0-9a-f]{64}$') { throw 'Invalid direct command endpoint' }
+if($endpoint.version -ne 1 -or $uri.Scheme -ne 'http' -or $uri.Host -ne '127.0.0.1' -or $uri.IsDefaultPort -or $uri.AbsolutePath -ne '/commands' -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or $endpoint.token -notmatch '^[0-9a-f]{64}$') { throw 'Invalid direct command endpoint' }
 $body=@{command=$p.command;retry=[bool]$p.retry} | ConvertTo-Json -Depth 12 -Compress
 $answer=Invoke-RestMethod -Method Post -Uri $uri -Headers @{Authorization=('Bearer '+$endpoint.token)} -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 5 -MaximumRedirection 0
 $answer | ConvertTo-Json -Depth 20 -Compress
 '''.replace('PAYLOAD', payload)
     encoded = base64.b64encode(script.encode('utf-16le')).decode()
-    result = subprocess.run([*remote, 'powershell.exe -NoProfile -NonInteractive -EncodedCommand ' + encoded],
-                            capture_output=True, text=True, check=True, timeout=15)
+    try:
+        result = subprocess.run([*remote, 'powershell.exe -NoProfile -NonInteractive -EncodedCommand ' + encoded],
+                                capture_output=True, text=True, check=True, timeout=15)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        return unconfirmed(command, error)
     return json.loads(result.stdout.lstrip('\ufeff'))
