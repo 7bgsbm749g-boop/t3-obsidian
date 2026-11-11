@@ -144,7 +144,7 @@ test('live canonical error updates replace their existing row without completing
   assert.equal(body.split('>Provider error<').length-1,1);assert.doesNotMatch(body,/Original failure/);assert.match(body,/Updated failure\./);
   assert.equal(turnPhase(state,'run'),'running');
 });
-test('Tasks stays first at the same depth inside history and does not swallow adjacent prose',()=>{
+test('Tasks stays at timeline depth and does not swallow adjacent prose',()=>{
  const state=fixture([{id:'plan',type:'todo_list',startedAt:at(5),steps:[{step:'Check display',status:'in_progress'}]}]);
  state.messages.push({id:'after',role:'assistant',turnId:'run',text:'Following commentary.',streaming:false,createdAt:at(6)});
  const body=renderInlineTurn(state,'run','thread','running','collapse'),tree:any=unified().use(remarkParse).parse(body);
@@ -153,7 +153,7 @@ test('Tasks stays first at the same depth inside history and does not swallow ad
  const history=quotes.find(quote=>text(quote.children[0]).startsWith('[!t3-progress]'));
  const tasks=history.children.find((node:any)=>node.type==='html'&&node.value.includes('data-t3-tasks-id'));
  assert.ok(tasks);assert.match(tasks.value,/Check display/);assert.doesNotMatch(tasks.value,/Checking\.|Following commentary/);
- assert.equal(history.children[1],tasks);assert.ok(body.indexOf('Check display')<body.indexOf('Checking.'));
+ assert.ok(history.children.indexOf(tasks)>1);assert.ok(body.indexOf('Checking.')<body.indexOf('Check display')&&body.indexOf('Check display')<body.indexOf('Following commentary.'));
  assert.equal(state.messages.find(message=>message.id==='prose')?.text,'Checking.');
 });
 
