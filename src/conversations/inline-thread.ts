@@ -558,11 +558,11 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const spinner=['running','sending'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
   const displayedTurns=[...new Set([turnId,...all.map(message=>message.turnId).filter((id):id is string=>!!id)])];
   const htmlResults=responseHtmlResults(state.activities,displayedTurns,environmentId,threadId);
-  const htmlBodies=htmlResults.map(reference=>({body:renderHtmlResult(reference),at:Date.parse(state.activities.find(activity=>activity.kind==='response.html'&&activity.payload?.itemId===reference.itemId)?.createdAt??'')||0}));
-  if(mode!=='collapse')htmlBodies.push(...responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim()))).filter(item=>item.kind==='response.plan').map(item=>({body:item.body,at:Date.parse(item.createdAt??'')||0})));
-  htmlBodies.sort((a,b)=>a.at-b.at);
+  const htmlBodies:Array<{body:string;at:number;sequence?:number}>=htmlResults.map(reference=>({body:renderHtmlResult(reference),at:Date.parse(state.activities.find(activity=>activity.kind==='response.html'&&activity.payload?.itemId===reference.itemId)?.createdAt??'')||0}));
+  if(mode!=='collapse'&&(retain||phase!=='complete'))htmlBodies.push(...responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim()))).filter(item=>item.kind==='response.plan').map(item=>({body:item.body,at:Date.parse(item.createdAt??'')||0,sequence:item.sequence})));
+  htmlBodies.sort((a,b)=>a.at-b.at||(a.sequence??0)-(b.sequence??0));
   let htmlIndex=0;
-  const htmlBefore=(at=Infinity)=>{const parts:string[]=[];while(htmlIndex<htmlBodies.length&&htmlBodies[htmlIndex].at<=at)parts.push(htmlBodies[htmlIndex++].body);return parts.length?parts.join('\n\n')+'\n\n':'';};
+  const htmlBefore=(at=Infinity,sequence=Infinity)=>{const parts:string[]=[];while(htmlIndex<htmlBodies.length&&(htmlBodies[htmlIndex].at<at||htmlBodies[htmlIndex].at===at&&(htmlBodies[htmlIndex].sequence??0)<=sequence))parts.push(htmlBodies[htmlIndex++].body);return parts.length?parts.join('\n\n')+'\n\n':'';};
   const toolGroups=responseToolGroups(state,displayedTurns);
   const emissions=responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim())),phase==='running'?turnId:undefined);
   // The session repeats the canonical error item. Show that message once, in
@@ -594,7 +594,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   let previousRole:string|undefined;
   let prose=transcript?segments.reduce((body,segment,index)=>{
     const rendered=segment.role==='user'?renderInput(segment):assistant(segment.text,segment.messageId);
-    const embedded=mode!=='collapse'?htmlBefore(Date.parse(segment.createdAt??all.find(message=>message.id===segment.messageId)?.createdAt??'')||0):'';
+    const embedded=mode!=='collapse'?htmlBefore(Date.parse(segment.createdAt??all.find(message=>message.id===segment.messageId)?.createdAt??'')||0,all.find(message=>message.id===segment.messageId)?.sequence??Infinity):'';
     // Only adjacent assistant quote blocks share a quoted blank line. Callouts
     // and raw Markdown blocks need a real boundary to avoid swallowing prose.
     const separator=body&&previousRole==='assistant'&&segment.role==='assistant'&&!rawFinal(segment.messageId)&&!rawFinal(segments[index-1]?.messageId)&&/^>/.test(body.split('\n').at(-1)??'')&&/^>/.test(rendered)?'\n>\n':'\n\n';
@@ -603,7 +603,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     return index===followupIndex?`${next}\n\n${heading}${timer}${spinner}`:next;
   },''):messages.some(message=>growing(message.id))?messages.map(message=>assistant(message.text,message.id)).filter(Boolean).join('\n\n'):format==='raw-markdown'?answerBlocks.join('\n\n'):answer?quoteResponse(closeOpenFence(answer)):'';
   if(mode!=='collapse'&&htmlBodies.length){
-    if(!transcript)prose=messages.map(message=>htmlBefore(Date.parse(message.createdAt??'')||0)+assistant(message.text,message.id)).filter(Boolean).join('\n\n');
+    if(!transcript)prose=messages.map(message=>htmlBefore(Date.parse(message.createdAt??'')||0,message.sequence??Infinity)+assistant(message.text,message.id)).filter(Boolean).join('\n\n');
     const remaining=htmlBefore();if(remaining)prose+=(prose?'\n\n':'')+remaining.trimEnd();
   }
   // Separate the quote from the inline end marker. Without the blank line,
