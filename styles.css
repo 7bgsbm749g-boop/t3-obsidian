@@ -571,6 +571,7 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 .send-to-t3-run-heading { display: flex; align-items: center; gap: 10px; min-height: 24px; }
 .send-to-t3-run-status { display: inline-flex; flex: 0 0 17px; width: 17px; height: 17px; align-items: center; justify-content: center; color: var(--text-warning); }
 .send-to-t3-run-status[data-status="Running"] { display: none; }
+.send-to-t3-run-status-text { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .send-to-t3-run-status[data-status="Completed"] { color: var(--color-green); }
 .send-to-t3-run-status[data-status="Running"] { color: var(--color-blue); }
 .send-to-t3-run-status[data-status="Failed"] { color: var(--color-red); }

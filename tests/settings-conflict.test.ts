@@ -57,6 +57,22 @@ test('disabled automatic settlement does not restore device jobs or settle a new
   assert.equal(restarted.plugin.settings.settlementJobs.length,0);
 });
 
+for(const queued of [false,true])for(const missing of [false,true])test(`a shared save adopting disabled settlement discards persisted jobs (queued=${queued}, missing=${missing})`,async()=>{
+  const h=await harness({vaultId:'vault',autoSettleThreads:true});
+  h.plugin.settings.completionJobs.push({id:'keep-device-work'});
+  h.plugin.settings.settlementJobs.push({requestId:'old',messageId:'message',threadId:'thread',projectId:'project',connection:{transport:'direct',environmentId:'environment'}});
+  await h.plugin.saveDeviceState();
+  const incoming={...h.current(),autoSettleThreads:false};if(missing)delete incoming.autoSettleThreads;h.setCurrent(incoming);
+  h.plugin.settings.threadTitleGeneration='always';
+  const saving=h.plugin.save();if(queued)await Promise.all([saving,h.plugin.save()]);else await saving;
+  assert.equal(h.plugin.settings.autoSettleThreads,false);
+  assert.equal(h.current().autoSettleThreads,false);
+  assert.equal(h.plugin.settings.settlementJobs.length,0,'the save must clear jobs without waiting for a separate Sync refresh');
+  assert.equal(h.plugin.settings.completionJobs[0]?.id,'keep-device-work','clearing settlement must preserve unrelated device work');
+  const restarted=await harness({...h.current(),autoSettleThreads:true},h.deviceId);
+  assert.equal(restarted.plugin.settings.settlementJobs.length,0,'re-enabling on another device must not restore old jobs');
+});
+
 test('project creation locations sync as complete machine/path choices and persist through restart',async()=>{
   const h=await harness({vaultId:'vault'});
   const locations=[{connectionId:'laptop',environmentId:'windows',parentPath:'C:\\Projects',selectedAt:'2026-10-20T12:00:00Z'}];
