@@ -18,7 +18,7 @@ test('saved interrupted history can close with its existing active fold identity
 });
 test('interrupted previews, duplicate identities and stale interrupted blocks stay protected',()=>{
   const {body,key}=interruptedHistoryFixture(),id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
-  const tracked=initialRegion(id).text.replace(/\*\*T3 · Working\*\*[\s\S]*?(?=<!-- t3-inline:end:)/,body);
+  const tracked=initialRegion(id).text.replace(/\*\*T3 · Working(?: for)?\*\*[\s\S]*?(?=<!-- t3-inline:end:)/,body);
   assert.equal(streamBlock(tracked,key)?.tracked,true);assert.throws(()=>removeStreamBlock(tracked,key),/changed/);
   assert.equal(streamBlock(body+'\n\n'+body,key),undefined);assert.throws(()=>removeStreamBlock(body+'\n\n'+body,key),/changed/);
   assert.throws(()=>removeStreamBlock(body,key,'0'.repeat(64)),/changed/);
@@ -35,7 +35,7 @@ test('exact Markdown history removal keeps the final answer and surrounding note
 });
 test('terminal preview, active output, duplicates and stale click checksums cannot be removed',()=>{
   const {body,key}=historyFixture(),id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
-  const tracked=initialRegion(id).text.replace(/\*\*T3 · Working\*\*[\s\S]*?(?=<!-- t3-inline:end:)/,body);
+  const tracked=initialRegion(id).text.replace(/\*\*T3 · Working(?: for)?\*\*[\s\S]*?(?=<!-- t3-inline:end:)/,body);
   assert.equal(streamBlock(tracked,key)?.tracked,true);assert.throws(()=>removeStreamBlock(tracked,key),/changed/);
   const active=historyFixture(true);assert.equal(streamBlock(active.body,active.key)?.complete,false);assert.throws(()=>removeStreamBlock(active.body,active.key),/changed/);
   assert.equal(streamBlock(body+'\n\n'+body,key),undefined);assert.throws(()=>removeStreamBlock(body+'\n\n'+body,key),/changed/);
