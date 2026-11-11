@@ -2,7 +2,7 @@ import {records,isRecord} from '../shared/values';
 import {valueText} from '../shared/values';
 import {readControlsSnapshot} from '../connection/wire-readers';
 import {logEvent,logFailure} from '../app/diagnostics';
-import {validApprovalDecision,approvalOptions,approvalKey,pendingApprovals,closedThreadApprovals,staleApprovalFailure,type ApprovalTarget,type ApprovalDecision,type PendingApproval} from './approvals';
+import {interactiveApproval,validApprovalDecision,approvalOptions,approvalKey,pendingApprovals,closedThreadApprovals,staleApprovalFailure,type ApprovalTarget,type ApprovalDecision,type PendingApproval} from './approvals';
 import type {InlineActivity} from '../conversations/inline-thread';
 import type {ThreadAccess} from '../conversations/thread-stream';
 
@@ -60,7 +60,7 @@ export class ApprovalController {
       if(this.stopped)return;
       const activities:InlineActivity[]=snapshot.thread.activities,pending=pendingApprovals(activities),closed=closedThreadApprovals(snapshot.thread);
       for(const target of targets){
-        const key=approvalKey(target),record=this.record(target),request=pending.find(a=>a.requestId===target.requestId);
+        const key=approvalKey(target),record=this.record(target),request=pending.find(a=>a.requestId===target.requestId&&interactiveApproval(a.kind));
         const related=activities.filter(a=>a.payload?.requestId===target.requestId);
         const terminal=closed.has(target.requestId)||related.some(a=>a.kind==='approval.resolved'||staleApprovalFailure(a));
         const failure=related.find(a=>a.kind==='provider.approval.respond.failed'&&!staleApprovalFailure(a)&&record.command&&!record.failureIds?.includes(a.id));
@@ -94,7 +94,7 @@ export class ApprovalController {
         if(snapshot?.thread?.id!==target.threadId||!Array.isArray(snapshot.thread.activities))throw Error('T3 returned an invalid approval snapshot.');
         const activities:InlineActivity[]=snapshot.thread.activities;
         if(this.stopped||record.resolved||closedThreadApprovals(snapshot.thread).has(target.requestId)||!pendingApprovals(activities).some(a=>a.requestId===target.requestId)){await this.refresh([target]);return;}
-        const current=pendingApprovals(activities).find(a=>a.requestId===target.requestId);
+        const current=pendingApprovals(activities).find(a=>a.requestId===target.requestId&&interactiveApproval(a.kind));
         if(!current||!(current.options??approvalOptions(undefined)).some(option=>option.decision===decision))throw Error('This approval option is no longer available.');
         record.command={type:'thread.approval.respond',commandId:this.newId(),threadId:target.threadId,requestId:target.requestId,decision,createdAt:this.now()};
         record.uncertain=true;

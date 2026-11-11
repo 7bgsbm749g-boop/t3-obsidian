@@ -42,7 +42,7 @@ test('all presentation modes show each pending command once and remove resolved 
   const state={messages:[],activities:[opened(),opened('second'),opened('different-turn','later'),opened('file','turn','file-change')],session:{status:'running',activeTurnId:'turn'}};
   for(const mode of ['remove','keep','collapse'] as const){
     const text=renderInlineTurn(state,'turn',target.threadId,'running',mode,target.environmentId);
-    assert.deepEqual(approvalTargets(text).map(t=>t.requestId),[target.requestId,'second']);assert.match(text,/Action needed in T3/);
+    assert.deepEqual(approvalTargets(text).map(t=>t.requestId),[target.requestId,'second','file']);assert.match(text,/File change approval requested/);
     const done=renderInlineTurn({...state,activities:[...state.activities,resolved(),resolved('second'),resolved('file')]},'turn',target.threadId,'running',mode,target.environmentId);
     assert.doesNotMatch(done,/Action needed|t3-approval:/);
   }

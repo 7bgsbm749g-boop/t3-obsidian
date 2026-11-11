@@ -19,6 +19,7 @@ export function approvalOptions(value:unknown):ApprovalOption[]{
  });
 }
 export interface PendingApproval {requestId:string;turnId:string|null;kind?:string;summary:string;detail?:string;options?:ApprovalOption[];appName?:string}
+export const interactiveApproval=(kind?:string)=>['command','file-change','file-read','app-permission','app-access','mcp-elicitation'].includes(kind??'');
 export const approvalKey=questionKey;
 export function staleApprovalFailure(activity:InlineActivity){
   return activity.kind==='provider.approval.respond.failed'&&/unknown pending (?:codex )?approval request|stale pending approval request/i.test(valueText(activity.payload?.detail??''));
