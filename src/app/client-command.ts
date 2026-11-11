@@ -1,24 +1,22 @@
 import {isRecord} from '../shared/values';
 export interface ClientCommand {
-  version:1;id:string;kind:'client-status'|'send-failure-log'|'reload-client'|'diagnostic-settings';
+  version:1;id:string;kind:'client-status'|'send-failure-log'|'diagnostic-settings';
   projectId?:string;environmentId?:string;archiveDirectory?:string;
   since?:string;
   diagnosticPreferences?:Partial<import('./diagnostics').DiagnosticPreferences>;
-  releaseVersion?:string;runtimeSha256?:Record<'main.js'|'manifest.json'|'styles.css',string>;
 }
 export interface ClientCommandResult {
   id:string;ok:boolean;error?:string;
-  client?:{instanceId:string;loadedVersion:string};reloadScheduled?:boolean;
+  client?:{instanceId:string;loadedVersion:string};
   diagnosticLog?:ReturnType<import('./diagnostic-archive').DiagnosticArchive['status']>;
   failureLog?:import('../responses/send-failures').SendFailureLog;
   diagnosticSettings?:{previous:import('./diagnostics').DiagnosticPreferences;enabled:import('./diagnostics').DiagnosticPreferences};
   replyImports?:{files:number;removed:number;directory:string;sha256?:Record<string,string>};
   legacyRepliesRetired?:true;
-  connectionRecovery?:import('../connection/connection-recovery').ConnectionReloadState&{pending:boolean;reloading:boolean};
   codeRangeCache?:ReturnType<typeof import('../responses/reply-html').markdownCodeCacheStatus>;
   responseHost?:{active:false;retired:true};
 }
-export function isClientCommand(value:unknown):value is ClientCommand{return isRecord(value)&&typeof value.kind==='string'&&(['client-status','send-failure-log','reload-client','diagnostic-settings'].includes(value.kind??''));}
+export function isClientCommand(value:unknown):value is ClientCommand{return isRecord(value)&&typeof value.kind==='string'&&(['client-status','send-failure-log','diagnostic-settings'].includes(value.kind??''));}
 export function validateClientCommand(input:unknown):ClientCommand {
   if(!isRecord(input))throw Error('Invalid client command.');
   // The checks below establish this complete persisted command contract.
@@ -29,9 +27,6 @@ export function validateClientCommand(input:unknown):ClientCommand {
   if(value.diagnosticPreferences!==undefined){
     if(value.kind!=='diagnostic-settings'||!isRecord(value.diagnosticPreferences)||Object.entries(value.diagnosticPreferences).some(([key,value])=>!['connection','response','follow','memory'].includes(key)||typeof value!=='boolean'))throw Error('Diagnostic settings require named boolean categories.');
   }
-  if(value.kind==='reload-client'){
-    const hashes=value.runtimeSha256;
-    if(!/^(?:\d+\.\d+\.\d+|0\.0\.(?:0|[1-9]\d*)-alpha)$/.test(value.releaseVersion??'')||!hashes||Object.keys(hashes).length!==3||(['main.js','manifest.json','styles.css'] as const).some(name=>!/^[0-9a-f]{64}$/.test(hashes[name]??'')))throw Error('Reload requires an exact release version and all runtime hashes.');
-  }else if(value.releaseVersion!==undefined||value.runtimeSha256!==undefined)throw Error('Client status does not request a reload.');
+  if(input.releaseVersion!==undefined||input.runtimeSha256!==undefined)throw Error('Client diagnostics do not accept release metadata.');
   return value;
 }
