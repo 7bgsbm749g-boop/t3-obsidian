@@ -559,6 +559,8 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const displayedTurns=[...new Set([turnId,...all.map(message=>message.turnId).filter((id):id is string=>!!id)])];
   const htmlResults=responseHtmlResults(state.activities,displayedTurns,environmentId,threadId);
   const htmlBodies=htmlResults.map(reference=>({body:renderHtmlResult(reference),at:Date.parse(state.activities.find(activity=>activity.kind==='response.html'&&activity.payload?.itemId===reference.itemId)?.createdAt??'')||0}));
+  if(mode!=='collapse')htmlBodies.push(...responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim()))).filter(item=>item.kind==='response.plan').map(item=>({body:item.body,at:Date.parse(item.createdAt??'')||0})));
+  htmlBodies.sort((a,b)=>a.at-b.at);
   let htmlIndex=0;
   const htmlBefore=(at=Infinity)=>{const parts:string[]=[];while(htmlIndex<htmlBodies.length&&htmlBodies[htmlIndex].at<=at)parts.push(htmlBodies[htmlIndex++].body);return parts.length?parts.join('\n\n')+'\n\n':'';};
   const toolGroups=responseToolGroups(state,displayedTurns);
@@ -569,10 +571,10 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const errorShown=lastError&&state.activities.some(activity=>activity.turnId===turnId&&activity.kind==='response.notification'&&activity.payload?.error&&
     (typeof activity.payload.text==='string'?activity.payload.text:activity.summary).trim()===lastError.trim());
   const errorStatus=lastError&&!errorShown?renderProviderError(`session-error:${turnId}`,lastError,state.latestTurn?.completedAt??state.turns?.[turnId]?.completedAt??undefined):'';
-  // Plans are replaceable task snapshots. Show the latest list immediately
-  // below the thread title, at its existing depth inside the history.
-  const tasks=emissions.filter(item=>item.kind==='response.plan').at(-1)?.body??'';
-  const timelineEmissions=emissions.filter(item=>item.kind!=='response.plan');
+  // Each task item stays at its recorded timeline position. Updates to the
+  // same item replace it; distinct items keep their own disclosure identity.
+  const tasks='';
+  const timelineEmissions=emissions;
   let currentTool=phase==='running'&&!waiting?currentResponseToolGroup(state,turnId,toolGroups):undefined;
   const latestEmission=phase==='running'?timelineEmissions.at(-1):undefined;
   const currentEmission=!waiting&&latestEmission?.active&&latestEmission.turnId===turnId&&
@@ -584,7 +586,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const historyGroups=toolGroups;
   const workRows=historyGroups.map(group=>({createdAt:group.createdAt,sequence:group.sequence??0,body:renderResponseToolGroup(group),hasThoughts:!!group.thoughts?.length}));
   const historyRows=[...workRows,
-    ...timelineEmissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
+    ...timelineEmissions.filter(item=>item!==currentEmission&&(mode==='collapse'||item.kind!=='response.plan'))].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
   const bottom=spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Sending',currentTool?.tool.icon,toolGroups.filter(group=>group.turnId===turnId).at(-1)?.id)}`:'';
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
@@ -601,7 +603,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const next=(body?body+(embedded?'\n\n':separator):'')+embedded+rendered;
     return index===followupIndex?`${next}\n\n${heading}${timer}${spinner}${tasks?'\n\n'+tasks:''}`:next;
   },''):messages.some(message=>growing(message.id))?messages.map(message=>assistant(message.text,message.id)).filter(Boolean).join('\n\n'):format==='raw-markdown'?answerBlocks.join('\n\n'):answer?quoteResponse(closeOpenFence(answer)):'';
-  if(mode!=='collapse'&&htmlResults.length){
+  if(mode!=='collapse'&&htmlBodies.length){
     if(!transcript)prose=messages.map(message=>htmlBefore(Date.parse(message.createdAt??'')||0)+assistant(message.text,message.id)).filter(Boolean).join('\n\n');
     const remaining=htmlBefore();if(remaining)prose+=(prose?'\n\n':'')+remaining.trimEnd();
   }

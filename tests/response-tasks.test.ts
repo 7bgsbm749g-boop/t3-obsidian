@@ -19,15 +19,15 @@ test('Markdown [/] and ordinary list items use the same private indicators while
   assert.doesNotMatch(body,/<input|data-task=|task-list-item|[\r\n]/);
 });
 
-test('only the latest Tasks list appears directly below the title in each live display mode',()=>{
+test('distinct task items stay in timeline order',()=>{
   const state:InlineThreadState={title:'Thread title',messages:[{id:'prose',role:'assistant',turnId:'run',streaming:false,text:'Commentary',createdAt:new Date(3000).toISOString()}],activities:[
     {id:'one',turnId:'run',sequence:1,createdAt:new Date(1000).toISOString(),kind:'response.plan',summary:'',payload:{text:'- [ ] Old task'}},
     {id:'two',turnId:'run',sequence:2,createdAt:new Date(2000).toISOString(),kind:'response.plan',summary:'',payload:{text:'- [/] New task'}},
   ]};
   for(const mode of ['collapse','keep','remove'] as const){
     const body=renderInlineTurn(state,'run','thread','running',mode,undefined,undefined,{messageId:'prompt',text:'Initial input'},undefined);
-    assert.equal(body.match(/data-t3-tasks-id=/g)?.length,1);assert.doesNotMatch(body,/Old task/);
-    assert.ok(body.indexOf('Thread title')<body.indexOf('New task')&&body.indexOf('New task')<body.indexOf('Initial input')&&body.indexOf('New task')<body.indexOf('Commentary'));
+    assert.equal(body.match(/data-t3-tasks-id=/g)?.length,2);assert.match(body,/Old task/);
+    assert.ok(body.indexOf('Thread title')<body.indexOf('New task')&&body.indexOf('New task')<body.indexOf('Commentary'));
   }
   const live=renderInlineTurn(state,'run','thread','running','collapse');
   const complete=renderInlineTurn(state,'run','thread','complete','collapse');
