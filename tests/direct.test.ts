@@ -9,6 +9,17 @@ const eid='environment';const url='https://t3.example';const now=Date.now();
 const session={url,environmentId:eid,token:'device-token',expiresAt:now+600000};
 const descriptor={environmentId:eid,label:'Computer',orchestrationProtocolVersion:2};
 const response=(d:any,status=200)=>new Response(JSON.stringify(d),{status});
+test('launch reservation follows successful uploads and survives a later lost acknowledgement',async t=>{
+ const before=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=before;});let failUpload=true,loseLaunch=false,creates=0;const records:string[]=[];
+ const Base=settingsSocket(modelConfig,undefined,(tag)=>{assert.equal(tag,'orchestration.launchThread');creates++;if(loseLaunch)throw Error('Lost acknowledgement');return {};});
+ globalThis.WebSocket=class extends Base {send(raw:string){const request=JSON.parse(raw);if(request.tag==='assets.persistChatAttachments'&&failUpload){queueMicrotask(()=>this.onerror?.());return;}super.send(raw);}} as any;
+ const fetcher:any=async(u:string)=>response(u.endsWith('/environment')?descriptor:u.endsWith('/shell')?{projects:[{id:'p'}]}:{ticket:'test'});
+ const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',url,environmentId:eid,host:'direct',executable:''},title:noteThreadTitle('Named note.md','always'),prompt:'Prompt',attachments:[{id:'image',type:'image',name:'image.png',mimeType:'image/png',sizeBytes:1,dataUrl:'data:image/png;base64,YQ=='}]};
+ const reserve=()=>{if(!records.includes(request.id))records.push(request.id);};
+ await assert.rejects(sendDirect(request,session,async()=>{},fetcher,undefined,reserve));assert.deepEqual(records,[]);assert.equal(creates,0);
+ failUpload=false;loseLaunch=true;await assert.rejects(sendDirect(request,session,async()=>{},fetcher,undefined,reserve));assert.deepEqual(records,[request.id]);assert.equal(creates,1);
+ failUpload=true;await assert.rejects(sendDirect(request,session,async()=>{},fetcher,undefined,reserve));assert.deepEqual(records,[request.id]);assert.equal(creates,1,'a later upload failure preserves the earlier uncertain creation record');
+});
 test('pairing parses native and hosted links without leaking secrets into endpoints',()=>{
  assert.deepEqual(pairingInput(url+'/pair#token=one-time'),{url,code:'one-time'});
  assert.deepEqual(pairingInput('https://app.t3.codes/pair?host=https%3A%2F%2Ft3.example#token=abc'),{url,code:'abc'});
