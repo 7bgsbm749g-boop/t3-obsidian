@@ -1441,6 +1441,7 @@ export default class SendToT3 extends Plugin {
     const active=this.app.workspace.getActiveViewOfType(MarkdownView);
     const view=captured?.view??(active?.file?.path===file.path?active:undefined);
     const editor=captured?.editor??view?.editor;
+    if(captured&&view?.file?.path!==file.path)throw Error('The original note is no longer open. Reopen it before asking T3.');
     const selected=selection.trim();
     let context:EditorChatContext|undefined;
     if(view?.file?.path===file.path&&editor){
@@ -1453,11 +1454,13 @@ export default class SendToT3 extends Plugin {
     }
     if(context?.anchor)context=this.canonicalChatContext(context);
     const canonicalSelected=context?.canonicalAnchor?.text??selection;
-    if(view&&editor){
-      const document=this.notePromptDocument(view),anchor=context?.canonicalAnchor;
-      let scope:Span|undefined=anchor?[anchor.start,anchor.end]:undefined;
+    if(context){
+      const document=this.notePromptDocument(context.view),anchor=context.canonicalAnchor;
+      const range=anchor?selectionRange(document,anchor):undefined;
+      if(anchor&&!range)throw Error('The selected text changed. Select it again before sending.');
+      let scope:Span|undefined=range?[range.from,range.to]:undefined;
       if(selected&&!scope){const from=document.indexOf(selection);if(from<0||document.lastIndexOf(selection)!==from)throw Error('The selected text changed. Select it again before sending.');scope=[from,from+selection.length];}
-      context={...context!,smartDocument:document,smartScope:scope,smartQuestion:prompt};
+      context={...context,smartDocument:document,smartScope:scope,smartQuestion:prompt};
       if(scope&&prompt.trim()&&!context.referenceSelection){
         await this.recoverSmartReplies(file.path,document);
         const data=this.smartData(),projection=await sourceProjection(data,smartNote(data,file.path),document);
@@ -2162,7 +2165,7 @@ export default class SendToT3 extends Plugin {
         await this.recoverSmartReplies(note.path,context.smartDocument!);
         const plan=await prepareSmartSend(this.smartData(),note.path,await this.smartKey(project,connection,threadId??''),context.smartDocument!,context.smartScope);
         const question=context.smartQuestion??'';
-        const selected=context.smartScope?explicitSelectionText(context.snapshot??context.smartDocument!,context.smartScope):context.canonicalAnchor?.text??context.anchor?.text??'';
+        const selected=context.smartScope?explicitSelectionText(context.smartDocument!,context.smartScope):context.canonicalAnchor?.text??context.anchor?.text??'';
         // Explicit selections are deliberate input, including text delivered
         // before. Keep the normal capture/ranges for coverage and safe cleanup.
         const material=context.referenceSelection&&selected?`Selected text:\n${selected}`:context.smartScope?selected:plan.text;
