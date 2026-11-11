@@ -135,6 +135,7 @@ import {ApprovalController} from '../interaction/approval-controller';
 import {approvalButton,approvalEditorExtension} from '../interaction/approval-ui';
 import {approvalTargets,parseApprovalUrl,clearApprovalControls,type ApprovalTarget} from '../interaction/approvals';
 import {settlementState,type ThreadSettlementJob} from '../conversations/thread-settlement';
+import {ThreadSettlementEvents} from '../conversations/thread-settlement-events';
 type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;canonicalAnchor?:SelectionAnchor;insertion?:CursorInsertion;referenceSelection?:boolean;initialQuestion?:string;responseId?:string;snapshot?:string;smartDocument?:string;smartScope?:Span;smartQuestion?:string};
 type SteeringSource={document:string;ranges:Span[]};
 type PaletteActionContext={file:TFile;editor?:EditorChatContext;insertion:CursorInsertion|null};
@@ -198,9 +199,10 @@ export default class SendToT3 extends Plugin {
   set busy(value:boolean){
     if(this.sending===value)return;
     this.sending=value;
+    if(!value)this.settlementEvents?.wake();
     for(const listener of this.busyListeners)try{listener();}catch(error){logFailure('ui.destination.busy-update',error);}
   }
-  private monitoring = false;
+  private settlementEvents?:ThreadSettlementEvents;
   private stopped = false;
   private projectCreateModal?:ProjectCreateModal;
   private commandHosts=new Map<string,{host:ConnectCommandHost;rpc:Awaited<ReturnType<typeof connectT3Rpc>>;files:CommandFiles}>();
@@ -461,7 +463,7 @@ export default class SendToT3 extends Plugin {
       openedNotes:()=>this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file&&typeof view.getViewData==='function').map(view=>({path:view.file!.path,document:nativeResponses(this.app).view(view)?.recoveryDocument()??view.getViewData()})),
       saveLocalNote:async path=>{for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===path&&typeof view.save==='function')await view.save();}},
       localEditSaved:async request=>{await this.markEditSaved(request);},
-      localCompleted:(id,path)=>{nativeResponses(this.app).localCompleted(id,path);void deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${id}`,null).catch(error=>logFailure('response.local.final-cache-cleanup',error));this.inlineChat?.flushAvailable();},
+      localCompleted:(id,path)=>{this.settlementEvents?.wake(id);nativeResponses(this.app).localCompleted(id,path);void deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${id}`,null).catch(error=>logFailure('response.local.final-cache-cleanup',error));this.inlineChat?.flushAvailable();},
       localConnection:(id,issue)=>nativeResponses(this.app).connection(id,issue),
       localQuestions:update=>{if(update.questionActivities)this.questions?.observe(update.request.threadEnvironmentId,update.request.threadId,update.questionActivities,update.sequence);},
       localFinalBody:async update=>rewriteReplyReferences(update.body,async reference=>{try{return await resolveReplyReference(this.app,reference,update.request,await this.inlineThreadAccess(update.request.threadEnvironmentId));}catch{return undefined;}}),
@@ -633,7 +635,15 @@ export default class SendToT3 extends Plugin {
       }
       this.registerInterval(window.setInterval(()=>void this.checkExternalSettings().catch(error=>new Notice(`T3 settings: ${message(error)}`,12000)),5000));
     });
-    this.app.workspace.onLayoutReady(()=>{if(!this.stopped){this.refreshProjectsInBackground(true);void this.monitorCompletions();this.registerInterval(window.setInterval(()=>{void this.monitorCompletions();},30_000));}});
+    this.app.workspace.onLayoutReady(()=>{
+      if(this.stopped)return;
+      this.refreshProjectsInBackground(true);
+      this.settlementEvents=new ThreadSettlementEvents(async job=>this.inlineThreadAccess(job.connection.environmentId??await this.localInlineEnvironment()),job=>this.monitorSettlement(job),()=>this.stopped||this.busy,error=>logFailure('thread.settlement.failed',error));
+      this.syncSettlementEvents();
+      const recover=()=>{if(!this.stopped)this.settlementEvents?.reconnect();};
+      if(typeof document.addEventListener==='function')this.registerDomEvent(document,'visibilitychange',()=>{if(!document.hidden)recover();});
+      if(typeof window.addEventListener==='function'){this.registerDomEvent(window,'focus',recover);this.registerDomEvent(window,'online',recover);}
+    });
     this.app.workspace.onLayoutReady(()=>{
       this.registerInterval(window.setInterval(()=>this.refreshProjectsInBackground(),15_000));
       if(typeof document.addEventListener==='function')this.registerDomEvent(document,'visibilitychange',()=>{if(!document.hidden)this.refreshProjectsInBackground();});
@@ -980,6 +990,7 @@ export default class SendToT3 extends Plugin {
     const mergedThreads=mergeNoteThreads(remoteThreads,this.settings.noteThreads);
     this.settings.noteThreads=remoteThreads;
     this.settings.autoSettleThreads=adopted.autoSettleThreads;
+    this.syncSettlementEvents();
     if(!this.settings.autoSettleThreads&&this.settings.settlementJobs.length){this.settings.settlementJobs=[];await this.saveDeviceState();}
     this.settings.vaultId=vaultIdentity(data)??this.settings.vaultId;
     await this.publishVaultIdentity();
@@ -2633,7 +2644,7 @@ export default class SendToT3 extends Plugin {
       this.codebase?.adopt(this.settings.codebase);
       this.sharedBaseline=JSON.stringify(snapshot);
     });
-    const work=this.saving;void work.finally(()=>{if(this.saving===work)this.queuedSharedSnapshot=undefined;}).catch(()=>{});return work;
+    const work=this.saving;void work.then(()=>this.syncSettlementEvents()).catch(()=>{});void work.finally(()=>{if(this.saving===work)this.queuedSharedSnapshot=undefined;}).catch(()=>{});return work;
   }
   async send(file:TFile, project:Project, options?:{id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;projectOverrideKey?:string;folderPicker?:boolean;folderLink?:FolderLink;prepared?:PreparedNote;streamReply?:boolean;jobOptions?:ResolvedJobOptions;destinations?:string[];destinationSection?:string;insertion?:CursorInsertion|null;onPrepared?:(request:Request)=>Promise<void>}) {
     if (this.busy) {if(options?.throwOnError)throw Error('Obsidian is sending another request. Retry shortly.');return;}
@@ -2920,11 +2931,8 @@ export default class SendToT3 extends Plugin {
       throw error;
     }
   }
-  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
-  async monitorCompletions() {
-    if(this.monitoring||this.stopped||this.busy)return;
-    this.monitoring=true;try{await this.monitorSettlements();}finally{this.monitoring=false;}
-  }
+  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
+  private syncSettlementEvents(){this.settlementEvents?.sync(this.settings.autoSettleThreads&&!this.stopped?this.settings.settlementJobs:[]);}
   async discardRequest(request:Request){
     if(request.agentCommand)this.app.saveLocalStorage(`${this.localKey}-note-command-${request.agentCommand.id}`,{command:request.agentCommand,discarded:true});
     this.settings.pending=this.settings.pending.filter(r=>r.id!==request.id);await this.save();
@@ -2937,36 +2945,31 @@ export default class SendToT3 extends Plugin {
     if(job.inlineLocal){const file=job.inlineNotePath&&this.app.vault.getFileByPath(job.inlineNotePath);if(!file)return 'discard';return hasResponseMarkers(await this.app.vault.read(file),job.inlineJobId)?'wait':'ready';}
     return job.inlineHost?'discard':this.inlineChat?.settlementStatus(job.inlineJobId)??'wait';
   }
-  private async monitorSettlements(){
-    if(!this.settings.autoSettleThreads||!this.settings.settlementJobs.length)return;
-    for(const job of [...this.settings.settlementJobs]){
-      if(this.stopped||this.busy)return;
-      if(!this.settings.settlementJobs.includes(job))continue;
-      try{
-        if(this.settings.pending.some(request=>request.threadId===job.threadId&&request.connection.environmentId===job.connection.environmentId))continue;
-        const shell=await runBridge(job.connection,['threads','--project',job.projectId]);
-        const summary=readThreadList(shell).find(thread=>thread.id===job.threadId);
-        if(!summary)continue;
-        const full=readThreadSnapshot({thread:await runBridge(job.connection,['read',job.threadId])}).thread;
-        if(this.stopped||this.busy)continue;
-        if(!this.settings.autoSettleThreads||!this.settings.settlementJobs.includes(job))continue;
-        const state=settlementState({...full,backgroundLiveness:summary.backgroundLiveness??full.backgroundLiveness,hasPendingApprovals:summary.hasPendingApprovals??full.hasPendingApprovals,hasPendingUserInput:summary.hasPendingUserInput??full.hasPendingUserInput,settledOverride:summary.settledOverride??full.settledOverride,archivedAt:summary.archivedAt??full.archivedAt,deletedAt:summary.deletedAt??full.deletedAt},job);
-        if(state==='wait')continue;
-        if(state==='settle'){
-          const inline=await this.inlineSettlementStatus(job);
-          if(inline==='wait')continue;
-          if(inline==='ready'&&this.settings.autoSettleThreads&&this.settings.settlementJobs.includes(job)){
-            const access=job.connection.transport==='direct'
-              ?{api:await environmentApi(job.connection,await this.sessionFor(job.connection.connectionId??'')),close:()=>{}}
-              :await this.inlineThreadAccess(job.connection.environmentId??'');
-            try{await access.api('/api/orchestration/dispatch',{type:'thread.settle',commandId:commandId(job.requestId,'settle'),threadId:job.threadId});}
-            finally{await access.close?.();}
-          }
+  private async monitorSettlement(job:ThreadSettlementJob){
+    const current=()=>!this.stopped&&!this.busy&&this.settings.autoSettleThreads&&this.settings.settlementJobs.includes(job);
+    if(!current())return;
+    try{
+      if(this.settings.pending.some(request=>request.threadId===job.threadId&&request.connection.environmentId===job.connection.environmentId))return;
+      const shell=await runBridge(job.connection,['threads','--project',job.projectId]);
+      const summary=readThreadList(shell).find(thread=>thread.id===job.threadId);
+      const full=readThreadSnapshot({thread:await runBridge(job.connection,['read',job.threadId])}).thread;
+      if(!current())return;
+      const state=settlementState({...full,backgroundLiveness:summary?.backgroundLiveness??full.backgroundLiveness,hasPendingApprovals:summary?.hasPendingApprovals??full.hasPendingApprovals,hasPendingUserInput:summary?.hasPendingUserInput??full.hasPendingUserInput,settledOverride:summary?.settledOverride??full.settledOverride,archivedAt:summary?.archivedAt??full.archivedAt,deletedAt:summary?.deletedAt??full.deletedAt},job);
+      if(state==='wait')return;
+      if(state==='settle'){
+        const inline=await this.inlineSettlementStatus(job);
+        if(inline==='wait'||!current())return;
+        if(inline==='ready'){
+          const access=job.connection.transport==='direct'
+            ?{api:await environmentApi(job.connection,await this.sessionFor(job.connection.connectionId??'')),close:()=>{}}
+            :await this.inlineThreadAccess(job.connection.environmentId??'');
+          try{if(!current())return;await access.api('/api/orchestration/dispatch',{type:'thread.settle',commandId:commandId(job.requestId,'settle'),threadId:job.threadId});}
+          finally{await access.close?.();}
         }
-        this.settings.settlementJobs=this.settings.settlementJobs.filter(item=>item!==job);
-        await this.save();
-      }catch{/* Keep the job for a later check after the connection or client recovers. */}
-    }
+      }
+      this.settings.settlementJobs=this.settings.settlementJobs.filter(item=>item!==job);
+      await this.save();
+    }catch(error){logFailure('thread.settlement.failed',error,{threadId:job.threadId});}
   }
 
 }
@@ -3118,7 +3121,7 @@ export class T3Settings extends PluginSettingTab {
       {name:'Stream replies into the editor',desc:'Insert Send and Ask replies into the note. Selection replies appear below the selection; other replies use the captured cursor position or follow its paragraph.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));}},
       {name:'Final answer format',desc:'Applies to new responses. Both formats support images and files.',render:setting=>{setting.addDropdown(dropdown=>dropdown.addOptions({formatted:'Current formatting','raw-markdown':'Raw Markdown'}).setValue(finalAnswerFormat(this.plugin.settings.inlineStreaming.finalAnswerFormat)).onChange(async value=>{this.plugin.settings.inlineStreaming.finalAnswerFormat=finalAnswerFormat(value);await this.plugin.save();}));}},
       {name:'Thread title generation',desc:'Use note titles by default, or let T3 name every new thread. Existing titles stay the same.',render:setting=>{setting.addDropdown(d=>d.addOption('untitled-only','Only for untitled notes').addOption('always','Always use T3').setValue(this.plugin.settings.threadTitleGeneration).onChange(async value=>{this.plugin.settings.threadTitleGeneration=threadTitleGeneration(value);await this.plugin.save();}));}},
-      {name:'Settle completed threads',desc:'Off by default. Move threads to Settled after a successful turn and saved reply. Sending again wakes the thread. Checks run while Obsidian is open.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.autoSettleThreads).onChange(async enabled=>{this.plugin.settings.autoSettleThreads=enabled;if(!enabled)this.plugin.settings.settlementJobs=[];await this.plugin.save();}));}},
+      {name:'Settle completed threads',desc:'Off by default. Move threads to Settled after a successful turn and saved reply. Sending again wakes the thread. Checks follow thread events and saved replies while Obsidian is open.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.autoSettleThreads).onChange(async enabled=>{this.plugin.settings.autoSettleThreads=enabled;if(!enabled)this.plugin.settings.settlementJobs=[];await this.plugin.save();}));}},
       {name:'Thread and note mode',desc:'Free is the default and allows many-to-many links. 1:1 keeps one thread per note and one note per thread. The most recent links select existing 1:1 pairs. Saved replies and link history are kept when you switch.',render:setting=>{setting.addDropdown(d=>d.addOptions({free:'Free · Many-to-many','one-to-one':'1:1 · One thread per note'}).setValue(threadNoteMode(this.plugin.settings.threadNoteMode)).onChange(async value=>{this.plugin.settings.threadNoteMode=threadNoteMode(value);await this.plugin.save();}));}},
     ];
   }

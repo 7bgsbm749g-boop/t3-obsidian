@@ -57,6 +57,17 @@ test('disabled automatic settlement does not restore device jobs or settle a new
   assert.equal(restarted.plugin.settings.settlementJobs.length,0);
 });
 
+test('saved job changes and reply completion drive settlement without waiting for a timer',async()=>{
+  const h=await harness({vaultId:'vault',autoSettleThreads:true}),synced:unknown[][]=[],wakes:Array<string|undefined>=[];
+  h.plugin.settlementEvents={sync:(jobs:unknown[])=>synced.push([...jobs]),wake:(id?:string)=>wakes.push(id)};
+  const job={requestId:'pending',messageId:'message',threadId:'thread',projectId:'project',connection:{executable:'',host:'',transport:'direct',environmentId:'environment'}};
+  h.plugin.settings.settlementJobs.push(job);await h.plugin.save();assert.equal(synced.at(-1)?.[0],job);
+  h.plugin.busy=true;h.plugin.busy=false;assert.deepEqual(wakes,[undefined]);
+  h.plugin.app.workspace.getLeavesOfType=()=>[];
+  h.plugin.deviceInline.io.localCompleted('binding','Note.md');assert.deepEqual(wakes,[undefined,'binding']);
+  h.setCurrent({...h.current(),autoSettleThreads:false});await h.plugin.onExternalSettingsChange();assert.equal(synced.at(-1)?.length,0);
+});
+
 test('project creation locations sync as complete machine/path choices and persist through restart',async()=>{
   const h=await harness({vaultId:'vault'});
   const locations=[{connectionId:'laptop',environmentId:'windows',parentPath:'C:\\Projects',selectedAt:'2026-10-20T12:00:00Z'}];
