@@ -19,14 +19,16 @@ def unconfirmed(command: dict, error: Exception) -> dict:
 
 def mailbox(config: dict, command: dict, *, retry: bool = False, cleanup: bool = False) -> dict:
     """Use the connected client first, then bounded private maintenance probes."""
+    if command.get('kind')=='reload-client':
+        raise ValueError('Application reload commands were removed.')
     if cleanup:
         return {'ok': True}  # Connected commands clean their exact files after acknowledgement.
     connected = connected_command(config['vault'], command, root=config.get('transportRoot'), client_id=config.get('clientId'), timeout=5, retry=retry)
     if connected is not None:
         return connected
     # A client connected only to its own T3 machine uses the same helper there.
-    # Legacy HTTP below is restricted to the first reload from an older plugin.
-    if command.get('kind') not in ['client-status', 'send-failure-log', 'reload-client']:
+    # Legacy HTTP below is restricted to diagnostics from older clients.
+    if command.get('kind') not in ['client-status', 'send-failure-log']:
         raise ValueError('The remote transport accepts maintenance commands only.')
     # Send one bounded Python program directly over SSH. Nesting Python's
     # stdin pipe inside a PowerShell ReadToEnd bootstrap can hang before the
