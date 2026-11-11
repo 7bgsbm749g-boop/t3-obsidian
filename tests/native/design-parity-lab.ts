@@ -73,6 +73,11 @@ export default class DesignParityLab extends Plugin {
   await render('Note-tab question panel', 'The question remains attached to this native note tab.');
   const questionController=new QuestionController(async()=>({origin:'https://synthetic.invalid',api:async()=>({thread:{id:'synthetic',activities:[{id:'question',turnId:'run',kind:'user-input.requested',summary:'Question',payload:{requestId:'q',questions:[{id:'first',header:'Design',question:'Choose the next view.',options:[{label:'Timeline',description:'Keep tasks in chronological order.'},{label:'Compact',description:'Use less space.'}]},{id:'second',header:'Details',question:'Which details help?',multiSelect:true,options:[{label:'Progress',description:'Show answered count.'},{label:'Navigation',description:'Move between questions.'}]}]}}]}})}),{load:()=>[],save:()=>{}},()=>crypto.randomUUID());
   const panel=new QuestionModal(this.app,questionController,{environmentId:'synthetic',threadId:'synthetic',requestId:'q'},file.path);panel.open();await questionController.refresh([panel.target]);await this.capture('09-question-navigation.png');
+  const nativeWindow=require('@electron/remote').getCurrentWindow(),bounds=nativeWindow.getBounds();
+  await this.app.workspace.leftSplit.collapse();nativeWindow.setSize(430,804);await pause(500);
+  const navigation=panel.contentEl.querySelector<HTMLElement>('.send-to-t3-question-navigation')!;
+  this.check('navigation fits a narrow native VPS window',navigation.clientWidth>0&&navigation.scrollWidth<=navigation.clientWidth+1);
+  await this.capture('11-question-narrow.png');nativeWindow.setBounds(bounds);await this.app.workspace.leftSplit.expand();await pause(250);
   const sections=panel.contentEl.querySelectorAll('fieldset');sections[0].querySelectorAll<HTMLInputElement>('input')[0].click();this.check('single select advances without submit',sections[0].hidden&&!sections[1].hidden&&!questionController.record(panel.target).command);await this.capture('10-question-next.png');panel.close();questionController.dispose();
   this.check('fixture note was never overwritten by display',await this.app.vault.read(file)==='# Synthetic design parity replay\n');
   this.write('RESULT.json',{pass:this.results.every(row=>row.pass),checks:this.results,nativeMobileTested:false,syntheticReplay:true});
