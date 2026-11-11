@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {commandProgram,responseTools,renderResponseTool,responseToolGroups,currentResponseToolGroup,summarizeResponseTools} from '../src/responses/response-tools';
+import {renderResponseToolGroup,commandProgram,responseTools,renderResponseTool,responseToolGroups,currentResponseToolGroup,summarizeResponseTools} from '../src/responses/response-tools';
 import {responseActivityLabel} from '../src/responses/response-activity';
 import {stoppedResponseBody} from '../src/responses/response-stop';
 import {renderInlineTurn,type InlineThreadState,type InlineActivity} from '../src/conversations/inline-thread';
@@ -157,4 +157,11 @@ test('a trailing command summary never disappears when a new call takes over the
     }
     assert.match(thinking,/<span>Thinking<\/span>/);assert.match(next,/<span>Running ls<\/span>/);
   }
+});
+
+test('thought group labels use the total count with a multiplication sign',()=>{
+ const thought={id:'r1',role:'reasoning' as const,turnId:'turn',text:'Public summary'};
+ const group={id:'thoughts',turnId:'turn',tools:[],thoughts:[thought]};
+ assert.match(renderResponseToolGroup(group),/data-t3-tool-summary="Thought"/);
+ assert.match(renderResponseToolGroup({...group,thoughts:[thought,{...thought,id:'r2'}]}),/Thought \(×2\)/);
 });
