@@ -102,7 +102,7 @@ export function itemActivities(item:WireTurnItem,requests:Record<string,WireRunt
   const status=terminal(item.status)?item.status==='failed'?'failed':item.status==='interrupted'||item.status==='cancelled'?'stopped':'completed':'inProgress';
   if(['compaction','proposed_plan','todo_list','notification','error'].includes(item.type))return [{...base,id:`v2:${item.id}`,
     kind:item.type==='compaction'?'context-compaction':['proposed_plan','todo_list'].includes(item.type)?'response.plan':'response.notification',
-    summary:item.title??item.type.replace(/_/g,' '),payload:{status,text:item.text??item.summary??item.failure?.message,steps:item.steps,error:item.type==='error'}}];
+    summary:item.title??item.type.replace(/_/g,' '),payload:{status,completedAt:item.completedAt,beforeTokenCount:item.beforeTokenCount,afterTokenCount:item.afterTokenCount,text:item.text??item.summary??item.failure?.message,steps:item.steps,error:item.type==='error'}}];
   return [{...base,id:`v2:${item.id}`,kind:terminal(item.status)?'tool.completed':'tool.updated',summary:item.title??item.toolName??item.type.replace(/_/g,' '),
     payload:{toolCallId:item.id,itemType:item.type,status,title:item.title??item.toolName,
       files:item.fileName?[item.fileName]:undefined,data:{toolSource:item.toolSource,toolIcon:item.toolIcon,toolName:item.toolName??item.type,kind:item.type,

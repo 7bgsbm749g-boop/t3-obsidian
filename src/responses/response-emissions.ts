@@ -1,5 +1,6 @@
 import type {InlineThreadState} from '../conversations/inline-thread';
 import {renderWorktreeSetup,worktreeSetupPhase} from '../projects/worktree-setup';
+import {runTimer} from './response-presentation';
 import {renderResponseTasks} from './response-tasks';
 
 export interface ResponseEmission {id:string;turnId:string|null;createdAt?:string;sequence:number;body:string;active:boolean;kind:string}
@@ -36,10 +37,14 @@ export function responseEmissions(state:InlineThreadState,turns:string[],markdow
     if(activity.kind==='context-compaction'){
       const running=p.status==='inProgress';
       active=running&&!!activeTurn&&activity.turnId===activeTurn;
-      const label=running?(active?'Compacting context':'Context compaction'):p.status==='failed'?'Context compaction failed':p.status==='stopped'?'Context compaction stopped':'Context compacted';
-      body=`<span class="send-to-t3-context" data-t3-emission-id="${html(activity.id)}"><span data-t3-tool-icon="minimize-2" aria-hidden="true"></span><span>${label}</span>${active?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':''}</span>`;
+      const before=p.beforeTokenCount,after=p.afterTokenCount;
+      const tokens=(count:number)=>count>=1000000?`${Number((count/1000000).toFixed(1))}M`:count>=1000?`${Number((count/1000).toFixed(1))}k`:String(count);
+      const counts=typeof before==='number'&&Number.isFinite(before)&&before>=0&&typeof after==='number'&&Number.isFinite(after)&&after>=0?` ${tokens(before)} → ${tokens(after)} tokens`:'';
+      const timer=activity.createdAt?runTimer({startedAt:activity.createdAt,...(typeof p.completedAt==='string'?{finishedAt:p.completedAt}:{})}):'';
+      const label=running?(active?'Compacting for':'Context compaction'):p.status==='failed'?'Context compaction failed':p.status==='stopped'?'Context compaction stopped':'Context compacted'+counts;
+      body=`<span class="send-to-t3-context" data-t3-emission-id="${html(activity.id)}"><span data-t3-tool-icon="minimize-2" aria-hidden="true"></span><span>${label}${active&&timer?' '+timer:''}</span>${active?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':''}</span>`;
     }else if(activity.kind==='response.plan'){
-      body=renderResponseTasks(activity.turnId??activity.id,p);
+      body=renderResponseTasks(activity.id,p);
       if(!body)continue;
     }else{
       const text=typeof p.text==='string'?p.text:activity.summary;if(!text.trim())continue;
