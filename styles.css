@@ -695,5 +695,7 @@ details.send-to-t3-tool > summary { display: flex; align-items: center; gap: .5e
 .t3-agent-progress { color: var(--text-muted); }
 
 .t3-agent-config { width: 100%; min-height: 12em; font-family: var(--font-monospace); resize: vertical; }
-
+.send-to-t3-tool-source-icon { width: 16px; height: 16px; object-fit: contain; flex: 0 0 16px; }
 button.send-to-t3-response-activity { display: inline-flex; align-items: center; gap: .5em; max-width: 100%; height: auto; text-align: start; white-space: normal; box-shadow: none; }
+.send-to-t3-question-navigation { display: flex; align-items: center; justify-content: space-between; gap: .5em; margin: .5em 0; }
+.send-to-t3-question-dialog fieldset[hidden] { display: none; }

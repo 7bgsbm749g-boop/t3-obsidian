@@ -153,3 +153,11 @@ test('all approval kinds retain provider choices and do not invent fallback gran
   assert.match(body,/Allow remembered scope/);assert.match(body,/acceptAlways/);assert.doesNotMatch(body,/Always allow this session|\[Approve\]/);
  }
 });
+
+test('provider-only remembered permission keeps its retry identity and rejects unavailable choices',async()=>{
+ const h=harness();(h.activities[0].payload as any).options=[{decision:'acceptAlways',label:'Remember scope',warning:'Persistent'}];
+ const c=h.create();await assert.rejects(c.submit(target,'accept'),/no longer available/);assert.equal(h.dispatches.length,0);
+ h.throwDispatch(true);await assert.rejects(c.submit(target,'acceptAlways'),/Lost acknowledgement/);assert.equal(h.dispatches[0].decision,'acceptAlways');
+ h.throwDispatch(false);await c.submit(target,'acceptAlways');assert.deepEqual(h.dispatches[1],h.dispatches[0]);
+ c.dispose();
+});

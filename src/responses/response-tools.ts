@@ -49,9 +49,9 @@ function fields(activity:InlineActivity){
   const threadId=string(structuredInput.threadId)||(/['"]threadId['"]\s*:\s*['"]([\w:-]+)['"]/.exec(typeof rawInput==='string'?rawInput:'')?.[1]??'');
   const source=object(data.toolSource),icon=object(data.toolIcon??source.icon);
   const safeImage=(value:unknown)=>typeof value==='string'&&/^https:\/\//.test(value)?value:undefined;
-  let target=object(result.thread??result);
-  for(const value of [data.output,...records(data.output).map(row=>row.text),...records(object(data.output).content).map(row=>row.text)])if(typeof value==='string'&&value.length<100000){try{const parsed=object(parseJson(value));if(parsed.thread||parsed.title)target=object(parsed.thread??parsed);}catch{/* Plain text outputs are not metadata. */}}
-  const threadTitle=string(target.title),threadUrl=string(target.link??target.url);
+  let target=object(result.thread??result),threadLink=string(result.link??result.url);
+  for(const value of [data.output,...records(data.output).map(row=>row.text),...records(object(data.output).content).map(row=>row.text)])if(typeof value==='string'&&value.length<100000){try{const parsed=object(parseJson(value));if(parsed.thread||parsed.title){target=object(parsed.thread??parsed);threadLink=string(parsed.link??parsed.url)||threadLink;}}catch{/* Plain text outputs are not metadata. */}}
+  const threadTitle=string(target.title),threadUrl=string(target.link??target.url)||threadLink;
   return {sourceName:string(source.name)||undefined,sourceIcon:safeImage(icon.faviconUrl??icon.logoUrl),input:structuredInput,threadTitle:threadTitle||undefined,threadUrl:threadUrl.startsWith('t3-thread://')?threadUrl:undefined,status,name:/^(?:Tool|Tool updated)$/i.test(name)?undefined:name||undefined,path:path||undefined,kind:data.kind,itemType:p.itemType,requestKind:p.requestKind,query:query||undefined,threadId:threadId||undefined,
     command:command||undefined,cwd:string(item.cwd??input.workdir??data.cwd)||undefined,output:rawOutput&&rawOutput!==command?rawOutput:undefined,
     exitCode:typeof exitCode==='number'?exitCode:undefined,durationMs:typeof durationMs==='number'?durationMs:undefined,

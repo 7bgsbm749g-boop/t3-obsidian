@@ -67,7 +67,7 @@ export class QuestionModal extends NoteTabPanel {
     this.status=this.contentEl.createEl('p',{attr:{'aria-live':'polite'}});
     const navigation=this.contentEl.createDiv({cls:'send-to-t3-question-navigation'});
     this.previous=navigation.createEl('button',{text:'Previous question'});this.previous.onclick=()=>this.navigate(this.questionIndex-1,true);
-    this.progress=navigation.createEl('span',{attr:{'aria-live':'polite'}});
+    this.progress=navigation.createSpan({attr:{'aria-live':'polite'}});
     this.next=navigation.createEl('button',{text:'Next question'});this.next.onclick=()=>this.navigate(this.questionIndex+1,true);
     this.form=this.contentEl.createDiv();
     this.contentEl.onkeydown=event=>{

@@ -1,5 +1,5 @@
 // Upstream T3 Code tool presentation catalogue. MIT; see t3-tool-catalogue.LICENSE.
-// Source: pingdotgg/t3code fdcf27211e packages/shared/src/t3McpToolPresentation.ts
+// Source: pingdotgg/t3code fdcf27211e5d8d42568b92a55024e7111b6620fe packages/shared/src/t3McpToolPresentation.ts
 export type T3McpToolLogo = "t3-code";
 
 export interface T3McpToolPresentation {
@@ -462,8 +462,8 @@ export function resolveT3McpToolDefinition(
   const action = asSummaryInput(input)?.action;
   const actionTool = typeof action === "string" ? ACTION_TOOLS[name]?.(action) : undefined;
   return actionTool !== undefined && Object.hasOwn(T3_MCP_TOOLS, actionTool)
-    ? T3_MCP_TOOLS[actionTool]!
-    : T3_MCP_TOOLS[name]!;
+    ? T3_MCP_TOOLS[actionTool]
+    : T3_MCP_TOOLS[name];
 }
 
 /** Tools whose summary depends on which fields a call sets. */

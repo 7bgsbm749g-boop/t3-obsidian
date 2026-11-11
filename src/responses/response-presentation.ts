@@ -68,7 +68,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
     // Old notes keep their exact canonical bytes. Remove legacy tool detail
     // controls only from the rendered view, including lazily mounted history.
     for(const details of Array.from(root.querySelectorAll<HTMLDetailsElement>('details.send-to-t3-tool'))){
-      const row=root.createElement('div');
+      const row=root.win.createDiv();
       for(const attribute of Array.from(details.attributes))row.setAttribute(attribute.name,attribute.value);
       const summary=details.querySelector(':scope > summary');
       if(summary)row.append(...Array.from(summary.childNodes));

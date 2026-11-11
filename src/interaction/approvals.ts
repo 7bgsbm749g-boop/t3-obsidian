@@ -63,7 +63,7 @@ export function renderApproval(request:PendingApproval,target:ApprovalTarget):st
   for(const match of (detail??'').matchAll(/`+/g))fenceLength=Math.max(fenceLength,match[0].length+1);
   const fence='`'.repeat(fenceLength);
   const kind=({'command':'Command','file-change':'File change','file-read':'File read','app-permission':'App permission','app-access':'App access','mcp-elicitation':'App access'} as Record<string,string>)[request.kind??'']??'Action';
-  const safe=(text:string)=>text.replace(/[\[\]<>`\r\n]/g,' ');
+  const safe=(text:string)=>text.replace(/[[\]<>`\r\n]/g,' ');
   const options=(request.options??approvalOptions(undefined)).map(option=>`[${safe(option.label)}](${approvalUrl(target,option.decision)})`).join(' ');
   return [`<!-- t3-approval:start:${token} -->`,`Action needed: ${kind} approval requested${request.appName?' for '+safe(request.appName):''} ${options}`,...(detail?['',`${fence}sh`,detail,fence]:[]),`<!-- t3-approval:end:${token} -->`].join('\n');
 }
