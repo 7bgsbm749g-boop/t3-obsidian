@@ -68,6 +68,14 @@ test('saved job changes and reply completion drive settlement without waiting fo
   h.setCurrent({...h.current(),autoSettleThreads:false});await h.plugin.onExternalSettingsChange();assert.equal(synced.at(-1)?.length,0);
 });
 
+test('thread hiding leaves T3 unchanged by default and syncs explicit hide and show choices',async()=>{
+  const h=await harness({vaultId:'vault'});assert.equal(h.plugin.settings.hideObsidianThreads,undefined);assert.equal(h.saves(),0);
+  h.plugin.settings.threadTitleGeneration='always';await h.plugin.save();assert.equal(Object.hasOwn(h.current(),'hideObsidianThreads'),false);
+  h.setCurrent({...h.current(),hideObsidianThreads:true});await h.plugin.onExternalSettingsChange();assert.equal(h.plugin.settings.hideObsidianThreads,true);
+  await h.plugin.setThreadHiding(false);assert.equal(h.current().hideObsidianThreads,false);
+  const restarted=await harness(h.current());assert.equal(restarted.plugin.settings.hideObsidianThreads,false);
+});
+
 test('project creation locations sync as complete machine/path choices and persist through restart',async()=>{
   const h=await harness({vaultId:'vault'});
   const locations=[{connectionId:'laptop',environmentId:'windows',parentPath:'C:\\Projects',selectedAt:'2026-10-20T12:00:00Z'}];
