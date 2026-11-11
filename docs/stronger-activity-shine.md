@@ -20,11 +20,10 @@ Its default is 100%, preserving the accepted white core. Changing that mix does
 not change ordinary glyph painting outside the highlight.
 
 `--send-to-t3-shine-text-opacity` is an independent foreground-paint setting:
-50% in dark themes and 74% in light themes. The dark setting retains the accepted
-appearance previously called 50% strength. Every light-theme label now uses the
-former selected-title appearance, replacing the weaker unselected-label setting.
-Selected and unselected titles share the same per-theme paint rules. Native
-title fonts remain theme-owned.
+50% in both dark and light themes. Both themes use the accepted dark-mode shine
+settings, previously called 50% strength; there is no weaker light-theme override.
+Selected and unselected titles share the same paint rules. Native title fonts
+and foreground colours remain theme-owned.
 
 Thinking, tool, compaction and setup rows share the interface font, UI-small
 size, normal weight and muted colour. Absolute UI sizing prevents nested tool

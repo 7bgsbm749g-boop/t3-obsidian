@@ -130,13 +130,11 @@
   from { background-position: -4.5rem 0, 0 0; }
   to { background-position: calc(100% + 4.5rem) 0, 0 0; }
 }
-/* The accepted dark text fill stays fixed while highlight contrast is tunable.
-   Light themes use the former selected-title fill for every active label. */
+/* Both themes use the accepted dark shine paint and independent highlight control. */
 [data-t3-shine="true"] {
   --send-to-t3-shine-text-opacity: 50%;
   --send-to-t3-shine-highlight: 100%;
 }
-.theme-light [data-t3-shine="true"] { --send-to-t3-shine-text-opacity: 74%; }
 @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
   [data-t3-shine="true"] {
     background-size: 4.5rem 100%, 100% 100%;
