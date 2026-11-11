@@ -8,7 +8,7 @@ import {htmlRenderFromToolItem} from '../responses/html-results';
 
 interface Attachment {id:string;dataUrl?:string;type?:string;name?:string;mimeType?:string;sizeBytes?:number}
 
-export interface T3RequestOptions {signal?:AbortSignal}
+export interface T3RequestOptions {signal?:AbortSignal;compactImport?:boolean;onImportSnapshot?:(snapshot:import('./wire-types').ThreadSnapshot)=>void}
 export type AbortableT3Api=(path:string,payload?:unknown,options?:T3RequestOptions)=>Promise<unknown>;
 
 export function cancelledRequest(message='Request cancelled.'):Error{return typeof DOMException==='function'?new DOMException(message,'AbortError'):Object.assign(Error(message),{name:'AbortError'});}
@@ -92,6 +92,22 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
   return async(path,payload,options)=>{
     requestAborted(options?.signal);
     const request:T3Api=(target,body)=>raw(target,body,options);
+    // Internal read key, fulfilled by the stock authenticated RPC. No custom
+    // HTTP endpoint or server build is involved.
+    if(path.startsWith('/api/orchestration/import-head/')){
+      const threadId=decodeURIComponent(path.slice('/api/orchestration/import-head/'.length)),signal=options?.signal;
+      let socket:WebSocket|undefined,rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined,closed=false;
+      const close=()=>{if(closed)return;closed=true;if(rpc)rpc.close();else try{socket?.close();}catch{/* The read owns only this socket. */}};
+      signal?.addEventListener('abort',close,{once:true});
+      try{
+        rpc=await abortableRead(connectT3Rpc(request,origin,url=>{requestAborted(signal);socket=makeSocket?makeSocket(url):new WebSocket(url);return socket;}),signal);
+        const result=await abortableRead(rpc.call('orchestration.getThreadFamily',{threadId}),signal);
+        const thread=readThreadList(result).find(thread=>thread.id===threadId);
+        if(!thread||typeof thread.projectId!=='string'||typeof thread.updatedAt!=='string'||!Number.isFinite(Date.parse(thread.updatedAt)))throw Error('T3 did not return the requested thread revision.');
+        const row=thread as typeof thread&{itemCount?:number;visibleItemCount?:number;latestVisibleMessage?:unknown};
+        return {threadId,projectId:thread.projectId,revision:JSON.stringify([thread.updatedAt,row.itemCount,row.visibleItemCount,thread.latestRunId,thread.activeRunId,thread.status,thread.pendingRuntimeRequest,thread.pendingBackgroundTasks,row.latestVisibleMessage])};
+      }finally{signal?.removeEventListener('abort',close);close();}
+    }
     if(path==='/api/orchestration/no-project'){
       const rpc=await connectT3Rpc(raw,origin,makeSocket);
       try{return await rpc.call('projects.ensureScratch',{});}finally{rpc.close();}
@@ -129,9 +145,10 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
             return {sequence:snapshot.snapshotSequence};
           }
           let message:Pick<WireMessage,'id'|'text'|'role'>|undefined=p.messages.find(m=>m.id===command.messageId);
-          let cursor=snapshot.historyCursor,more=snapshot.hasMoreHistory===true,pages=0;
+          let cursor=snapshot.historyCursor,more=snapshot.hasMoreHistory===true;const cursors=new Set<string>();
           while(!message&&more){
-            if(!cursor||++pages>100)throw Error('Cannot verify the old saved request. Check its T3 history before retrying.');
+            if(!cursor||cursors.has(cursor))throw Error('Cannot verify the old saved request: T3 returned an invalid history cursor.');
+            cursors.add(cursor);
             const page=readHistory(await raw(`/api/orchestration/threads/${encodeURIComponent(command.threadId)}/history?cursor=${encodeURIComponent(cursor)}`));
             const row=page.items?.find(r=>r.item?.messageId===command.messageId);
             if(row&&typeof row.item.messageId==='string'&&typeof row.item.text==='string')message={id:row.item.messageId,text:row.item.text,role:row.item.type==='user_message'?'user':'assistant'};
@@ -153,18 +170,12 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
     // authoritative; bounded/history endpoints use opaque v2 paging cursors.
     if(/^\/api\/orchestration\/threads\/[^/?]+(?:\?|$)/.test(path)){
       const root=path.split('?')[0],query=new URLSearchParams(path.split('?')[1]),controlOnly=query.get('controlOnly')==='true',importOnly=query.get('importRuns')==='true',importRunId=query.get('importRunId');
-      if(importOnly){
-        // The bounded projection retains only recent runs. History pages carry
-        // conversation items, not the missing run rows. The canonical thread
-        // projection is the supported API for the complete run/prompt index.
-        const full=readRawSnapshot(await request(root,payload));if(!('projection' in full))return normalizeV2Snapshot(full);const p=full.projection;
-        requestAborted(options?.signal);
-        // Preserve only tiny HTML references for previews. Never hydrate tools
-        // or retain the multi-megabyte HTML inputs in the import picker.
-        const html=p?[...new Map([...(p.turnItems??[]),...(p.visibleTurnItems??[]).filter(row=>row.sourceThreadId===p.thread.id).map(row=>row.item)].filter(item=>htmlRenderFromToolItem(item)).map(item=>[item.id,{...item,input:undefined}])).values()]:[];
-        return normalizeV2Snapshot(p?{...full,hasMoreHistory:false,projection:{...p,turnItems:html,visibleTurnItems:[]}}:full);
+      let rawSnapshot=readRawSnapshot(await raw(root+'/bounded?compactTurnItems=1'+(importOnly?'&deferWork=1&dedupeBodies=1':''),payload,{...options,...(importOnly?{compactImport:true}:{})}));
+      if(importOnly&&'projection' in rawSnapshot){
+        const relevant=(item:WireTurnItem)=>['user_message','assistant_message','error','approval_request','user_input_request','run_interrupt_request'].includes(item.type)||!!htmlRenderFromToolItem(item),p=rawSnapshot.projection;
+        rawSnapshot={...rawSnapshot,projection:{...p,turnItems:p.turnItems?.filter(relevant),visibleTurnItems:p.visibleTurnItems?.filter(row=>relevant(row.item))}};
       }
-      const rawSnapshot=readRawSnapshot(await request(root+'/bounded?compactTurnItems=1',payload));const snapshot='projection' in rawSnapshot?restoreCompactSnapshot(rawSnapshot):rawSnapshot;
+      const snapshot='projection' in rawSnapshot?restoreCompactSnapshot(rawSnapshot):rawSnapshot;
       if(!('projection' in snapshot))return normalizeV2Snapshot(snapshot);
       requestAborted(options?.signal);
       if(controlOnly){
@@ -181,22 +192,31 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       // unbounded HTTP body. Keep the initial control-plane watermark so live
       // events committed during pagination still replay after this snapshot.
       const conversation=(item:WireTurnItem)=>['user_message','assistant_message'].includes(item.type);
-      const needed=(item:WireTurnItem)=>!importRunId||conversation(item)||item.runId===importRunId;
+      const needed=(item:WireTurnItem)=>importOnly?['user_message','assistant_message','error','approval_request','user_input_request','run_interrupt_request'].includes(item.type)||!!htmlRenderFromToolItem(item):!importRunId||conversation(item)||item.runId===importRunId;
       const rows=[...(snapshot.projection.visibleTurnItems??[])].filter(row=>needed(row.item));
-      let cursor=snapshot.historyCursor,more=snapshot.hasMoreHistory===true,pages=0;
-      while(more){
-        if(!cursor||++pages>100)throw Error('T3 history exceeded its recovery page limit.');
-        const page=readHistory(await request(root+'/history?cursor='+encodeURIComponent(cursor)));
-        if(!Array.isArray(page.items))throw Error('T3 returned an invalid history page.');
-        rows.unshift(...page.items.filter(row=>needed(row.item)));cursor=page.nextCursor;more=page.hasMoreHistory===true;
-      }
+      let cursor=snapshot.historyCursor,more=snapshot.hasMoreHistory===true;const cursors=new Set<string>();
+      const recoveredSnapshot=()=>{
       const p=snapshot.projection,items=new Map<string,WireTurnItem>(),messages=new Map<string,WireMessage>();
       for(const row of rows)if(row.sourceThreadId===p.thread.id)items.set(row.item.id,row.item);
       for(const item of p.turnItems??[])if(needed(item))items.set(item.id,item);
       for(const item of items.values())if((item.type==='user_message'||item.type==='assistant_message')&&typeof item.messageId==='string'&&typeof item.text==='string')messages.set(item.messageId,{id:item.messageId,threadId:p.thread.id,runId:item.runId??null,nodeId:item.nodeId,role:item.type==='user_message'?'user':'assistant',text:item.text,streaming:item.streaming===true,createdAt:item.startedAt??item.updatedAt,context:item.context,attachments:item.attachments??[],createdBy:item.createdBy,creationSource:item.creationSource,senderThreadId:item.senderThreadId,delegatedCompletion:item.delegatedCompletion});
       for(const message of p.messages)messages.set(message.id,message);
-      const recovered={...snapshot,hasMoreHistory:false,projection:{...p,turnItems:[...items.values()].sort((a,b)=>a.ordinal-b.ordinal),messages:[...messages.values()].sort((a,b)=>(a.createdAt??'').localeCompare(b.createdAt??''))}};
-      return normalizeV2Snapshot(await hydrate(recovered));
+      return {...snapshot,hasMoreHistory:more,projection:{...p,turnItems:[...items.values()].sort((a,b)=>a.ordinal-b.ordinal),messages:[...messages.values()].sort((a,b)=>(a.createdAt??'').localeCompare(b.createdAt??''))}};
+      };
+      const importedSnapshot=()=>{const recovered=recoveredSnapshot();return normalizeV2Snapshot({...recovered,projection:{...recovered.projection,turnItems:recovered.projection.turnItems.map(item=>htmlRenderFromToolItem(item)?{...item,input:undefined}:item),visibleTurnItems:[]}});};
+      if(importOnly&&options?.onImportSnapshot)options.onImportSnapshot(importedSnapshot());
+      while(more){
+        if(!cursor||cursors.has(cursor))throw Error('T3 returned an invalid or repeated history cursor.');
+        cursors.add(cursor);
+        const page=readHistory(await raw(root+'/history?cursor='+encodeURIComponent(cursor)+(importOnly?'&view=conversation&deferWork=1':''),undefined,{...options,...(importOnly?{compactImport:true}:{})}));
+        if(!Array.isArray(page.items))throw Error('T3 returned an invalid history page.');
+        rows.unshift(...page.items.filter(row=>needed(row.item)));cursor=page.nextCursor;more=page.hasMoreHistory===true;
+        // New roots make more runs usable. Tool-only pages do not need to
+        // rebuild and publish the same conversation on every network chunk.
+        if(importOnly&&options?.onImportSnapshot&&more&&page.items.some(row=>row.item.type==='user_message'))options.onImportSnapshot(importedSnapshot());
+      }
+      if(importOnly)return importedSnapshot();
+      return normalizeV2Snapshot(await hydrate(recoveredSnapshot()));
     }
     return normalizeV2Snapshot(await request(path,payload));
   };

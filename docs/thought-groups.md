@@ -37,8 +37,8 @@ The isolated replay checks Live Preview and Reading view in a real VPS desktop
 Obsidian client. It dispatches no T3 work and removes its fixture notes through
 Obsidian's vault API. Keep results, screenshots, source hashes and `CLEANUP.json`
 in that evidence directory. No test content may be created in QLO2. These checks
-do not establish native iPhone or Android behavior. QLO2 delivery still requires
-the release queue, fresh Sync and the real loaded-client check.
+do not establish native iPhone or Android behavior. The developing agent completes required native and isolated Sync checks before
+the PR. Release work stays on GitHub after review.
 
 Native replay `evidence/thought-tool-batches/native-4` passed all ten checks.
 Its `BUILD-SOURCE.json` matches the checked runtime inputs, and `CLEANUP.json`

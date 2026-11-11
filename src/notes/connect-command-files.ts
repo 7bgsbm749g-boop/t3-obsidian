@@ -7,7 +7,7 @@ type Rpc={call(tag:string,payload:unknown):Promise<unknown>};
 const CHUNK_BYTES=24_000;
 /** T3 bounds text reads. Large snapshots use immutable, checksum-addressed
  * chunks so a truncated read can never become a valid edit proposal. */
-function scopedFiles(rpc:Rpc,workspaceRoot:string,directory:string):CommandFiles {
+function scopedFiles(rpc:Rpc,workspaceRoot:string,directory:string,plainWrites=false):CommandFiles {
   function checked(path:string){if(!path.startsWith(directory+'/')||path.length>1000||!/^[a-zA-Z0-9_./-]+$/.test(path)||path.split('/').some(part=>!part||part==='.'||part==='..'))throw Error('Invalid Obsidian transport path.');return path;}
   const rawRead=async(path:string)=>{
     try{
@@ -33,7 +33,7 @@ function scopedFiles(rpc:Rpc,workspaceRoot:string,directory:string):CommandFiles
     },
     async write(path,text){
       const bytes=new TextEncoder().encode(text);if(bytes.length>COMMAND_MAX_BYTES)throw Error('The Obsidian request is too large.');
-      if(bytes.length<=CHUNK_BYTES){await rawWrite(path,text);return;}
+      if(plainWrites||bytes.length<=CHUNK_BYTES){await rawWrite(path,text);return;}
       const hash=contentHash(text),parts=Math.ceil(bytes.length/CHUNK_BYTES);
       for(let index=0;index<parts;index++)await rawWrite(path+'.parts/'+hash+'/'+index+'.txt',Buffer.from(bytes.slice(index*CHUNK_BYTES,(index+1)*CHUNK_BYTES)).toString('base64'));
       await rawWrite(path,JSON.stringify({schema:'t3-obsidian-blob-v1',hash,bytes:bytes.length,parts}));
@@ -50,3 +50,6 @@ function scopedFiles(rpc:Rpc,workspaceRoot:string,directory:string):CommandFiles
 export function connectCommandFiles(rpc:Rpc,workspaceRoot:string):CommandFiles{return scopedFiles(rpc,workspaceRoot,COMMAND_DIRECTORY);}
 /** Separate allowlisted scope: installing agent tools never widens commands. */
 export function connectAgentFiles(rpc:Rpc,workspaceRoot:string):CommandFiles{return scopedFiles(rpc,workspaceRoot,'.t3-obsidian/agent-tools');}
+
+/** Plain JSONL files are directly readable by agents; no blob manifests. */
+export function connectDiagnosticFiles(rpc:Rpc,workspaceRoot:string):CommandFiles{return scopedFiles(rpc,workspaceRoot,'.t3-obsidian/diagnostics',true);}

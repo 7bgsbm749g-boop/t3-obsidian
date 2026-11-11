@@ -576,8 +576,7 @@ export class NativeResponseView {
         }
         if(nativeMarkdownView(this.view).dirty)this.deferredSave=true;
       }
-      const deadline=Date.now()+5000;
-      const drain=async()=>{while(nativeMarkdownView(this.view).saving){if(Date.now()>=deadline)throw Error('Waiting for a native save before final delivery.');await new Promise<void>(resolve=>setTimeout(resolve,10));}};
+      const drain=async()=>{while(nativeMarkdownView(this.view).saving){await new Promise<void>(resolve=>setTimeout(resolve,10));}};
       await drain();
       const disk=await this.readSaved();
       if(this.disposed||this.view.file!==this.file)throw Error('The native view closed before final delivery.');

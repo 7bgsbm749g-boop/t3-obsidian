@@ -69,18 +69,18 @@ test('stop refuses nested or incomplete boundaries',()=>{
   assert.equal(stopResponseEdit(nested,id),null);
 });
 
-test('interrupt deadline prevents a late access result from dispatching',async()=>{
-  let resolve!:(value:any)=>void,calls=0,closed=0;
-  const access=new Promise<any>(r=>{resolve=r;});
-  await assert.rejects(interruptStoppedResponse(()=>access,randomUUID(),'thread','turn',5),/did not acknowledge/);
-  resolve({api:async()=>{calls++;},close:()=>{closed++;}});
-  await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,0);assert.equal(closed,1);
-});
-
-test('interrupt deadline releases access even when dispatch never resolves',async()=>{
-  let closed=0;
-  await assert.rejects(interruptStoppedResponse(async()=>({origin:'https://test',api:()=>new Promise(()=>{}),close:()=>{closed++;}}),randomUUID(),'thread','turn',5),/did not acknowledge/);
-  assert.equal(closed,1);
+test('late Stop access and acknowledgement remain valid after the former deadlines',async context=>{
+ context.mock.timers.enable({apis:['setTimeout']});
+ let grant!:(value:any)=>void,ack!:()=>void,calls=0,closed=0;
+ const access=new Promise<any>(resolve=>{grant=resolve;});
+ const work=interruptStoppedResponse(()=>access,randomUUID(),'thread','turn',5);
+ context.mock.timers.tick(80_000);
+ grant({origin:'https://test',api:async(_path:string,payload:any)=>{
+  calls++;if(payload)return new Promise<void>(resolve=>{ack=resolve;});
+  return {thread:{id:'thread',projectId:'project',messages:[],activities:[],latestTurn:{turnId:'turn',state:'running'},session:{status:'running',activeTurnId:'turn'}}};
+ },close:()=>{closed++;}});
+ for(let i=0;i<20;i++)await Promise.resolve();assert.equal(calls,2);assert.equal(closed,0);
+ context.mock.timers.tick(80_000);assert.equal(closed,0);ack();await work;assert.equal(closed,1);
 });
 
 test('stopping removes pending question controls while preserving the prompt and code examples',async()=>{

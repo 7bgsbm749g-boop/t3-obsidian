@@ -9,6 +9,7 @@ import type {ResponseRequest} from './response-model';
 import type {ResponseRecord} from './response-record';
 import type {InlineStartRequest} from '../conversations/inline-thread';
 import type {DeviceResponseIO} from './device-local-responses';
+import {streamMemory} from '../app/stream-memory-diagnostics';
 import {logEvent,logFailure,diagnosticEnabled} from '../app/diagnostics';
 import {SharedThreadStreams} from '../conversations/shared-thread-stream';
 import type {ResponseStopReceipt} from './response-stop-receipt';
@@ -18,12 +19,13 @@ import {interruptStoppedResponse} from './response-stop';
 import {completedSelectionDraft,validSteeringInput,type SteeringInput} from '../conversations/inline-steering';
 import type {ResponseConnectionIssue} from '../connection/sign-in-state';
 import type {LocalResponseSaveResult,LocalSavePendingReason} from './local-response-save';
+import type {ThreadSnapshot} from '../connection/wire-types';
 
 export interface LocalFinalNoteIO {
   read(path:string):Promise<string|undefined>;
   compareAndSet(path:string,before:string,after:string,guard?:()=>boolean):Promise<boolean>;
 }
-type Runtime={request:ResponseRequest;record:ResponseRecord;preview:DirectInlinePreview;update?:DirectInlineUpdate;restoring?:boolean;retained?:Promise<void>;work?:Promise<void>;stopped?:boolean;stopBody?:string;stopAcknowledged?:boolean;done?:boolean;saved?:boolean;pendingSave?:LocalSavePendingReason;retryAt:number;watchWanted?:boolean;attemptRevision?:number;diagnosticState?:string};
+type Runtime={request:ResponseRequest;record:ResponseRecord;preview:DirectInlinePreview;update?:DirectInlineUpdate;restoring?:boolean;retained?:Promise<void>;work?:Promise<void>;stopped?:boolean;stopBody?:string;stopAcknowledged?:boolean;done?:boolean;saved?:boolean;detached?:boolean;pendingSave?:LocalSavePendingReason;retryAt:number;watchWanted?:boolean;attemptRevision?:number;diagnosticState?:string};
 type NoteCache={document:string;bindings:ResponseRequest[];references:Map<string,ResponseRequest|undefined>};
 type RecoveryNote={requests:ResponseRequest[];version:number;pending:boolean;retryAt:number};
 /** A saved anchor and its synced settings record reconnect independently of
@@ -58,7 +60,7 @@ export class LocalResponseManager {
   private watch(runtime:Runtime,open:boolean){
     this.reportState(runtime);runtime.watchWanted=open;
     if(runtime.restoring)return;
-    if(runtime.done||runtime.stopped||runtime.update?.completionVerified&&!runtime.update.questionsPending){runtime.preview.suspend();return;}
+    if(runtime.done||runtime.stopped||runtime.detached||runtime.update?.completionVerified&&!runtime.update.questionsPending){runtime.preview.suspend();return;}
     runtime.preview.tick(open);
   }
   private current(runtime:Runtime){const stored=this.stored().find(request=>request.id===runtime.request.id);return !stored||JSON.stringify(compactResponseBinding({...stored,notePath:this.destination(stored)}))===JSON.stringify(compactResponseBinding(runtime.request));}
@@ -67,6 +69,7 @@ export class LocalResponseManager {
     const retained=this.jobs.get(request.id);
     if(retained?.done){if(localFinalIdentity(retained.request)===localFinalIdentity(request))return retained;retained.preview.dispose();this.jobs.delete(request.id);}
     const old=this.jobs.get(request.id);if(old){
+      old.detached=false;
       if(JSON.stringify(compactResponseBinding(old.request))!==JSON.stringify(compactResponseBinding(request))){
         const changed=localFinalIdentity(old.request)!==localFinalIdentity(request);
         old.attemptRevision=undefined;old.request=request;old.record={...old.record,revision:old.record.revision+1,request,state:{...old.record.state!,notePath:request.notePath,messageId:request.localMessageId??request.messageId,steering:request.localSteering}};old.preview.update(old.record);
@@ -82,6 +85,7 @@ export class LocalResponseManager {
       const same=runtime.update?.completionVerified&&update.completionVerified&&runtime.update.turnId===update.turnId&&runtime.update.messageId===update.messageId&&runtime.update.body===update.body&&runtime.update.phase===update.phase&&runtime.update.questionsPending===update.questionsPending;
       if(!same)runtime.update=update;this.io.receiveDirect?.(update);
       runtime.record.state={...runtime.record.state!,...update.resume,body:update.body,status:update.phase==='error'?'error':update.phase??'running',turnId:update.turnId,bindingCheckpoint:update.checkpoint};
+      streamMemory.sample('sample',()=>{const status=this.sources.status();return {bindingId:request.id,threadId:request.threadId,turnId:update.turnId,bodyLength:update.body.length,sourceCount:status.sources,readerCount:status.readers,openingCount:status.opening,queuedCount:status.queued,canonicalReadCount:status.canonicalReads,cacheCharacters:status.cacheCharacters,attachmentCount:this.jobs.size,saveWorkerCount:this.finalWorkers.size,saveQueueCount:this.finalQueues.size};});
       if(update.questionActivities)this.io.localQuestions?.(update);
       if(update.completionVerified&&['complete','interrupted'].includes(update.phase??'')){
         if(!same)runtime.retained=this.io.retainLocalFinal?.(update).catch(error=>logFailure('response.local.final-cache',error,{bindingId:request.id}));
@@ -93,7 +97,14 @@ export class LocalResponseManager {
     this.jobs.set(request.id,runtime);
     if(diagnosticEnabled('response.recovery.adopted'))logEvent('response.recovery.adopted',{bindingId:request.id,noteAlias:contentHash(request.notePath),environmentId:request.threadEnvironmentId,projectId:request.projectId,threadId:request.threadId,messageId:request.localMessageId??request.messageId,open:this.io.isOpen(request.notePath)});
     void Promise.resolve(this.io.receiveCoordinated?.(record)).catch(error=>logFailure('response.local.adopt',error,{bindingId:request.id}));
-    void Promise.all([this.io.loadLocalFinal?.(request),this.io.loadLocalCompletion?.(request)]).then(([update,receipt])=>{
+    void Promise.all([this.io.loadLocalFinal?.(request),this.io.loadLocalCompletion?.(request)]).then(async([update,receipt])=>{
+      if(receipt&&!receipt.saved&&!receipt.removed){
+        // Earlier versions persisted an editor's temporary absence as a final
+        // removal. It cannot prove deletion. A checked save still requires the
+        // exact empty anchor; saved receipts, explicit removals and Stop retain
+        // their authority even when an old anchor returns through Sync.
+        receipt=undefined;logEvent('response.recovery.unsaved-anchor',{bindingId:request.id});
+      }
       if(receipt&&!this.closed&&!runtime.stopped){runtime.done=true;runtime.saved=receipt.saved;runtime.preview.dispose();this.io.localCompleted?.(request.id,request.notePath);logEvent('response.recovery.retired',{bindingId:request.id,saved:receipt.saved});return;}
       if(!update||this.closed||runtime.done||runtime.stopped)return;
       if(!runtime.update){runtime.update={...update,request:runtime.record.request};runtime.record.state={...runtime.record.state!,...update.resume,body:update.body,bindingCheckpoint:update.checkpoint};runtime.preview.update(runtime.record);this.io.receiveDirect?.(runtime.update);}
@@ -101,7 +112,7 @@ export class LocalResponseManager {
     }).catch(error=>logFailure('response.local.final-restore',error,{bindingId:request.id})).finally(()=>{runtime.restoring=false;if(runtime.watchWanted)this.watch(runtime,true);this.finish(runtime);});
     return runtime;
   }
-  async register(request:ResponseRequest,explicitLocation=false){
+  async register(request:ResponseRequest,explicitLocation=false,importedSnapshot?:ThreadSnapshot){
     if(this.closed||request.vaultId!==this.vaultId)throw Error('This response belongs to another vault.');
     const current=await this.io.readNote(request.notePath);if(current===undefined)throw Error('The response note is unavailable.');
     if(!localResponseRange(current,request.id,[request]))throw Error('The response block changed before registration.');
@@ -116,13 +127,13 @@ export class LocalResponseManager {
       await this.io.saveLocalNote?.(request.notePath);
     }
     this.documents.set(request.notePath,[{document:after,bindings:localResponseBindings(after,this.stored()),references:new Map(responseIds(after).map(id=>[id,this.index(this.stored()).get(id)]))}]);
-    const runtime=this.adopt(request);this.watch(runtime,this.canFinishClosed(runtime)||this.io.isOpen(request.notePath));
+    const runtime=this.adopt(request);if(importedSnapshot)runtime.preview.seedImport?.(importedSnapshot);this.watch(runtime,true);
   }
   delivered(id:string,delivery:InlineStartRequest){this.jobs.get(id)?.preview.delivery(delivery);}
   resume(){
     if(this.closed)return;
     const documents=this.io.openedNotes?.()??[],locations=new Map<string,ResponseRequest[]>(),stored=this.stored(),byId=this.index(stored),blocked=new Set<string>(),paneCounts=new Map<string,number>();
-    for(const path of this.documents.keys())if(!documents.some(note=>note.path===path))this.documents.delete(path);
+    for(const path of this.documents.keys())if(!documents.some(note=>note.path===path)){this.documents.delete(path);const note=this.recoveryNotes.get(path);if(note){note.version++;note.pending=true;note.retryAt=0;}}
     for(const {path,document} of documents){
       const pane=paneCounts.get(path)??0;paneCounts.set(path,pane+1);const panes=this.documents.get(path)??[];let cached=panes[pane];
       if(!cached||cached.document!==document||[...cached.references].some(([id,request])=>byId.get(id)!==request)){if(cached&&cached.document!==document)this.noteVersions.set(path,(this.noteVersions.get(path)??0)+1);cached={document,bindings:localResponseBindings(document,stored),references:new Map(responseIds(document).map(id=>[id,byId.get(id)]))};panes[pane]=cached;this.documents.set(path,panes);}
@@ -147,14 +158,14 @@ export class LocalResponseManager {
     for(const runtime of this.jobs.values()){
       const loaded=locations.get(runtime.request.id);
       if(!loaded){
-        // Imported runs may complete through checked file IO after their tab
-        // closes. Ordinary replies keep their existing open-editor boundary.
+        // A temporary missing editor projection is not evidence of deletion.
+        // Keep recovery text and let an exact returning anchor reattach it.
+        if(documents.some(note=>note.path===runtime.request.notePath)&&!runtime.work&&!this.migrations.has(runtime.request.id))this.detach(runtime);
         if(!runtime.done&&!runtime.stopped&&(!runtime.update?.completionVerified||runtime.update.questionsPending))this.watch(runtime,true);
         else runtime.preview.suspend();
         // A final commit removes the anchor before its file IO resolves. Let
         // that pending commit report its own success or conflict.
-        if(!runtime.done&&!runtime.work&&!this.migrations.has(runtime.request.id)&&documents.some(note=>note.path===runtime.request.notePath)){void this.settle(runtime,false);}
-        if(!runtime.done&&this.canFinishClosed(runtime)&&runtime.update?.completionVerified)this.finish(runtime);
+        if(!runtime.done&&runtime.update?.completionVerified)this.finish(runtime);
         continue;
       }
       if(this.io.syncReady?.(runtime.request.notePath)===false)runtime.attemptRevision=undefined;
@@ -192,7 +203,7 @@ export class LocalResponseManager {
         const bindings=localResponseBindings(document,note.requests);
         const present=new Set(bindings.map(binding=>binding.id));
         for(const runtime of this.jobs.values())if(runtime.request.notePath===path&&!present.has(runtime.request.id)&&!runtime.done&&!runtime.work&&!this.migrations.has(runtime.request.id)){
-          void this.settle(runtime,false);
+          this.detach(runtime);
         }
         for(const binding of bindings){
           if(this.stoppedIds.has(binding.id)||binding.vaultId!==this.vaultId)continue;
@@ -208,27 +219,27 @@ export class LocalResponseManager {
   changed(path:string){this.noteVersions.set(path,(this.noteVersions.get(path)??0)+1);const note=this.recoveryNotes.get(path);if(note){note.version++;note.pending=true;note.retryAt=0;}this.resume();}
   tick(){this.resume();}
   reconnect(){if(this.closed)return;for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.suspend();for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped){runtime.attemptRevision=undefined;if(!runtime.restoring&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.reconnect(this.io.isOpen(runtime.request.notePath));}this.resume();}
-  private canFinishClosed(runtime:Runtime){return !!runtime.request.importTurn;}
+  private detach(runtime:Runtime){if(runtime.done||runtime.stopped)return;runtime.detached=true;runtime.pendingSave='note-changed';runtime.preview.suspend();this.reportState(runtime);}
   private saveResult(runtime?:Runtime):LocalResponseSaveResult {
     if(this.closed||!runtime)return {saved:false,reason:'plugin-unavailable'};
     if(runtime.saved)return {saved:true};
     if(runtime.done)return {saved:false,reason:'note-changed'};
     if(runtime.stopped)return {saved:false,reason:'stopped'};
+    if(runtime.detached)return {saved:false,reason:'note-changed'};
     if(runtime.update?.questionsPending)return {saved:false,reason:'answer'};
     if(!runtime.update?.completionVerified)return {saved:false,reason:'verification'};
     if(this.io.syncReady?.(runtime.request.notePath)===false)return {saved:false,reason:'sync'};
-    if(!this.canFinishClosed(runtime)&&!this.io.isOpen(runtime.request.notePath))return {saved:false,reason:'note-closed'};
     return {saved:false,reason:runtime.pendingSave??'saving'};
   }
-  /** Imports report success only after the checked note write. The bounded
-   * wait leaves the registered response running when Sync or verification waits. */
-  async waitForSave(id:string,timeoutMs=15_000):Promise<LocalResponseSaveResult>{
-    const deadline=Date.now()+Math.max(0,timeoutMs);
+  /** A blocked save reports its state; active saves retain their checked write. */
+  async waitForSave(id:string,_legacyWait?:number):Promise<LocalResponseSaveResult>{
     for(;;){
       const runtime=this.jobs.get(id);if(runtime)this.finish(runtime);
       const result=this.saveResult(runtime);
-      if(result.saved||!runtime||runtime.done||runtime.stopped||this.closed||Date.now()>=deadline)return result;
-      await new Promise<void>(resolve=>setTimeout(resolve,Math.min(100,Math.max(1,deadline-Date.now()))));
+      if(result.saved||!runtime||runtime.done||runtime.stopped||this.closed||result.reason!=='saving')return result;
+      // A checked save already owns its completion promise. Wake when that
+      // operation finishes instead of delaying completion through a timer.
+      if(runtime.work)await runtime.work;else return result;
     }
   }
   private reportState(runtime:Runtime){
@@ -238,7 +249,7 @@ export class LocalResponseManager {
   }
   private finish(runtime:Runtime){
     this.reportState(runtime);
-    if(this.closed||runtime.done||runtime.stopped||runtime.restoring||runtime.work||this.now()<runtime.retryAt||!this.canFinishClosed(runtime)&&!this.io.isOpen(runtime.request.notePath)||this.io.syncReady?.(runtime.request.notePath)===false)return;
+    if(this.closed||runtime.done||runtime.stopped||runtime.detached||runtime.restoring||runtime.work||this.now()<runtime.retryAt||this.io.syncReady?.(runtime.request.notePath)===false)return;
     const update=runtime.update;if(!update?.completionVerified||update.questionsPending)return;
     const path=runtime.request.notePath,revision=this.noteVersions.get(path)??0;
     if(runtime.attemptRevision===revision)return;
@@ -277,9 +288,9 @@ export class LocalResponseManager {
     const changes:Array<{runtime:Runtime;update:DirectInlineUpdate;request:string}>=[];
     for(const runtime of batch){
       const update=runtime.update;
-      if(this.closed||runtime.stopped||runtime.done||runtime.request.notePath!==path||!this.current(runtime)||!update?.completionVerified||update.questionsPending||!this.canFinishClosed(runtime)&&!this.io.isOpen(path)||this.io.syncReady?.(path)===false){runtime.pendingSave='note-changed';continue;}
+      if(this.closed||runtime.stopped||runtime.done||runtime.detached||runtime.request.notePath!==path||!this.current(runtime)||!update?.completionVerified||update.questionsPending||this.io.syncReady?.(path)===false){runtime.pendingSave='note-changed';continue;}
       let range=this.range(document,runtime.request.id);
-      if(!range){await this.settle(runtime,false);continue;}
+      if(!range){this.detach(runtime);continue;}
       if(range.request.threadId!==runtime.request.threadId||(range.request.localMessageId??range.request.messageId)!==update.messageId){runtime.pendingSave='note-changed';continue;}
       const request=JSON.stringify(compactResponseBinding(runtime.request));
       const draft=await this.io.localFinalDraft?.(document,range.request)??document;
@@ -292,13 +303,14 @@ export class LocalResponseManager {
       document=document.slice(0,range.from)+body+document.slice(range.to);changes.push({runtime,update,request});
     }
     if(!changes.length)return;
-    const guard=()=>!this.closed&&changes.every(({runtime,update,request})=>!runtime.stopped&&runtime.update===update&&runtime.request.notePath===path&&this.current(runtime)&&JSON.stringify(compactResponseBinding(runtime.request))===request&&(this.canFinishClosed(runtime)||this.io.isOpen(path)))&&this.io.syncReady?.(path)!==false;
+    const guard=()=>!this.closed&&changes.every(({runtime,update,request})=>!runtime.stopped&&!runtime.detached&&runtime.update===update&&runtime.request.notePath===path&&this.current(runtime)&&JSON.stringify(compactResponseBinding(runtime.request))===request)&&this.io.syncReady?.(path)!==false;
     if(diagnosticEnabled('response.save.prepared'))logEvent('response.save.prepared',{noteAlias:contentHash(path),bindingIds:changes.map(change=>change.runtime.request.id),attachments:changes.length,documentLength:current.length,proposedLength:document.length,elapsedMs:Date.now()-started});
     if(!guard()||!await this.notes.compareAndSet(path,current,document,guard)){for(const {runtime} of changes)runtime.pendingSave='note-changed';if(diagnosticEnabled('response.save.pending'))logEvent('response.save.pending',{noteAlias:contentHash(path),bindingIds:changes.map(change=>change.runtime.request.id),reason:'note-changed',attachments:changes.length});return;}
     for(const {runtime} of changes){
       if(runtime.request.localStage)await this.io.localEditSaved?.(runtime.request,document).catch(error=>logFailure('response.edit.receipt',error,{bindingId:runtime.request.id}));
       await this.settle(runtime,true);
     }
+    streamMemory.sample('save',()=>({documentLength:document.length,attachmentCount:changes.length,elapsedMs:Date.now()-started,saveWorkerCount:this.finalWorkers.size,saveQueueCount:this.finalQueues.size}));
     if(diagnosticEnabled('response.save.verified'))logEvent('response.save.verified',{noteAlias:contentHash(path),bindingIds:changes.map(change=>change.runtime.request.id),attachments:changes.length,elapsedMs:Date.now()-started});
   }
   status(id:string):ResponseStopReceipt|undefined{
@@ -371,7 +383,7 @@ export class LocalResponseManager {
   renamed(before:string,after:string){
     for(const request of [...this.stored(),...[...this.jobs.values()].map(runtime=>runtime.request)]){const path=this.destination(request);if(path===before||path.startsWith(before+'/')){const old=this.moves.get(request.id),from=old?.from??new Set<string>();from.add(request.notePath);from.add(path);this.moves.set(request.id,{from,to:after+path.slice(before.length)});}}for(const [path,note] of [...this.recoveryNotes])if(path===before||path.startsWith(before+'/')){note.version++;this.recoveryNotes.delete(path);this.recoveryNotes.set(after+path.slice(before.length),{...note,pending:true,retryAt:0});}for(const runtime of this.jobs.values())if(runtime.request.notePath===before||runtime.request.notePath.startsWith(before+'/')){runtime.request={...runtime.request,notePath:after+runtime.request.notePath.slice(before.length)};runtime.retryAt=0;}}
   deleted(path:string){for(const [notePath,note] of this.recoveryNotes)if(notePath===path||notePath.startsWith(path+'/')){note.version++;note.pending=false;}for(const runtime of this.jobs.values())if(runtime.request.notePath===path||runtime.request.notePath.startsWith(path+'/'))this.stopLocally(runtime.request.id);}
-  responses(){return [...this.jobs.values()].filter(runtime=>!runtime.stopped&&(!runtime.done||runtime.update?.completionVerified&&runtime.update.phase==='complete')).map(runtime=>({id:runtime.request.id,notePath:runtime.request.notePath,epoch:1,revision:1,completionId:JSON.stringify([runtime.update?.messageId??runtime.request.localMessageId??runtime.request.messageId,runtime.update?.turnId??'']),completion:completionSource(runtime.request,runtime.update?.turnId?runtime.update.checkpoint?.turns?.[runtime.update.turnId]??(runtime.request.importTurn?.turnId===runtime.update.turnId?runtime.request.importTurn:undefined):undefined),active:!runtime.update?.completionVerified&&runtime.update?.phase!=='error',input:!!runtime.update?.questionsPending||!runtime.update?.completionVerified&&!!runtime.update?.questionActivities?.length,complete:!!runtime.update?.completionVerified&&!runtime.update.questionsPending&&runtime.update.phase==='complete'}));}
+  responses(){return [...this.jobs.values()].filter(runtime=>!runtime.stopped&&!runtime.detached&&(!runtime.done||runtime.update?.completionVerified&&runtime.update.phase==='complete')).map(runtime=>({id:runtime.request.id,notePath:runtime.request.notePath,epoch:1,revision:1,completionId:JSON.stringify([runtime.update?.messageId??runtime.request.localMessageId??runtime.request.messageId,runtime.update?.turnId??'']),completion:completionSource(runtime.request,runtime.update?.turnId?runtime.update.checkpoint?.turns?.[runtime.update.turnId]??(runtime.request.importTurn?.turnId===runtime.update.turnId?runtime.request.importTurn:undefined):undefined),active:!runtime.update?.completionVerified&&runtime.update?.phase!=='error',input:!!runtime.update?.questionsPending||!runtime.update?.completionVerified&&!!runtime.update?.questionActivities?.length,complete:!!runtime.update?.completionVerified&&!runtime.update.questionsPending&&runtime.update.phase==='complete'}));}
   health(){return {...this.sources.status(),attachments:this.jobs.size,saveQueued:[...this.finalQueues.values()].reduce((n,queue)=>n+queue.size,0),saveWorkers:this.finalWorkers.size,pending:[...this.jobs.values()].filter(runtime=>!runtime.done).map(runtime=>({bindingId:runtime.request.id,reason:this.saveResult(runtime)})).slice(0,64)};}
   dispose(){this.closed=true;this.sources.dispose();for(const resolve of this.finalWaiters.values())resolve();this.finalWaiters.clear();for(const runtime of this.jobs.values())runtime.preview.dispose();this.jobs.clear();}
 }

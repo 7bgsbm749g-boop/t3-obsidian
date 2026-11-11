@@ -1,11 +1,12 @@
 import {RouteStatus} from '../connection/route-status';
+import {readImportThreads,readImportRuns,readImportRun,readImportPreview,importHistoryState} from '../conversations/import-source';
 import {orderedRoutes,routeGroups,routePairing,routeMethod,localRoute,routeNames,type ConnectionMethod} from '../connection/routes';
 import {forEachBounded} from '../shared/bounded-work';
 import {AgentSetup,type AgentProvider} from '../agents/setup';
 import {agentAssets,agentBundleHash} from '../agents/assets';
 import {AgentToolsSettings} from '../agents/settings';
 import {ConnectCommandHost,commandBase,type CommandFiles,type CommandRoute} from '../notes/connect-command-host';
-import {connectAgentFiles,connectCommandFiles} from '../notes/connect-command-files';
+import {connectAgentFiles,connectCommandFiles,connectDiagnosticFiles} from '../notes/connect-command-files';
 import {CheckedNoteEdits,isNoteEditCommand,checkedStageDraft,type EditSnapshot} from '../notes/checked-note-edits';
 import {connectT3Rpc} from '../connection/t3-rpc';
 import {ThreadDisplays,isThreadCommand,type ThreadDisplayResult} from '../conversations/thread-displays';
@@ -64,10 +65,11 @@ import {readInlineSnapshot,watchThread,type ThreadAccess} from '../conversations
 import {isRecoveryCommand} from '../responses/recovery-command';
 import {abortableRead,requestAborted} from '../connection/t3-api';
 import {mountToolGroups} from '../responses/response-tool-presentation';
-import {availableImportRun,importRunPreview,importRuns,importBindingId,importFollowId,type RunImportResult} from '../conversations/run-import';
+import {importRuns,importBindingId,importFollowId,runImportResultMessage,type RunImportResult,type ImportRun} from '../conversations/run-import';
 import {renderRunImportPreview} from '../conversations/run-import-preview';
 import {findRunImport,runImportReceipt} from '../conversations/run-import-receipt';
-import {openRunImport,ImportStreamsModal} from '../conversations/run-import-ui';
+import {openRunImport,ImportStreamsModal,openResponseCatchUp} from '../conversations/run-import-ui';
+import {noteCatchUpThreads,catchUpRuns,catchUpThreadKey,type CatchUpThread} from '../conversations/response-catch-up';
 import {type InlineThreadState} from '../conversations/inline-thread';
 import {nativeResponses} from '../responses/native-response-manager';
 import {editorStream} from '../responses/editor-stream';
@@ -76,10 +78,13 @@ import {continueQuestionAnswer} from '../interaction/question-continuation';
 import {validateNoteCommand,validateAgentCommand,type NoteCommand,type NoteCommandResult} from '../notes/note-command';
 import {isFolderCommand,executeFolderCommand,type FolderCommand} from '../projects/folder-command';
 import {configureDiagnostics,logEvent,logFailure,EventJournal,diagnosticPreferences,diagnosticCategory,connectionDiagnosticPolicy,type DiagnosticCategory} from './diagnostics';
-import {clearVaultDiagnostics} from './disabled-diagnostics';
+import {diagnosticMachine} from './diagnostic-machine';
+import {DiagnosticArchive} from './diagnostic-archive';
+import {streamMemory} from './stream-memory-diagnostics';
 import {beginLogin,pollLogin,refreshAccount,discoverMachines,connectMachine,type CloudAccount,type DeviceLogin,type CloudMachine} from '../connection/cloud';
 import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,type NativeAccount,type EmailLogin} from '../connection/native-account';
 import {pair,readDirect,commandId,environmentApi,endpoint,type PairedConnection,type PairedSession} from '../connection/direct';
+import {RouteAuthorizationCache,verifyOrchestrationRead} from '../connection/route-authorization';
 import {environmentAccess} from '../connection/environment-access';
 import {setIcon, App, FileSystemAdapter, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type SettingDefinition,type SettingDefinitionItem,type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, MarkdownRenderer,  requestUrl } from 'obsidian';
 import { Buffer } from 'buffer/';
@@ -91,7 +96,7 @@ import { collectImages, imageReferenceDefinitions, MAX_IMAGE_BYTES } from '../no
 import {vaultHost,loadVaultHost,mergeVaultHost,type VaultHost} from './vault-host';
 import {ensureNoProject,NO_PROJECT,isNoProjectKey,noProjectKey,noProjectMachine} from '../projects/no-project';
 import {CompletionSettings,CompletionJob,contentHash} from '../responses/completion';
-import {Connection,Project,Request,RequestDeliveryError,acceptedRequestThread,parseProjects,runBridge,sendRequest,configureBridge,retiredConnection,projectKey,projectLabel,withTimeout} from './bridge';
+import {Connection,Project,Request,RequestDeliveryError,acceptedRequestThread,parseProjects,runBridge,sendRequest,configureBridge,retiredConnection,projectKey,projectLabel} from './bridge';
 import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,type FolderLink} from '../projects/folder-link';
 import {loadFolderLinkChanges,mergeFolderLinkChanges,applyFolderLinkChanges,changedFolderLinks,mergeLegacyFolderLinks,type FolderLinkChange} from '../projects/folder-link-sync';
 import {installPaletteChat,type PaletteChatController} from '../conversations/palette-chat';
@@ -200,7 +205,8 @@ export default class SendToT3 extends Plugin {
   private projectCreateModal?:ProjectCreateModal;
   private commandHosts=new Map<string,{host:ConnectCommandHost;rpc:Awaited<ReturnType<typeof connectT3Rpc>>;files:CommandFiles}>();
   private commandProjects=new Map<string,Project>();
-  private verifiedConnections=new Map<string,{work:Promise<void>;until:number}>();
+  private verifiedConnections=new RouteAuthorizationCache<Awaited<ReturnType<typeof environmentApi>>>();
+  private importPreparation=new Set<AbortController>();
   private commandSerial:Promise<void>=Promise.resolve();
   private noteEdits?:CheckedNoteEdits;
   private threadDisplays?:ThreadDisplays;
@@ -236,13 +242,20 @@ export default class SendToT3 extends Plugin {
   private noteCommandOpening?:Promise<void>;
   private eventLocalEnvironmentId?:string;
   diagnostics?:EventJournal;
+  diagnosticArchive?:DiagnosticArchive;
   diagnosticLogging=diagnosticPreferences(undefined);
   private diagnosticPreferenceKey(){return `t3-diagnostic-preferences-v1:${this.settings.vaultId}:${this.deviceId}`;}
   setDiagnosticLogging(category:DiagnosticCategory,enabled:boolean){
     const preferences={...this.diagnosticLogging,[category]:enabled};
-    this.app.saveLocalStorage(this.diagnosticPreferenceKey(),preferences);this.diagnosticLogging=preferences;
+    this.app.saveLocalStorage(this.diagnosticPreferenceKey(),preferences);this.diagnosticLogging=preferences;if(category==='memory'){streamMemory.reset();if(enabled)this.memoryCheckpoint('enabled');}
   }
-  private diagnosticLog(since?:string){const diagnostics=this.diagnostics?.snapshot(since);return {...sendFailureLog(this.app.loadLocalStorage(this.failureKey()),pluginManifest.version,this.deviceId,since),...(diagnostics?{diagnostics:{...diagnostics,enabled:{...this.diagnosticLogging},responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app)}}:{})};}
+  private memoryCheckpoint(checkpoint:'manual'|'enabled'){
+    streamMemory.sample(checkpoint,()=>{
+      const health=this.deviceInline?.health();
+      return {...nativeResponses(this.app).memoryStatus(),...markdownCodeCacheStatus(),sourceCount:health?.sources,readerCount:health?.readers,queuedCount:health?.queued,saveQueuedCount:health?.saveQueued,saveWorkerCount:health?.saveWorkers,cacheCharacters:health?.cacheCharacters};
+    });
+  }
+  private diagnosticLog(since?:string){this.memoryCheckpoint('manual');const diagnostics=this.diagnostics?.snapshot(since);return {...sendFailureLog(this.app.loadLocalStorage(this.failureKey()),pluginManifest.version,this.deviceId,since),...(diagnostics?{diagnostics:{...diagnostics,enabled:{...this.diagnosticLogging},responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app)}}:{})};}
   private failedRequests=new WeakSet<Request>();
   private connectionRecovery?:ConnectionRecovery;
   private connectionRecoveryTarget(target:ResponseStorageTarget){return JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);}
@@ -250,6 +263,7 @@ export default class SendToT3 extends Plugin {
   private recordSendFailure(request:Request|undefined,error:unknown,stage:string,startedAt:number){
     const derived=(part:string)=>{try{return request?commandId(request.id,part):undefined;}catch{return undefined;}};
     const failure:SendFailure={at:new Date().toISOString(),stage,elapsedMs:Math.max(0,Date.now()-startedAt),delivery:acceptedRequestThread(request)||request?.directPlan?.delivery||['delivery-evidence','local-confirmation'].includes(stage)?'accepted':['dispatch','startup-recovery'].includes(stage)?'unconfirmed':'not-started',...(request?{requestId:request.id,threadId:acceptedRequestThread(request)??request.threadId??derived('thread'),messageId:derived('message'),environmentId:request.connection.environmentId,bindingIds:(request.inlineBindings??(request.inlineHost?[request.inlineHost]:[])).map(binding=>binding.id)}:{}),error};
+    logEvent('response.send.failure',failure as unknown as Record<string,unknown>,'error');
     try{this.app.saveLocalStorage(this.failureKey(),appendSendFailure(this.app.loadLocalStorage(this.failureKey()),failure));}catch{new Notice('The send failed. The device could not save its failure log.',10000);}
   }
   private async failRequest(request:Request,error:unknown,stage:string,startedAt:number){
@@ -337,7 +351,7 @@ export default class SendToT3 extends Plugin {
     this.signInEmail=typeof local?.signInEmail==='string'?local.signInEmail:this.nativeAccount?.identity??'';
     this.signInExpired=local?.signInExpired===true&&!this.nativeAccount;
     this.vaultRegistrations=local?.vaultRegistrations??{};
-    this.settings = {threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],vaultHost:loadVaultHost(data?.vaultHost),inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:'keep',archiveFolder:''},completionJobs:[],settlementJobs:Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads!==false,folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
+    this.settings = {threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],vaultHost:loadVaultHost(data?.vaultHost),inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:'keep',archiveFolder:''},completionJobs:[],settlementJobs:data?.autoSettleThreads===true&&Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads===true,folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
     if(!Platform.isMobile){
       const key=`t3-connection-recovery-v1:${this.settings.vaultId}`;
       this.connectionRecovery=new ConnectionRecovery({
@@ -367,13 +381,11 @@ export default class SendToT3 extends Plugin {
     // General operation/chunk logging and synced log publication stay disabled.
     this.diagnosticLogging=diagnosticPreferences(this.app.loadLocalStorage(this.diagnosticPreferenceKey()));
     const diagnosticKey=`diagnostics:${this.settings.vaultId}:${this.deviceId}`;
-    this.diagnostics=new EventJournal({load:()=>deviceState(diagnosticKey),save:state=>deviceState(diagnosticKey,state),id:randomId,context:{deviceId:this.deviceId,pluginVersion:pluginManifest.version,platform:Platform.isMobile?'mobile':'desktop'}},{...connectionDiagnosticPolicy,retain:event=>diagnosticCategory(event)!==undefined,accept:event=>{const category=diagnosticCategory(event);return !!category&&this.diagnosticLogging[category];}});
-    await this.diagnostics.load();configureDiagnostics(this.diagnostics);
-    const adapter=this.app.vault?.adapter;
-    if(adapter&&typeof adapter.exists==='function'&&typeof adapter.remove==='function'){
-      try{await clearVaultDiagnostics(adapter,this.app.vault.configDir);}catch(error){new Notice(`Could not clear plugin logs: ${message(error)}`);}
-    }
-    this.addCommand({id:'export-diagnostics',name:'Export diagnostic log…',callback:()=>void this.exportDiagnostics().catch(error=>new Notice(message(error)))});
+    this.diagnosticArchive=new DiagnosticArchive(this.settings.vaultId,this.deviceId);
+    this.diagnostics=new EventJournal({retain:event=>this.diagnosticArchive?.record(event),load:()=>deviceState(diagnosticKey),save:state=>deviceState(diagnosticKey,state),id:randomId,context:{deviceId:this.deviceId,pluginVersion:pluginManifest.version,platform:Platform.isMobile?'mobile':'desktop'}},{...connectionDiagnosticPolicy,retain:event=>diagnosticCategory(event)!==undefined,accept:event=>{const category=diagnosticCategory(event);return !!category&&this.diagnosticLogging[category];}});
+    await this.diagnostics.load();configureDiagnostics(this.diagnostics);streamMemory.reset();
+    for(const failure of sendFailureLog(this.app.loadLocalStorage(this.failureKey()),pluginManifest.version,this.deviceId).failures)this.diagnosticArchive.record({at:failure.at,sequence:1,sessionId:`legacy-send-failure-${contentHash(JSON.stringify(failure))}`,deviceId:this.deviceId,event:'response.send.failure',level:'error',fields:failure as unknown as Record<string,unknown>});
+    this.addCommand({id:'export-diagnostics',name:'View diagnostic log files',callback:()=>void this.exportDiagnostics().catch(error=>new Notice(message(error)))});
     if(typeof window!=='undefined'&&typeof window.addEventListener==='function'){
       const root=workspaceDocument(this.app);this.registerDomEvent(root,'visibilitychange',()=>logEvent('connection.client-state',{cause:'visibilitychange',visibility:root.visibilityState}));
       for(const event of ['online','offline'] as const)this.registerDomEvent(window,event,()=>logEvent('connection.client-state',{cause:event}));
@@ -414,7 +426,7 @@ export default class SendToT3 extends Plugin {
     if(typeof this.registerMarkdownCodeBlockProcessor==='function'){
       const prefix=`html-result:v1:${this.settings.vaultId}:`;
       const store=new HtmlResultStore({read:key=>deviceState(prefix+key),write:async(key,value)=>{await deviceState(prefix+key,value);}},environmentId=>this.inlineThreadAccess(environmentId),async url=>{
-        const response=await withTimeout(requestUrl({url,headers:{Accept:'text/html'},throw:false}),30_000);
+        const response=await requestUrl({url,headers:{Accept:'text/html'},throw:false});
         return {status:response.status,mimeType:Object.entries(response.headers).find(([key])=>key.toLowerCase()==='content-type')?.[1]??'',bytes:response.arrayBuffer};
       },{isSignInError:signInRequired,onDiagnostic:diagnostic=>logEvent('html.result.failure',diagnostic as unknown as Record<string,unknown>,'warning')});
       this.htmlResults=new HtmlResultViews(this.app,store,{onSignIn:()=>this.openSettings()});this.htmlResults.install(this);
@@ -433,11 +445,11 @@ export default class SendToT3 extends Plugin {
       localFinalNotes:deviceFinalNoteIO(this.app,()=>!this.stopped),
       rememberResponse:async(request,body,before,after,offset)=>{if(await rememberResponse(this.smartData(),request.notePath,request.id,body,before,after,offset))await this.save(true);},
       rememberNoteEdits:async(request,before,after)=>{if(await rememberNoteEdits(this.smartData(),request.notePath,request.id,before,after))await this.save(true);},
-      loadLocalCompletion:async request=>{const receipt=await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`);return isRecord(receipt)&&receipt.identity===localFinalIdentity(request)&&typeof receipt.saved==='boolean'?{saved:receipt.saved}:undefined;},
+      loadLocalCompletion:async request=>{const receipt=await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`);return isRecord(receipt)&&receipt.identity===localFinalIdentity(request)&&typeof receipt.saved==='boolean'?{saved:receipt.saved,...(receipt.removed===true?{removed:true}:{})}:undefined;},
       isVisible:path=>this.app.workspace.getActiveViewOfType(MarkdownView)?.file?.path===path,
       knownCompleted:request=>this.settings.responseBindings?.[request.id]?.completion?.identity===localFinalIdentity(request),
       retainLocalCompletion:async(request,saved,update)=>{
-        await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`,{version:1,identity:localFinalIdentity(request),saved});
+        await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`,{version:1,identity:localFinalIdentity(request),saved,...(!saved?{removed:true}:{})});
         if(saved&&update?.turnId){this.responseBindingReplica=completeResponseBinding(this.responseBindingReplica,request,update.turnId,contentHash(update.body),this.deviceId);this.settings.responseBindings=this.responseBindingReplica;await this.save(true);}
       },
       localBindings:()=>responseBindingRequests(this.settings.responseBindings??this.responseBindingReplica),
@@ -482,6 +494,11 @@ export default class SendToT3 extends Plugin {
     this.addCommand({id:'import-t3-run',name:'Import T3 run into this note…',checkCallback:checking=>{
       const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file;if(this.stopped||this.busy||!file||file.extension.toLowerCase()!=='md')return false;
       if(!checking)this.openRunImport(file);return true;
+    }});
+    this.addCommand({id:'catch-up-on-responses',name:'Catch up on responses',checkCallback:checking=>{
+      const view=this.app.workspace.getActiveViewOfType(MarkdownView),file=view?.file;
+      if(this.stopped||this.busy||!file||file.extension.toLowerCase()!=='md'||!this.noteCatchUpThreads(file.path,view.editor?.getValue()).length)return false;
+      if(!checking)this.openResponseCatchUp(file,view.editor?.getValue());return true;
     }});
     this.addCommand({id:'manage-note-t3-streams',name:'Manage T3 streams in this note…',checkCallback:checking=>{
       const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file;if(this.stopped||this.busy||!file||file.extension.toLowerCase()!=='md')return false;
@@ -704,6 +721,7 @@ export default class SendToT3 extends Plugin {
       const file=view.file;
       if(!file||file.extension.toLowerCase()!=='md')return;
       menu.addItem(item=>item.setTitle('Import T3 run into this note…').setIcon('download').setDisabled(this.busy).onClick(()=>this.openRunImport(file)));
+      this.addResponseCatchUpMenu(menu,file,editor.getValue());
       menu.addItem(item=>item.setTitle('Manage T3 streams in this note…').setIcon('list').setDisabled(this.busy).onClick(()=>void this.openImportStreams(file).catch(error=>new Notice(`T3 streams: ${message(error)}`,10000))));
       const targets=questionTargets(editor.getValue()).filter(target=>!this.questions?.isDismissed(target));
       if(targets.length)menu.addItem(item=>item.setTitle('Answer T3 question…').setIcon('message-circle-question').onClick(()=>this.openQuestion(targets[0])));
@@ -833,8 +851,13 @@ export default class SendToT3 extends Plugin {
     if(isClientCommand(input)){
       if(!this.clientMaintenance||this.stopped)throw Error('Client maintenance is unavailable.');
       const result=await this.clientMaintenance.execute(input);
+      if(input.kind==='diagnostic-settings'){
+        const previous={...this.diagnosticLogging};
+        for(const [category,enabled] of Object.entries(input.diagnosticPreferences??{}))this.setDiagnosticLogging(category as DiagnosticCategory,enabled);
+        return {...result,diagnosticSettings:{previous,enabled:{...this.diagnosticLogging}},diagnosticLog:this.diagnosticArchive?.status()};
+      }
       if(input.kind==='send-failure-log')return {...result,failureLog:this.diagnosticLog(input.since)};
-      return input.kind==='client-status'?{...result,commandServer:{transport:'t3-connect',connected:this.commandHosts.size},connectionRecovery:this.connectionRecovery?.status(),codeRangeCache:markdownCodeCacheStatus(),responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app),legacyRepliesRetired:true}:result;
+      return input.kind==='client-status'?{...result,diagnosticLog:this.diagnosticArchive?.status(),commandServer:{transport:'t3-connect',connected:this.commandHosts.size},connectionRecovery:this.connectionRecovery?.status(),codeRangeCache:markdownCodeCacheStatus(),responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app),legacyRepliesRetired:true}:result;
     }
     if(isResponseCommand(input)){
       const command=validateResponseCommand(input);
@@ -1202,16 +1225,89 @@ export default class SendToT3 extends Plugin {
       new ExistingThreadModal(this.app,threads,thread=>this.sendNote(file,thread.id,projectKey(project),false,overrideKey,resolve?.(),insertion),undefined,undefined,back).open();
     }catch(error){if(back)throw error;new Notice(`T3 Code: ${message(error)}`,10000);}
   }
+  private prepareImportAccess(){
+    const environments=[...new Set(this.settings.paired.map(connection=>connection.environmentId))].slice(0,4);
+    const controller=new AbortController();this.importPreparation.add(controller);
+    void forEachBounded(environments,2,async environmentId=>{
+      try{const access=await this.inlineThreadAccess(environmentId);try{await access.api.prepareImportCatalog?.(controller.signal);}finally{await access.close?.();}}catch{/* Selection reports a current route failure. */}
+    }).finally(()=>{this.importPreparation.delete(controller);});
+  }
   openRunImport(file:TFile){
     if(this.stopped||this.busy)return;
     const insertion=this.noteSendInsertion(file);
+    const catalogs=new WeakMap<ImportRun,ImportRun[]>();
+    const threadSources=new Map<string,ThreadAccess['api']>();
+    const read=async<T>(project:Project,operation:(access:ThreadAccess,environmentId:string)=>Promise<T>)=>{
+      const environmentId=this.connection(project).environmentId??await this.localInlineEnvironment(),access=await this.inlineThreadAccess(environmentId);
+      try{return await operation(access,environmentId);}finally{await access.close?.();}
+    };
+    this.prepareImportAccess();
     openRunImport(this.app,file.path,{
       projects:()=>this.projects(),projectLabel:project=>this.projectChoiceLabel(project),
-      threads:async project=>this.availableModeThreads(file.path,project,projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id)),
-      runs:async(project,thread)=>{const history=await this.readImportHistory(project,thread.id);return importRuns(history.state).filter(availableImportRun).map(run=>({...run,preview:importRunPreview(history.state,run,history.source.environmentId,thread.id)}));},
-      preview:(_project,_thread,run,el,child,signal)=>renderRunImportPreview(this.app,run,el,child,signal,this.htmlResults),
-      attach:(project,thread,run,follow)=>this.importRun(file.path,project,thread.id,run.messageId,follow,insertion),
+      threads:(project,signal)=>read(project,async access=>{threadSources.set(projectKey(project),access.api);return this.availableModeThreads(file.path,project,await readImportThreads(access,project.id,signal));}),
+      watchThreads:(project,changed)=>{const api=threadSources.get(projectKey(project));return api?.watchImportThreads?.(project.id,()=>{const threads=api.cachedImportThreads?.(project.id);if(threads)void this.availableModeThreads(file.path,project,threads).then(changed).catch(()=>{});})??(()=>{});},
+      runs:async(project,thread,signal,progress)=>{const remember=(runs:ImportRun[])=>{for(const run of runs)catalogs.set(run,runs);return runs;};return remember(await read(project,access=>readImportRuns(access,thread.id,project.id,signal,runs=>progress?.(remember(runs)))));},
+      prepareSelection:async(project,thread,run)=>{
+        if(!this.htmlResults||!run.turnId)return;
+        run.preview??=await read(project,(access,environmentId)=>readImportPreview(access,thread.id,project.id,run,environmentId));
+        const first=run.preview.html[0];if(first)await this.htmlResults.prefetch(first,activeDocument);
+      },
+      preview:async(project,thread,run,el,child,signal)=>{
+        if(!run.preview&&run.turnId)run.preview=await read(project,(access,environmentId)=>readImportPreview(access,thread.id,project.id,run,environmentId,signal));
+        if(!signal.aborted)await renderRunImportPreview(this.app,run,el,child,signal,this.htmlResults);
+      },
+      attach:(project,thread,run,follow)=>this.importRun(file.path,project,thread.id,run.messageId,follow,insertion,catalogs.get(run)),
     });
+  }
+  private noteCatchUpThreads(notePath:string,document=''){
+    return noteCatchUpThreads(notePath,this.settings.vaultId,this.settings.responseBindings??{},document,id=>{
+      const state=this.deviceInline?.cachedResponse(id)?.record.state;
+      return state?.turnIds??(state?.turnId?[state.turnId]:[]);
+    });
+  }
+  private openResponseCatchUp(file:TFile,document=''){
+    if(this.stopped||this.busy)return;
+    openResponseCatchUp(this.app,file.path,this.noteCatchUpThreads(file.path,document),threads=>this.catchUpResponses(file,threads));
+  }
+  private addResponseCatchUpMenu(menu:Menu,file:TFile,document:string){
+    if(this.noteCatchUpThreads(file.path,document).length)menu.addItem(item=>item.setTitle('Catch up on responses').setIcon('refresh-cw').setDisabled(this.busy).onClick(()=>this.openResponseCatchUp(file,document)));
+  }
+  private async catchUpResponses(file:TFile,selected:CatchUpThread[]){
+    if(this.stopped||this.busy||!this.deviceInline)throw Error('Obsidian is unavailable or sending another request.');
+    this.busy=true;
+    let saved=0,streaming=0,pending=0;
+    const failures:string[]=[];
+    new Notice('Catching up on T3 responses…',2000);
+    try{
+      for(const chosen of selected){
+        try{
+          const path=file.path,document=await deviceNoteIO(this.app).readNote(path);
+          if(document===undefined)throw Error('Destination note not found.');
+          const thread=this.noteCatchUpThreads(path,document).find(thread=>catchUpThreadKey(thread)===catchUpThreadKey(chosen));
+          if(!thread)throw Error('This note no longer has a stream from this thread.');
+          const project=await this.recoveryProject(thread.projectId,thread.environmentId),access=await this.inlineThreadAccess(thread.environmentId);
+          let catalog:ImportRun[];
+          try{catalog=await readImportRuns(access,thread.threadId,thread.projectId);}finally{await access.close?.();}
+          for(const run of catchUpRuns(thread,catalog)){
+            if(this.stopped||file.path!==path)throw Error('The note moved or the plugin was disabled. Try again.');
+            // A future-stream subscription may have attached this run while
+            // history loaded. Recheck its exact binding before importing it.
+            const current=await deviceNoteIO(this.app).readNote(path);
+            if(current===undefined)throw Error('Destination note not found.');
+            const latest=this.noteCatchUpThreads(path,current).find(thread=>catchUpThreadKey(thread)===catchUpThreadKey(chosen));
+            if(!latest)throw Error('This note no longer has a stream from this thread.');
+            if(!catchUpRuns(latest,catalog).some(candidate=>candidate.messageId===run.messageId))continue;
+            const result=await this.attachImportRun(path,project,thread.threadId,run.messageId,false,undefined,catalog);
+            if(result.saveState==='saved'){if(!result.duplicate)saved++;}
+            else if(result.saveState==='streaming')streaming++;
+            else {pending++;throw Error(runImportResultMessage(result));}
+          }
+        }catch(error){failures.push(`${chosen.title}: ${message(error)}`);}
+        if(this.stopped)break;
+      }
+      const summary=saved||streaming||pending?`${saved} response${saved===1?'':'s'} imported and saved.${streaming?` ${streaming} response${streaming===1?' is':'s are'} streaming until finished.`:''}${pending?` ${pending} response${pending===1?' is':'s are'} waiting to save.`:''}`:failures.length?'No responses imported.':'This note is up to date.';
+      new Notice([summary,...failures].join('\n'),failures.length?10000:5000);
+    }finally{this.busy=false;}
   }
   async openImportStreams(file:TFile){
     const result=await this.executeAgentCommand({version:1,id:randomId(),kind:'thread-streams'}) as ThreadDisplayResult;
@@ -1239,52 +1335,63 @@ export default class SendToT3 extends Plugin {
   }
 
   private async executeImportRead(_command:import('../responses/response-command').ResponseCommand,_target:ResponseStorageTarget):Promise<never>{throw Error('Legacy lease imports were retired. Imports read T3 directly.');}
-  private async readImportHistory(project:Project,threadId:string){
+  private async readImportHistory(project:Project,threadId:string,messageId:string,catalog?:ImportRun[]){
     if(this.stopped)throw Error('The plugin is disabled.');
     const connection=this.connection(project),environmentId=connection.environmentId??await this.localInlineEnvironment();
     const source={threadId,projectId:project.id,environmentId},access=await this.inlineThreadAccess(environmentId);
     let snapshot:ThreadSnapshot;
-    try{snapshot=await readInlineSnapshot(access,threadId,project.id,undefined,true,true);}finally{await access.close?.();}
+    let index:Awaited<ReturnType<typeof readImportRuns>>;
+    try{
+      index=catalog??await readImportRuns(access,threadId,project.id);
+      const selected=index.find(run=>run.messageId===messageId);
+      if(!selected?.turnId)throw Error('This response is no longer in the T3 run index.');
+      // Register the exact root and complete answer once. The response feed
+      // reuses this snapshot while retrieving the selected history separately.
+      snapshot=(await readImportRun(access,threadId,project.id,selected.turnId,{firstPageOnly:true,selected})).snapshot;
+      const turn=snapshot.thread.turns?.[selected.turnId]??(snapshot.thread.latestTurn?.turnId===selected.turnId?snapshot.thread.latestTurn:undefined);
+      if(typeof turn?.messageId==='string'?turn.messageId!==messageId:!snapshot.thread.messages.some(message=>message.id===messageId&&message.role==='user'&&message.turnId===selected.turnId))throw Error('The selected run no longer belongs to this source prompt.');
+    }finally{await access.close?.();}
     if(snapshot.thread.deletedAt||snapshot.thread.archivedAt)throw Error('This source thread is no longer available.');
-    const state:InlineThreadState=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
-    return {source,state,title:String(snapshot.thread.title??'T3 response').slice(0,200)};
+    const selectedState=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
+    return {source,snapshot,...importHistoryState(index,selectedState,messageId),title:String(snapshot.thread.title??'T3 response').slice(0,200)};
   }
   /** Attach without sending input, then use the imported thread for later sends. */
-  async importRun(notePath:string,project:Project,threadId:string,messageId:string,follow=false,insertion?:CursorInsertion|null):Promise<RunImportResult>{
+  async importRun(notePath:string,project:Project,threadId:string,messageId:string,follow=false,insertion?:CursorInsertion|null,catalog?:ImportRun[]):Promise<RunImportResult>{
     if(this.stopped||this.busy||!this.deviceInline)throw Error('Obsidian is unavailable or sending another request.');
     this.busy=true;
-    try{
-
-      await this.assertNoteMode(notePath,{...this.connection(project),projectId:project.id,threadId});
-      const history=await this.readImportHistory(project,threadId),run=importRuns(history.state).find(run=>run.messageId===messageId);
-      if(!run||run.unavailable||!run.turnId||!run.turn)throw Error(run?.unavailable??'This response is no longer in the T3 history.');
-      const document=await deviceNoteIO(this.app).readNote(notePath);if(document===undefined)throw Error('Destination note not found.');
-      const previous=findRunImport(document,history.source,messageId);
-      const binding=previous&&localResponseBindings(document,responseBindingRequests(this.settings.responseBindings??{})).find(request=>request.id===previous.bindingId&&request.vaultId===this.settings.vaultId);
-      const duplicate=!!previous,pending=!previous||!!responseFrame(document,previous.bindingId);
-      let bindingId=binding?.id;
-      if(binding)await this.deviceInline.register({...binding,notePath});
-      if(pending&&!binding){
-        const id=previous?.bindingId??importBindingId(history.source,messageId,notePath),host=await this.localResponseTarget({project,connection:this.connection(project)} as Request);
-        const policy=resolveJobOptions(this.settings.inlineStreaming).inline;
-        const prompt=history.state.messages.find(message=>message.id===messageId)!;
-        const request:ResponseRequest={version:4,id,localOnly:true,nativeProjection:true,responseContainer:true,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath,threadId,messageId,projectId:project.id,threadEnvironmentId:history.source.environmentId,createdAt:run.createdAt,threadTitle:history.title,independent:true,importTurn:run.turn,initialInput:isT3MessageId(messageId)?{messageId,text:prompt.text,label:incomingLabel(prompt)}:undefined,initialHash:initialRegion(id).bodyHash,keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode,finalAnswerFormat:policy.finalAnswerFormat};
-        const io=deviceNoteIO(this.app),receipt=runImportReceipt({version:1,bindingId:id,...history.source,messageId,runId:run.turnId});
-        const inserted=await editorStream(request,notePath,{...io,updateNote:(path,change,allowed)=>io.updateNote(path,current=>{const next=change(current);return findRunImport(next,history.source,messageId)?next:next+(next.endsWith('\n')?'':'\n')+receipt+'\n';},allowed)},()=>!this.stopped,id,insertion??undefined);
-        await this.deviceInline.register(inserted);
-        bindingId=id;
-      }
-      await this.ensureNoteIdentity(notePath);
-      this.rememberNoteThread(this.noteThreadIntent(notePath,project,{...this.connection(project),environmentId:history.source.environmentId}),threadId);
-      await this.save(true);
-      let save:Pick<RunImportResult,'saveState'|'pendingReason'>={saveState:pending?'streaming':'saved'};
-      if(pending&&bindingId&&run.status!=='Running'){
-        const result=await this.deviceInline.waitForSave(bindingId);
-        save=result.saved?{saveState:'saved'}:{saveState:'pending',pendingReason:result.reason};
-      }
-      if(follow)await this.followImportedThread(history.source,notePath,messageId,history.state);
-      return {duplicate,following:follow,...save};
-    }finally{this.busy=false;}
+    try{return await this.attachImportRun(notePath,project,threadId,messageId,follow,insertion,catalog);}finally{this.busy=false;}
+  }
+  private async attachImportRun(notePath:string,project:Project,threadId:string,messageId:string,follow=false,insertion?:CursorInsertion|null,catalog?:ImportRun[]):Promise<RunImportResult>{
+    if(this.stopped||!this.deviceInline)throw Error('Obsidian is unavailable.');
+    await this.assertNoteMode(notePath,{...this.connection(project),projectId:project.id,threadId});
+    const history=await this.readImportHistory(project,threadId,messageId,catalog),run=history.run??importRuns(history.state).find(run=>run.messageId===messageId);
+    if(!run||run.unavailable||!run.turnId||!run.turn)throw Error(run?.unavailable??'This response is no longer in the T3 history.');
+    const document=await deviceNoteIO(this.app).readNote(notePath);if(document===undefined)throw Error('Destination note not found.');
+    const previous=findRunImport(document,history.source,messageId);
+    const binding=previous&&localResponseBindings(document,responseBindingRequests(this.settings.responseBindings??{})).find(request=>request.id===previous.bindingId&&request.vaultId===this.settings.vaultId);
+    const duplicate=!!previous,pending=!previous||!!responseFrame(document,previous.bindingId);
+    let bindingId=binding?.id;
+    if(binding)await this.deviceInline.register({...binding,notePath});
+    if(pending&&!binding){
+      const id=previous?.bindingId??importBindingId(history.source,messageId,notePath),host=await this.localResponseTarget({project,connection:this.connection(project)} as Request);
+      const policy=resolveJobOptions(this.settings.inlineStreaming).inline;
+      const prompt=history.state.messages.find(message=>message.id===messageId)!;
+      const request:ResponseRequest={version:4,id,localOnly:true,nativeProjection:true,responseContainer:true,initialOwner:this.inlineActor,vaultId:this.settings.vaultId,host,notePath,threadId,messageId,projectId:project.id,threadEnvironmentId:history.source.environmentId,createdAt:run.createdAt,threadTitle:history.title,independent:true,importTurn:run.turn,initialInput:isT3MessageId(messageId)?{messageId,text:prompt.text,label:incomingLabel(prompt)}:undefined,initialHash:initialRegion(id).bodyHash,keepIntermediate:policy.intermediateMode!=='remove',intermediateMode:policy.intermediateMode,finalAnswerFormat:policy.finalAnswerFormat};
+      const io=deviceNoteIO(this.app),receipt=runImportReceipt({version:1,bindingId:id,...history.source,messageId,runId:run.turnId});
+      const inserted=await editorStream(request,notePath,{...io,updateNote:(path,change,allowed)=>io.updateNote(path,current=>{const next=change(current);return findRunImport(next,history.source,messageId)?next:next+(next.endsWith('\n')?'':'\n')+receipt+'\n';},allowed)},()=>!this.stopped,id,insertion??undefined);
+      await this.deviceInline.register(inserted,history.snapshot);
+      bindingId=id;
+    }
+    await this.ensureNoteIdentity(notePath);
+    this.rememberNoteThread(this.noteThreadIntent(notePath,project,{...this.connection(project),environmentId:history.source.environmentId}),threadId);
+    await this.save(true);
+    let save:Pick<RunImportResult,'saveState'|'pendingReason'>={saveState:pending?'streaming':'saved'};
+    if(pending&&bindingId&&run.status!=='Running'){
+      const result=await this.deviceInline.waitForSave(bindingId);
+      save=result.saved?{saveState:'saved'}:{saveState:'pending',pendingReason:result.reason};
+    }
+    if(follow)await this.followImportedThread(history.source,notePath,messageId,history.state);
+    return {duplicate,following:follow,...save};
   }
   async sendNote(file:TFile,threadId?:string,expectedProjectKey?:string,newThread=false,overrideKey?:string,jobOptions?:ResolvedJobOptions,insertion=this.noteSendInsertion(file)){
     if(this.busy)return;
@@ -1632,18 +1739,15 @@ export default class SendToT3 extends Plugin {
   private async pairedThreadAccess(paired:PairedConnection,forceRefresh=false):Promise<ThreadAccess>{
     const environmentId=paired.environmentId;
     const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId,connectionId:paired.id};
-    let session=await this.sessionFor(paired.id,forceRefresh),api=await environmentApi(connection,session);
+    let session=await this.sessionFor(paired.id,forceRefresh);
     // Verify authorization before exposing a candidate to sends or writes.
     // A failed open can try another endpoint for the same machine; the caller
     // operation is never part of this fallback.
     const key=JSON.stringify([paired.url,environmentId,session?.token,session?.expiresAt,session?.dpopKeyId]);
-    let verified=this.verifiedConnections.get(key);
-    if(forceRefresh||!verified||verified.until<=Date.now()){
-      const work=this.routeStatus.request(paired.id,()=>api('/api/orchestration/shell')).then(()=>{});verified={work,until:Date.now()+30_000};this.verifiedConnections.set(key,verified);
-      while(this.verifiedConnections.size>16)this.verifiedConnections.delete(this.verifiedConnections.keys().next().value!);
-      void work.catch(()=>{if(this.verifiedConnections.get(key)?.work===work)this.verifiedConnections.delete(key);});
-    }
-    await verified.work;
+    let api=await this.verifiedConnections.open(key,async()=>{
+      const candidate=await environmentApi(connection,session);
+      await this.routeStatus.request(paired.id,()=>verifyOrchestrationRead(candidate));return candidate;
+    },forceRefresh,(session?.expiresAt??0)-5000);
     if(!Platform.isMobile&&localRoute(paired))this.eventLocalEnvironmentId=environmentId;
     let renewing:Promise<void>|undefined;
     const routed:ThreadAccess['api']=async(path,payload,options)=>this.routeStatus.request(paired.id,async()=>{
@@ -1664,9 +1768,13 @@ export default class SendToT3 extends Plugin {
           }
           return await api(path,payload,options);
         }
-      }catch(error){this.routeFailures.set(paired.id,message(error));throw error;}
+      }catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403))this.verifiedConnections.delete(key);this.routeFailures.set(paired.id,message(error));throw error;}
     });
     routed.trackConnection=connection=>this.routeStatus.track(paired.id,connection);
+    routed.cachedImportThreads=projectId=>api.cachedImportThreads?.(projectId);
+    Object.defineProperty(routed,'importCacheIdentity',{get:()=>api.importCacheIdentity});
+    routed.prepareImportCatalog=signal=>api.prepareImportCatalog?.(signal)??Promise.resolve();
+    routed.watchImportThreads=(projectId,changed)=>api.watchImportThreads?.(projectId,changed)??(()=>{});
     return {origin:endpoint(paired.url),diagnosticRoute:{routeId:paired.id,environmentId,routeKind:localRoute(paired)?'local':'remote'},get expiresAt(){return session?.expiresAt;},api:routed};
   }
   private async localInlineEnvironment():Promise<string>{
@@ -1790,7 +1898,16 @@ export default class SendToT3 extends Plugin {
     // Each host coalesces its own tick. An offline machine must not hold the
     // ready clients behind a global poll promise. The registration cap bounds
     // these independent channels; command dispatch remains serialized.
+    this.syncDiagnosticLogFiles();
     for(const [environmentId,entry] of this.commandHosts)void entry.host.tick().catch(async error=>{if(this.commandHosts.get(environmentId)!==entry)return;this.commandHosts.delete(environmentId);logFailure('commands.poll',error,{environmentId});await entry.host.dispose();entry.rpc.close();});
+  }
+  private syncDiagnosticLogFiles(){
+    if(!this.diagnosticArchive)return;
+    const local=this.settings.paired.find(connection=>localRoute(connection))?.environmentId;
+    const environmentId=diagnosticMachine([...this.commandHosts].map(([environmentId,entry])=>({environmentId,workspaceRoot:entry.host.route.workspaceRoot})),this.localVaultPath(),local);if(!environmentId)return;
+    const entry=this.commandHosts.get(environmentId);if(!entry||entry.rpc.closed)return;
+    const workspaceRoot=entry.host.route.workspaceRoot,directory=`.t3-obsidian/diagnostics/${this.settings.vaultId}/${this.deviceId}`;
+    void this.diagnosticArchive?.sync(connectDiagnosticFiles(entry.rpc,workspaceRoot),{environmentId,workspaceRoot,directory}).catch(()=>{});
   }
   private async startThreadDisplays(){
     if(this.threadDisplays||this.stopped)return;if(this.threadDisplayOpening)return this.threadDisplayOpening;
@@ -2101,10 +2218,12 @@ export default class SendToT3 extends Plugin {
     finally{this.busy=false;}
   }
   async exportDiagnostics(){
-    const modal=new Modal(this.app);modal.titleEl.setText('Diagnostic log');
-    const log=this.diagnosticLog();
-    modal.contentEl.createEl('p',{text:'The last 64 send failures and enabled connection, Follow or response events on this device. Events are limited to 512 records, 256 KB and seven days. Message text and credentials are excluded.'});
-    const field=modal.contentEl.createEl('textarea',{cls:'send-to-t3-failure-log'});field.readOnly=true;field.value=JSON.stringify(log,null,2);
+    this.memoryCheckpoint('manual');await this.diagnosticArchive?.settle();this.syncDiagnosticLogFiles();
+    const modal=new Modal(this.app);modal.titleEl.setText('Diagnostic log files');
+    const status=this.diagnosticArchive?.status();
+    modal.contentEl.createEl('p',{text:'Logs are saved automatically as ordinary JSONL files on the connected T3 machine. Agents can read these files without an export. All recorded history is retained until you delete it. Only the recent preview and transfer batches are bounded.'});
+    modal.contentEl.createEl('p',{text:status?.workspaceRoot&&status.directory?`${status.workspaceRoot}/${status.directory}`:'Waiting for the local T3 connection. Recorded events remain on this device until file delivery succeeds.'});
+    if(status?.localError||status?.fileError)modal.contentEl.createEl('p',{text:`Log write error: ${status.localError||status.fileError}`});
     modal.open();
   }
 
@@ -2466,7 +2585,7 @@ export default class SendToT3 extends Plugin {
   private sharedSnapshot():SharedSettings{const {pending,completionJobs,settlementJobs,connection,projects,directProjects,selected,directSelected,directScanId,...shared}=this.settings;return jsonClone(shared);}
   private sharedData(input:unknown):SharedSettings{
     const data=storedSettings(input);
-    return {...this.sharedSnapshot(),threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),responseBindings:loadResponseBindingData(data?.responseBindings),smartSend:loadSmartSend(data?.smartSend),autoSettleThreads:data?.autoSettleThreads!==false,
+    return {...this.sharedSnapshot(),threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),responseBindings:loadResponseBindingData(data?.responseBindings),smartSend:loadSmartSend(data?.smartSend),autoSettleThreads:data?.autoSettleThreads===true,
       vaultHost:loadVaultHost(data?.vaultHost),
       inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},
       completion:{action:'keep',archiveFolder:''}};
@@ -2802,7 +2921,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }
   }
-  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;configureDiagnostics();void this.diagnostics?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async monitorCompletions() {
     if(this.monitoring||this.stopped||this.busy)return;
     this.monitoring=true;try{await this.monitorSettlements();}finally{this.monitoring=false;}
@@ -2902,7 +3021,7 @@ export class T3Settings extends PluginSettingTab {
       {type:'page',name:'Connection',items:this.connectionDefinitions()},
       {type:'page',name:'Replies',items:this.replyPageDefinitions()},
       {type:'page',name:'Projects',items:[block('Linked folders and project files',['Vault connection','Connect vault','Change machine','Unlink','Codebase view','Open project files'],el=>this.projectsUI(el))]},
-      {type:'page',name:'Advanced',items:[block('Troubleshooting',['Send failure log','Diagnostic log','Connection logging','Follow logging','Response logging'],el=>this.advancedUI(el))]},
+      {type:'page',name:'Advanced',items:[block('Troubleshooting',['Diagnostic log files','Connection logging','Follow logging','Response logging','Streaming memory logging'],el=>this.advancedUI(el))]},
     ];
   }
   refresh(){this.update();}
@@ -2990,7 +3109,8 @@ export class T3Settings extends PluginSettingTab {
     new Setting(el).setName('Connection logging').setDesc('Record connection, reconnect and recovery events on this device only. Off by default.').addToggle(toggle=>toggle.setValue(preferences.connection).onChange(enabled=>this.plugin.setDiagnosticLogging('connection',enabled)));
     new Setting(el).setName('Follow logging').setDesc('Record when auto-scroll starts, pauses, resumes or turns off on this device only. Off by default.').addToggle(toggle=>toggle.setValue(preferences.follow).onChange(enabled=>this.plugin.setDiagnosticLogging('follow',enabled)));
     new Setting(el).setName('Response logging').setDesc('Record response recovery, rendering and final-save decisions on this device only. Off by default.').addToggle(toggle=>toggle.setValue(preferences.response).onChange(enabled=>this.plugin.setDiagnosticLogging('response',enabled)));
-    new Setting(el).setName('Diagnostic log').setDesc('View send failures and enabled diagnostic events from this device. Nothing is synced.').addButton(button=>button.setButtonText('View log').onClick(()=>this.plugin.exportDiagnostics()));
+    new Setting(el).setName('Streaming memory logging').setDesc('Sample browser JS heap and streaming counters on this device. Off by default; at most one activity sample per 5 seconds plus bounded lifecycle checkpoints. No message text, RSS or cgroup measurement.').addToggle(toggle=>toggle.setValue(preferences.memory).onChange(enabled=>this.plugin.setDiagnosticLogging('memory',enabled)));
+    new Setting(el).setName('Diagnostic log files').setDesc('Save diagnostic history automatically as agent-readable JSONL files on the connected T3 machine. No retention limit or export step.').addButton(button=>button.setButtonText('Show location').onClick(()=>this.plugin.exportDiagnostics()));
   }
 
   private replyPageDefinitions():SettingDefinitionItem[]{const fields=this.replyDefinitions();return [...fields.slice(0,-1),{type:'page',name:'Beta',desc:'Optional thread and note behavior.',items:[fields.at(-1)!]}];}
@@ -2999,7 +3119,7 @@ export class T3Settings extends PluginSettingTab {
       {name:'Stream replies into the editor',desc:'Insert Send and Ask replies into the note. Selection replies appear below the selection; other replies use the captured cursor position or follow its paragraph.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));}},
       {name:'Final answer format',desc:'Applies to new responses. Both formats support images and files.',render:setting=>{setting.addDropdown(dropdown=>dropdown.addOptions({formatted:'Current formatting','raw-markdown':'Raw Markdown'}).setValue(finalAnswerFormat(this.plugin.settings.inlineStreaming.finalAnswerFormat)).onChange(async value=>{this.plugin.settings.inlineStreaming.finalAnswerFormat=finalAnswerFormat(value);await this.plugin.save();}));}},
       {name:'Thread title generation',desc:'Use note titles by default, or let T3 name every new thread. Existing titles stay the same.',render:setting=>{setting.addDropdown(d=>d.addOption('untitled-only','Only for untitled notes').addOption('always','Always use T3').setValue(this.plugin.settings.threadTitleGeneration).onChange(async value=>{this.plugin.settings.threadTitleGeneration=threadTitleGeneration(value);await this.plugin.save();}));}},
-      {name:'Settle completed threads',desc:'Move threads to Settled after a successful turn and saved reply. Sending again wakes the thread. Checks run while Obsidian is open.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.autoSettleThreads).onChange(async enabled=>{this.plugin.settings.autoSettleThreads=enabled;if(!enabled)this.plugin.settings.settlementJobs=[];await this.plugin.save();}));}},
+      {name:'Settle completed threads',desc:'Off by default. Move threads to Settled after a successful turn and saved reply. Sending again wakes the thread. Checks run while Obsidian is open.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.autoSettleThreads).onChange(async enabled=>{this.plugin.settings.autoSettleThreads=enabled;if(!enabled)this.plugin.settings.settlementJobs=[];await this.plugin.save();}));}},
       {name:'Thread and note mode',desc:'Free is the default and allows many-to-many links. 1:1 keeps one thread per note and one note per thread. The most recent links select existing 1:1 pairs. Saved replies and link history are kept when you switch.',render:setting=>{setting.addDropdown(d=>d.addOptions({free:'Free · Many-to-many','one-to-one':'1:1 · One thread per note'}).setValue(threadNoteMode(this.plugin.settings.threadNoteMode)).onChange(async value=>{this.plugin.settings.threadNoteMode=threadNoteMode(value);await this.plugin.save();}));}},
     ];
   }

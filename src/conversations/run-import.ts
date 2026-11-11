@@ -60,7 +60,7 @@ export function importRuns(state:InlineThreadState):ImportRun[]{
       else {
         run.status=phase==='complete'?'Completed':phase==='error'?'Failed':phase==='interrupted'?'Interrupted':'Running';
         const known=state.turns?.[turnId]??(state.latestTurn?.turnId===turnId?state.latestTurn:undefined);
-        run.turn={...known,turnId,messageId:message.id,requestedAt:createdAt,state:known?.state??'running'};
+        run.turn={...known,turnId,messageId:message.id,requestedAt:createdAt,state:known?.state??(phase==='complete'?'completed':phase==='error'?'error':phase==='interrupted'?'interrupted':'running')};
       }
     }
     if(turnId)roots.add(turnId);
