@@ -65,7 +65,7 @@ import {readInlineSnapshot,watchThread,type ThreadAccess} from '../conversations
 import {isRecoveryCommand} from '../responses/recovery-command';
 import {abortableRead,requestAborted} from '../connection/t3-api';
 import {mountToolGroups} from '../responses/response-tool-presentation';
-import {importRuns,importBindingId,importFollowId,runImportResultMessage,type RunImportResult,type ImportRun} from '../conversations/run-import';
+import {attachAllImportRuns,importRuns,importBindingId,importFollowId,runImportResultMessage,type RunImportResult,type ImportRun} from '../conversations/run-import';
 import {renderRunImportPreview} from '../conversations/run-import-preview';
 import {findRunImport,runImportReceipt} from '../conversations/run-import-receipt';
 import {openRunImport,ImportStreamsModal,openResponseCatchUp} from '../conversations/run-import-ui';
@@ -1256,6 +1256,11 @@ export default class SendToT3 extends Plugin {
         if(!signal.aborted)await renderRunImportPreview(this.app,run,el,child,signal,this.htmlResults);
       },
       attach:(project,thread,run,follow)=>this.importRun(file.path,project,thread.id,run.messageId,follow,insertion,catalogs.get(run)),
+      attachAll:async(project,thread,runs,follow)=>{
+        if(this.stopped||this.busy||!this.deviceInline)throw Error('Obsidian is unavailable or sending another request.');
+        this.busy=true;
+        try{return await attachAllImportRuns(runs,follow,(run,follow)=>this.attachImportRun(file.path,project,thread.id,run.messageId,follow,undefined,catalogs.get(run)));}finally{this.busy=false;}
+      },
     });
   }
   private noteCatchUpThreads(notePath:string,document=''){
