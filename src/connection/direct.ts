@@ -144,9 +144,10 @@ export function commandId(id:string,name:string){
  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))throw Error('Invalid request ID.');
  const b=Buffer.from(sha1(Buffer.concat([Buffer.from(id.replace(/-/g,''),'hex'),Buffer.from(name)]))).slice(0,16);b[6]=(b[6]&15)|80;b[8]=(b[8]&63)|128;const h=b.toString('hex');return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
 }
-export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Promise<void>,fetcher?:Fetcher,access?:ThreadAccess){
+export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Promise<void>,fetcher?:Fetcher,access?:ThreadAccess,beforeThreadCreate?:()=>void|Promise<void>){
  const environment=access?.api??await environmentApi(r.connection,s,fetcher);
- const api=(path:string,payload?:unknown)=>environment('/api/orchestration/'+path,payload);
+ const requestOptions=beforeThreadCreate?{beforeThreadCreate}:undefined;
+ const api=(path:string,payload?:unknown)=>environment('/api/orchestration/'+path,payload,requestOptions);
  const hash=Buffer.from(sha256(Buffer.from(JSON.stringify({project:r.project.id,title:r.title,prompt:r.prompt,attachments:r.attachments??[],context:r.context??null,...(r.threadId?{threadId:r.threadId}:{})})))).toString('hex');
  if(r.directPlan&&(r.directPlan.hash!==hash||r.directPlan.environmentId!==r.connection.environmentId))throw Error('Saved request no longer matches its original content or environment.');
  if(!r.directPlan){
@@ -171,7 +172,7 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
   if(!plan.create)throw Error('The saved T3 creation command is missing. Nothing was sent.');
   const {commandId,threadId,projectId,title,modelSelection,runtimeMode,interactionMode}=plan.create;
   const {messageId,text,attachments,context}=plan.turn.message;
-  await environment('/api/orchestration/launch',{commandId,threadId,projectId,title,generateTitle:plan.generateTitle??true,modelSelection,runtimeMode,interactionMode,creationSource:'web',workspaceStrategy:plan.workspaceStrategy??{type:'root'},initialMessage:{messageId,text,attachments,...(context?{context}:{})}});
+  await environment('/api/orchestration/launch',{commandId,threadId,projectId,title,generateTitle:plan.generateTitle??true,modelSelection,runtimeMode,interactionMode,creationSource:'web',workspaceStrategy:plan.workspaceStrategy??{type:'root'},initialMessage:{messageId,text,attachments,...(context?{context}:{})}},requestOptions);
   plan.phase='started';await save();
  }
  if(plan.phase==='prepared'){await api('dispatch',{...plan.create,...(plan.protocolVersion===2?{}:{__legacyV1:true})});plan.phase='created';await save();}
