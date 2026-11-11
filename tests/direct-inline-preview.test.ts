@@ -205,7 +205,7 @@ test('a local reply follows two exact delegated deliveries and verifies only the
  event('subagent.updated',{...child('two'),status:'completed',completionDelivery:{state:'acknowledged',observedByRunId:'resume-two'}});
  event('turn-item.updated',{id:'final-item',messageId:'combined',threadId:'thread',runId:'resume-two',type:'assistant_message',status:'completed',text:'Combined report',streaming:false,updatedAt:'2026-10-06T03:01:00.000Z'});
  event('run.updated',{...resume('resume-two',4,'delivery-two'),status:'completed',completedAt:'2026-10-06T03:05:00Z'});await settle();
- const update=h.updates.at(-1)!;assert.equal(update.turnId,'resume-two');assert.equal(update.phase,'complete');assert.equal(update.completionVerified,true,JSON.stringify({reads,checkpoint:update.checkpoint,body:update.body}));assert.deepEqual(update.turnIds,['turn','resume-one','resume-two']);assert.deepEqual(reads,['final-item']);assert.match(update.body,/· Completed/);assert.match(update.body,/Combined report/);assert.doesNotMatch(update.body,/Waiting for subagents|Unrelated answer/);
+ const update=h.updates.at(-1)!;assert.equal(update.turnId,'resume-two');assert.equal(update.phase,'complete');assert.equal(update.completionVerified,true,JSON.stringify({reads,checkpoint:update.checkpoint,body:update.body}));assert.deepEqual(update.turnIds,['turn','resume-one','resume-two']);assert.deepEqual(reads,['final-item']);assert.match(update.body,/· Worked for/);assert.match(update.body,/Combined report/);assert.doesNotMatch(update.body,/Waiting for subagents|Unrelated answer/);
  h.preview.dispose();
 });
 test('a local source awaiting final save follows its exact late question answer in the same response',async()=>{
