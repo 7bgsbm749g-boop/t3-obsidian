@@ -32,6 +32,12 @@ test('tagging checks the original project and persists lost acknowledgements wit
   h.failTag(false);await h.visibility.apply(h.access,'one',true,'credential');assert.deepEqual(h.commands.map(command=>command.commandId),[job.id,job.id]);
   assert.ok(h.commands.every(command=>command.type==='thread.tag.set'&&command.tag==='t3-obsidian'&&command.tagged===true));assert.deepEqual(h.stored(),[]);
 });
+test('forced synchronization repairs external filter changes while ordinary calls stay cached',async t=>{
+  const h=fixture(t);await h.visibility.apply(h.access,'one',true,'credential');const reads=h.reads();
+  h.settings.hiddenThreadTags=['private'];h.settings.hideTaggedThreads=false;
+  await h.visibility.apply(h.access,'one',true,'credential');assert.equal(h.reads(),reads);assert.equal(h.settings.hideTaggedThreads,false);
+  await h.visibility.apply(h.access,'one',true,'credential',true);assert.ok(h.reads()>reads);assert.deepEqual(h.settings.hiddenThreadTags,['private','t3-obsidian']);assert.equal(h.settings.hideTaggedThreads,true);
+});
 test('restart retains pending tags, isolates environments, and refuses a mismatched project',async t=>{
   const h=fixture(t,[job,{...job,id:'remote',environmentId:'two'}]);h.wrongProject(true);
   await assert.rejects(h.visibility.apply(h.access,'one',true,'credential'),/original Obsidian thread/);assert.equal(h.commands.length,0);

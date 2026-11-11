@@ -579,7 +579,7 @@ export default class SendToT3 extends Plugin {
     this.settings.settlementJobs=this.settings.settlementJobs.filter(job=>job&&typeof job.requestId==='string'&&typeof job.messageId==='string'&&typeof job.threadId==='string'&&typeof job.projectId==='string'&&job.connection&&!retiredConnection(job.connection)).map(job=>({...job,connection:migrateConnection(job.connection)}));
     this.threadVisibility=new ThreadVisibility({load:()=>{const value:unknown=this.app.loadLocalStorage(`t3-thread-tags:${this.deviceId}:${this.settings.vaultId}`);return value;},save:jobs=>this.app.saveLocalStorage(`t3-thread-tags:${this.deviceId}:${this.settings.vaultId}`,jobs)});
     await this.initializeProjectCatalog();
-    configureBridge({mobile:Platform.isMobile,access:environmentId=>this.inlineThreadAccess(environmentId),pairedSession:id=>this.sessionFor(id),saveRequest:async request=>{if(!this.settings.pending.includes(request))throw Error('Saved request is missing. Nothing was sent.');const plan=request.directPlan;if(request.hideObsidianThread&&plan?.create)this.threadVisibility?.queue({id:commandId(request.id,'thread-tag'),threadId:plan.create.threadId,projectId:plan.create.projectId,environmentId:plan.environmentId});this.persistAgentCommand(request);await this.save();}});
+    configureBridge({beforeThreadCreate:request=>{const plan=request.directPlan;if(request.hideObsidianThread&&plan?.create)this.threadVisibility?.queue({id:commandId(request.id,'thread-tag'),threadId:plan.create.threadId,projectId:plan.create.projectId,environmentId:plan.environmentId});},mobile:Platform.isMobile,access:environmentId=>this.inlineThreadAccess(environmentId),pairedSession:id=>this.sessionFor(id),saveRequest:async request=>{if(!this.settings.pending.includes(request))throw Error('Saved request is missing. Nothing was sent.');this.persistAgentCommand(request);await this.save();}});
     // Migrate unfinished desktop requests once, but do not rewrite the shared
     // settings file merely because this device started. Credentials and jobs
     // are device-local.
@@ -2956,7 +2956,7 @@ export default class SendToT3 extends Plugin {
             const api=await environmentApi({transport:'direct',host:'direct',executable:'',url:paired.url,environmentId:paired.environmentId,connectionId:paired.id},session);
             await verifyOrchestrationRead(api);credentialKey=session?.token??paired.id;return {origin:endpoint(paired.url),api};
           }});
-          try{await this.threadVisibility!.apply(access,environmentId,enabled,credentialKey);}finally{await access.close?.();}
+          try{await this.threadVisibility!.apply(access,environmentId,enabled,credentialKey,force);}finally{await access.close?.();}
         }catch(error){failures.push(`${this.settings.paired.find(paired=>paired.environmentId===environmentId)?.name??environmentId}: ${message(error)}`);logFailure('thread.visibility.failed',error,{environmentId});}
       }
       if(failures.length&&!this.stopped)new Notice(`Thread visibility is waiting on ${failures.join('; ')}. It will be checked again on reconnect.`,12000);

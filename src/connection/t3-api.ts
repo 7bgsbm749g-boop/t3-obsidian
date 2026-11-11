@@ -8,7 +8,7 @@ import {htmlRenderFromToolItem} from '../responses/html-results';
 
 interface Attachment {id:string;dataUrl?:string;type?:string;name?:string;mimeType?:string;sizeBytes?:number}
 
-export interface T3RequestOptions {signal?:AbortSignal;compactImport?:boolean;onImportSnapshot?:(snapshot:import('./wire-types').ThreadSnapshot)=>void}
+export interface T3RequestOptions {beforeThreadCreate?:()=>void|Promise<void>;signal?:AbortSignal;compactImport?:boolean;onImportSnapshot?:(snapshot:import('./wire-types').ThreadSnapshot)=>void}
 export type AbortableT3Api=(path:string,payload?:unknown,options?:T3RequestOptions)=>Promise<unknown>;
 
 export function cancelledRequest(message='Request cancelled.'):Error{return typeof DOMException==='function'?new DOMException(message,'AbortError'):Object.assign(Error(message),{name:'AbortError'});}
@@ -124,7 +124,14 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
     // Internal route for a new auto-titled thread and its immutable first send.
     if(path==='/api/orchestration/launch'){
       const rpc=await connectT3Rpc(raw,origin,makeSocket);
-      try{if(!isRecord(payload)||typeof payload.threadId!=='string')throw Error('Invalid T3 launch identity.');return await rpc.call('orchestration.launchThread',{...payload,initialMessage:await persistAttachments(rpc,payload.threadId,outgoingMessage(payload.initialMessage))});}finally{rpc.close();}
+      try{
+        if(!isRecord(payload)||typeof payload.threadId!=='string')throw Error('Invalid T3 launch identity.');
+        const initialMessage=await persistAttachments(rpc,payload.threadId,outgoingMessage(payload.initialMessage));
+        // Reservation follows uploads but precedes the creation RPC: failed uploads
+        // leave no orphan, while an uncertain creation retains its retry record.
+        await options?.beforeThreadCreate?.();requestAborted(options?.signal);
+        return await rpc.call('orchestration.launchThread',{...payload,initialMessage});
+      }finally{rpc.close();}
     }
     if(path==='/api/orchestration/dispatch'){
       if(!isRecord(payload))throw Error('Invalid saved T3 dispatch.');
@@ -163,6 +170,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       const rpc=await connectT3Rpc(raw,origin,makeSocket);
       try{
         if(command.type==='message.dispatch'){if(typeof command.threadId!=='string')throw Error('Invalid saved T3 thread identity.');command={...command,...await persistAttachments(rpc,command.threadId,outgoingMessage(command))};}
+        if(command.type==='thread.create'){await options?.beforeThreadCreate?.();requestAborted(options?.signal);}
         return await rpc.call('orchestration.dispatchCommand',command);
       }finally{rpc.close();}
     }

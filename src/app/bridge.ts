@@ -30,7 +30,7 @@ export function parseProjects(value: unknown): Project[] {
     ids.add(p.id); return {id:p.id,title:p.title,workspaceRoot:p.workspaceRoot};
   });
 }
-interface Runtime {mobile:boolean;access?:(environmentId:string)=>Promise<ThreadAccess>;pairedSession?:(id:string)=>PairedSession|undefined|Promise<PairedSession|undefined>;saveRequest?:(request:Request)=>Promise<void>}
+interface Runtime {beforeThreadCreate?:(request:Request)=>void|Promise<void>;mobile:boolean;access?:(environmentId:string)=>Promise<ThreadAccess>;pairedSession?:(id:string)=>PairedSession|undefined|Promise<PairedSession|undefined>;saveRequest?:(request:Request)=>Promise<void>}
 let runtime:Runtime|undefined;
 export function configureBridge(value:Runtime) {runtime=value;}
 // The retired value remains readable only to reject old persisted work safely.
@@ -52,7 +52,7 @@ export async function sendRequest(request: Request) {
   if(request.connection.transport==='direct'){
     if(!runtime?.saveRequest)throw Error('Direct request storage is unavailable.');
     const access=request.connection.environmentId&&runtime.access?await runtime.access(request.connection.environmentId):undefined;
-    try{return await sendDirect(request,access?undefined:await runtime.pairedSession?.(request.connection.connectionId??''),()=>runtime!.saveRequest!(request),undefined,access);}finally{await access?.close?.();}
+    try{return await sendDirect(request,access?undefined:await runtime.pairedSession?.(request.connection.connectionId??''),()=>runtime!.saveRequest!(request),undefined,access,request.hideObsidianThread?()=>runtime!.beforeThreadCreate?.(request):undefined);}finally{await access?.close?.();}
   }
   throw Error('Reconnect this request through T3 Connect before sending.');
 }

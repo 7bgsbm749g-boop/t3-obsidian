@@ -22,19 +22,19 @@ export class ThreadVisibility {
     if(this.jobs.length>=1000)throw Error('Too many pending thread tags. Connect T3 before creating more hidden threads.');
     this.jobs.push(job);this.store.save(this.jobs);
   }
-  apply(access:ThreadAccess,environmentId:string,enabled:boolean,credentialKey:string):Promise<void>{
+  apply(access:ThreadAccess,environmentId:string,enabled:boolean,credentialKey:string,force=false):Promise<void>{
     if(this.stopped)return Promise.resolve();
-    const pending=this.work.get(environmentId);if(pending)return pending.catch(()=>{}).then(()=>this.apply(access,environmentId,enabled,credentialKey));
+    const pending=this.work.get(environmentId);if(pending)return pending.catch(()=>{}).then(()=>this.apply(access,environmentId,enabled,credentialKey,force));
     const key=JSON.stringify([environmentId,credentialKey]);
-    if(this.configured.get(key)===enabled&&!this.jobs.some(job=>job.environmentId===environmentId))return Promise.resolve();
-    const work=this.update(access,environmentId,enabled,key).finally(()=>{if(this.work.get(environmentId)===work)this.work.delete(environmentId);});
+    if(!force&&this.configured.get(key)===enabled&&!this.jobs.some(job=>job.environmentId===environmentId))return Promise.resolve();
+    const work=this.update(access,environmentId,enabled,key,force).finally(()=>{if(this.work.get(environmentId)===work)this.work.delete(environmentId);});
     this.work.set(environmentId,work);return work;
   }
-  private async update(access:ThreadAccess,environmentId:string,enabled:boolean,key:string){
+  private async update(access:ThreadAccess,environmentId:string,enabled:boolean,key:string,force:boolean){
     const rpc=await connectT3Rpc(access.api,access.origin);
     try{
       if(this.stopped)return;
-      if(this.configured.get(key)!==enabled){
+      if(force||this.configured.get(key)!==enabled){
         const read=async()=>{const config=await rpc.call('server.getConfig',{});if(!isRecord(config)||!isRecord(config.settings)||!Array.isArray(config.settings.hiddenThreadTags)||!config.settings.hiddenThreadTags.every(tag=>typeof tag==='string')||typeof config.settings.hideTaggedThreads!=='boolean')throw Error('Update this T3 server to use thread hiding.');return config.settings as {hiddenThreadTags:string[];hideTaggedThreads:boolean};};
         const settings=await read();if(this.stopped)return;
         const tags=enabled?(settings.hiddenThreadTags.includes(OBSIDIAN_THREAD_TAG)?[...settings.hiddenThreadTags]:[...settings.hiddenThreadTags,OBSIDIAN_THREAD_TAG]):settings.hiddenThreadTags.filter(tag=>tag.trim()!==OBSIDIAN_THREAD_TAG);
