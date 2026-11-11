@@ -62,6 +62,7 @@ async function folderMenuHarness(initial?:any){
     constructor(public app:any){}
     open(){modals.push(this);(this as any).onOpen?.();}
     close(){this.closed=true;(this as any).onClose?.();}
+    onClose(){}
     setPlaceholder(_value:string){return this;}
   }
   class Base {}
@@ -312,6 +313,15 @@ test('a single paired remote No project works without local CLI discovery or a c
   const reads:any[]=[];h.plugin.readNoProjectProject=async(connection:any)=>{reads.push(connection);return {id:'remote-scratch',title:'No project',workspaceRoot:'/remote-scratch'};};
   const result=await h.plugin.noProjectTarget();assert.equal(result.project.connectionId,'c');assert.equal(reads.length,1);assert.equal(reads[0].transport,'direct');assert.equal(h.modals.length,0);assert.equal(h.notices.length,notices);
   await assert.rejects(h.plugin.noProjectTarget('thread:no-project:local'),/selected local T3/);assert.equal(reads.length,1);
+  h.plugin.defaultNoProjectMachine=()=>undefined;
+  const choosing=h.plugin.noProjectTarget(),picker=h.modals.at(-1);
+  assert.equal(reads.length,1,'Opening the machine picker must not send or read a project');
+  picker.close();picker.onChooseItem(h.plugin.vaultMachines()[0]);
+  assert.equal((await choosing).project.connectionId,'c','Native close-before-choose order must retain the selected machine');
+  assert.equal(reads.length,2);
+  const cancelled=h.plugin.noProjectTarget(),rejected=assert.rejects(cancelled,/Machine selection was cancelled/);
+  h.modals.at(-1).close();await rejected;
+  assert.equal(reads.length,2,'Cancelling must not resolve a project');
  }finally{h.plugin.onunload();}
 });
 
