@@ -216,10 +216,14 @@ test('one stalled machine cannot block healthy projects and ignored reads expire
  assert.equal(reads.filter(read=>Number(read.id)<4).length,1);
  // A host that ignores AbortSignal must still release its scheduling slot.
  for(const callback of [...timers.values()])callback();await drain();
- assert.deepEqual(Array.from(picker.getItems(),(item:any)=>item.id),['healthy-4','healthy-8'],'deadlines let further machines load');assert.ok(reads.find(read=>read.id==='0')!.signal.aborted);assert.ok(reads.some(read=>read.id==='1'),'the next round proceeds after deadlines');
+ assert.deepEqual(Array.from(picker.getItems(),(item:any)=>item.id),['healthy-4','healthy-8'],'deadlines let further machines load');assert.ok(reads.find(read=>read.id==='0')!.signal.aborted);assert.ok(reads.some(read=>read.id==='1'),'queued projects proceed after deadlines');
  assert.equal(picker.inputEl.value,'keep search');picker.close();await drain();
  assert.ok(reads.every(read=>read.signal.aborted||read.id==='4'||read.id==='8'));assert.equal(timers.size,0,'closing cancels all owned deadlines');
  const count=reads.length;await drain();assert.equal(reads.length,count,'closing stops queued projects');
+ // Later projects on a healthy machine do not wait for an unrelated timeout.
+ reads.length=0;
+ module.exports.openRunImport({},'Synthetic.md',{projects:()=>projects.slice(0,6),projectLabel:(p:any)=>p.id,machineKey:(p:any)=>Number(p.id)<4?'stalled':'healthy',threads:(p:any,signal:AbortSignal)=>{reads.push({id:p.id,signal});return Number(p.id)<4?new Promise(()=>{}):Promise.resolve([{id:'healthy-'+p.id,title:'Healthy',status:'Idle'}]);},runs:async()=>[],attach:async()=>{throw Error('Do not import');}});
+ await drain();const second=opened.at(-1);assert.deepEqual(reads.map(read=>read.id),['0','4','5']);assert.equal(second.getItems().length,2);second.close();await drain();assert.equal(timers.size,0);
 });
 
 test('All runs appears only after complete history and never previews or imports a synthetic run',async()=>{

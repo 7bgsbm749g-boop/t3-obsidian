@@ -1,6 +1,5 @@
 import {Component,FuzzySuggestModal,Modal,Notice,Setting,setIcon,type App,type FuzzyMatch} from 'obsidian';
 import {projectKey,type Project} from '../app/bridge';
-import {forEachBounded} from '../shared/bounded-work';
 import {abortableRead,requestAborted} from '../connection/t3-api';
 import {clockForDocument} from '../shared/clock';
 import type {ThreadChoice} from './thread-target';
@@ -170,11 +169,13 @@ export class ImportThreadPicker extends FuzzySuggestModal<ImportThread>{
       this.status?.setText(pending?`Recent threads · loading ${pending} projects…`:failed.length?`Could not load ${failed.join(', ')}. Other projects are shown. Reopen import to retry.`:`Recent threads · all ${projects.length} projects`);
       this.inputEl.dispatchEvent(new Event('input'));
     };
-    // Start one project per machine each round. Several projects awaiting the
-    // same connection must not occupy every slot ahead of a healthy machine.
-    while(machines.size&&!this.closed&&!this.flow.signal.aborted)await forEachBounded([...machines],4,async([key,queue])=>{
+    // Only one read per machine can hold a slot. Requeue that machine after
+    // each project so healthy machines can continue without a round barrier.
+    const queued=[...machines.values()];
+    await Promise.all(Array.from({length:Math.min(4,queued.length)},async()=>{for(;;){
       if(this.closed||this.flow.signal.aborted)return;
-      const project=queue.shift()!;if(!queue.length)machines.delete(key);
+      const queue=queued.shift();if(!queue)return;
+      const project=queue.shift()!;
       const controller=new AbortController(),cancel=()=>controller.abort(this.reads.signal.reason);
       this.reads.signal.addEventListener('abort',cancel,{once:true});
       const timer=clock.setTimeout(()=>controller.abort(Error('Thread loading timed out.')),IMPORT_THREAD_READ_TIMEOUT);
@@ -185,7 +186,8 @@ export class ImportThreadPicker extends FuzzySuggestModal<ImportThread>{
         const stop=this.host.watchThreads?.(project,threads=>{group.threads=threads;publish();});if(stop)this.stops.push(stop);
       }catch{if(!this.flow.signal.aborted)failed.push(this.host.projectLabel(project));}
       finally{clock.clearTimeout(timer);this.reads.signal.removeEventListener('abort',cancel);pending--;publish();}
-    });if(!projects.length)publish();
+      if(queue.length)queued.push(queue);
+    }}));if(!projects.length)publish();
   }
   onChooseItem(item:ImportThread){this.selected=true;void this.choose(item).catch(error=>{if(!this.flow.signal.aborted)new Notice(`Import T3 run: ${error instanceof Error?error.message:String(error)}`,10000);});}
   onClose(){this.closed=true;this.observer?.disconnect();this.stopLoading();this.flow.signal.removeEventListener('abort',this.stopLoading);queueMicrotask(()=>{if(!this.selected)this.flow.abort();});super.onClose();}
