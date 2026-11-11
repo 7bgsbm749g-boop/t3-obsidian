@@ -657,7 +657,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const status=handoffError?'\n\n'+handoffError:errorStatus?'\n\n'+errorStatus:approvals?'\n\n'+approvals:'';
   const contents=[input.trimEnd(),prose].filter(Boolean).join('\n\n');
   const body=contents?`\n\n${contents}\n`:'';
-  return `${followupIndex<0?heading+timer+spinner+(tasks?'\n\n'+tasks:''):''}${status}${body}${toolHistory?'\n\n'+toolHistory:''}${questions?`\n\n${questions}\n`:''}${bottom}${bottom?'\n':''}`;
+  return `${followupIndex<0?heading+timer+spinner:''}${status}${body}${toolHistory?'\n\n'+toolHistory:''}${questions?`\n\n${questions}\n`:''}${bottom}${bottom?'\n':''}`;
 }
 
 export function turnPhase(state:InlineThreadState,turnId:string):'running'|'complete'|'interrupted'|'error' {
