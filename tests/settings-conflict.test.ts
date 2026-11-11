@@ -29,6 +29,34 @@ test('established vault startup and device-only saves do not rewrite synced sett
   assert.equal(h.saves(),1,'an actual shared setting change is persisted');
 });
 
+test('automatic thread settlement requires an explicit saved opt-in on startup and Sync refresh',async()=>{
+  for(const value of [undefined,false,null,'true',1,true]){
+    const initial=value===undefined?{vaultId:'vault'}:{vaultId:'vault',autoSettleThreads:value};
+    const h=await harness(initial);
+    assert.equal(h.plugin.settings.autoSettleThreads,value===true);
+    assert.equal(h.saves(),0,'loading a default must not rewrite synced settings');
+    h.plugin.settings.threadTitleGeneration='always';await h.plugin.save();
+    assert.equal(h.current().autoSettleThreads,value===true);
+    const restarted=await harness(h.current());assert.equal(restarted.plugin.settings.autoSettleThreads,value===true);
+    h.setCurrent({...h.current(),autoSettleThreads:true});await h.plugin.onExternalSettingsChange();
+    assert.equal(h.plugin.settings.autoSettleThreads,true);
+    h.plugin.settings.settlementJobs.push({requestId:'pending'});
+    const incoming={...h.current()};delete incoming.autoSettleThreads;h.setCurrent(incoming);
+    await h.plugin.onExternalSettingsChange();
+    assert.equal(h.plugin.settings.autoSettleThreads,false);assert.equal(h.plugin.settings.settlementJobs.length,0);
+  }
+});
+
+test('disabled automatic settlement does not restore device jobs or settle a new send',async()=>{
+  const h=await harness({vaultId:'vault',autoSettleThreads:true});
+  h.plugin.settings.settlementJobs.push({requestId:'pending',messageId:'message',threadId:'thread',projectId:'project',connection:{executable:'',host:'',transport:'direct',environmentId:'environment'}});await h.plugin.saveDeviceState();
+  const enabled=await harness(h.current(),h.deviceId);assert.equal(enabled.plugin.settings.settlementJobs.length,1);
+  const restarted=await harness({vaultId:'vault'},h.deviceId);
+  assert.equal(restarted.plugin.settings.settlementJobs.length,0);
+  restarted.plugin.rememberSettlement({connection:{}},'thread');
+  assert.equal(restarted.plugin.settings.settlementJobs.length,0);
+});
+
 test('project creation locations sync as complete machine/path choices and persist through restart',async()=>{
   const h=await harness({vaultId:'vault'});
   const locations=[{connectionId:'laptop',environmentId:'windows',parentPath:'C:\\Projects',selectedAt:'2026-10-20T12:00:00Z'}];
