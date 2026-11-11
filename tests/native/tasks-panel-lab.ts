@@ -29,6 +29,13 @@ export default class TasksPanelLab extends Plugin {
       const child=new MarkdownRenderChild(details);this.addChild(child);
       child.register(mountToolGroups(details,value=>nativeResponses(this.app).toolGroup(details,value),(html,target)=>MarkdownRenderer.render(this.app,details.classList.contains('send-to-t3-response-history')?nativeResponses(this.app).renderToolBody(details,html):html,target,this.app.workspace.getActiveFile()?.path??'',child),error=>this.write('lazy-error.json',{message:String(error)})));
     },true);
+    // The product opens the retained History shell when its native callout opens.
+    const openHistories=()=>{
+      for(const details of Array.from(document.querySelectorAll<HTMLDetailsElement>('details.send-to-t3-response-history[data-t3-tool-ref]:not([open])'))){
+        const fold=details.closest('.callout[data-callout="t3-progress"]');if(fold&&!fold.classList.contains('is-collapsed'))details.open=true;
+      }
+    };
+    const historyObserver=new MutationObserver(openHistories);historyObserver.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});this.register(()=>historyObserver.disconnect());
     const {EditorState}=require('@codemirror/state');this.registerEditorExtension(EditorState.transactionFilter.of((tr:any)=>nativeResponses(this.app).filter(tr)));
     this.app.workspace.onLayoutReady(()=>void this.run().catch(error=>this.write('error.json',{message:String(error),stack:error.stack})).finally(()=>this.cleanup()));
   }
