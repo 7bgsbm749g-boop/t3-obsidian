@@ -1,10 +1,11 @@
 import {readThreadEvent} from '../../src/connection/thread-events';
-import {Plugin,MarkdownView,setIcon} from 'obsidian';
+import {Plugin,MarkdownView,MarkdownRenderer,MarkdownRenderChild,setIcon} from 'obsidian';
 import {DirectInlinePreview} from '../../src/responses/direct-inline-preview';
 import {nativeResponses} from '../../src/responses/native-response-manager';
 import {responseAnchor} from '../../src/responses/native-response-projection';
 import {hiddenInlineMarkerExtension} from '../../src/conversations/inline-markers';
 import {installResponsePresentation} from '../../src/responses/response-presentation';
+import {mountToolGroups} from '../../src/responses/response-tool-presentation';
 import {contentHash} from '../../src/responses/completion';
 import type {ResponseRecord} from '../../src/responses/response-record';
 import type {ThreadStreamCallbacks,watchThread} from '../../src/conversations/thread-stream';
@@ -20,6 +21,14 @@ export default class TasksPanelLab extends Plugin {
     if(!fs.existsSync(path.join(this.root,'ISOLATED-NATIVE-LAB')))throw Error('An isolated fixture vault is required.');
     this.registerEditorExtension(hiddenInlineMarkerExtension());this.register(installResponsePresentation(document,setIcon));
     require('@electron/remote').getCurrentWebContents().setBackgroundThrottling(false);
+    const mounted=new WeakMap<HTMLDetailsElement,string>();
+    this.registerDomEvent(document,'toggle' as any,(event:Event)=>{
+      const details=event.target as HTMLDetailsElement;
+      if(!details?.matches?.('details[data-t3-tool-ref]')||!details.open)return;
+      const ref=details.getAttribute('data-t3-tool-ref')!;if(mounted.get(details)===ref)return;mounted.set(details,ref);
+      const child=new MarkdownRenderChild(details);this.addChild(child);
+      child.register(mountToolGroups(details,value=>nativeResponses(this.app).toolGroup(details,value),(html,target)=>MarkdownRenderer.render(this.app,details.classList.contains('send-to-t3-response-history')?nativeResponses(this.app).renderToolBody(details,html):html,target,this.app.workspace.getActiveFile()?.path??'',child),error=>this.write('lazy-error.json',{message:String(error)})));
+    },true);
     const {EditorState}=require('@codemirror/state');this.registerEditorExtension(EditorState.transactionFilter.of((tr:any)=>nativeResponses(this.app).filter(tr)));
     this.app.workspace.onLayoutReady(()=>void this.run().catch(error=>this.write('error.json',{message:String(error),stack:error.stack})).finally(()=>this.cleanup()));
   }
@@ -82,12 +91,14 @@ export default class TasksPanelLab extends Plugin {
     await until(()=>leaves.every(leaf=>panel(leaf)?.textContent?.includes('Verify Markdown slash')));
     check('distinct task IDs keep two timeline lists and a new closed choice',leaves.every(leaf=>!panel(leaf)?.open&&fold(leaf)?.querySelectorAll('.send-to-t3-tasks').length===2&&panel(leaf)?.querySelectorAll('[data-t3-task-state="in_progress"]').length===1));
     for(const leaf of leaves)panel(leaf)?.querySelector<HTMLElement>('summary')?.click();
+    await until(()=>leaves.every(leaf=>!!panel(leaf)?.open));await pause(150);
     await this.capture('tasks-updated.png');
     check('generated Tasks never changes saved note text',leaves.every(leaf=>(leaf.view as MarkdownView).getViewData()===saved)&&await app.vault.read(file)===saved);
     event('thread.message-sent',{messageId:'final',role:'assistant',text:'Task display verified.',turnId:'turn',createdAt:at(20),streaming:false});event('thread.session-set',{session:{status:'ready',activeTurnId:null}});
     await until(()=>leaves.every(leaf=>fold(leaf)?.classList.contains('is-collapsed')));
     for(const leaf of leaves)fold(leaf)?.querySelector<HTMLElement>(':scope > .callout-title')?.click();
     await until(()=>leaves.every(leaf=>!fold(leaf)?.classList.contains('is-collapsed')));
+    await until(()=>leaves.every(leaf=>!!panel(leaf)?.open&&!!panel(leaf)?.querySelector('.lucide-list-checks')));
     check('task expansion survives completion and reopening history',leaves.every(leaf=>panel(leaf)?.open&&!!panel(leaf)?.querySelector('.lucide-list-checks')));
     this.write('TASKS-DOM.json',{body:lastBody,modes:leaves.map(leaf=>(leaf.view as MarkdownView).getMode()),folds:leaves.map(leaf=>fold(leaf)?.outerHTML)});
     await this.capture('tasks-complete.png');
