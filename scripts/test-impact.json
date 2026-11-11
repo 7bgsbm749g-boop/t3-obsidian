@@ -1,5 +1,8 @@
 {
   "dependencies": {
+    "tests/pending-client-reload.test.ts": [
+      "tests/native/pending-client-reload-lab.js"
+    ],
     "tests/response-catch-up.test.ts": [
       "tests/native/response-catch-up-lab.ts"
     ],

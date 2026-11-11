@@ -13,6 +13,8 @@ import {ThreadDisplays,isThreadCommand,type ThreadDisplayResult} from '../conver
 import type {ThreadTarget as EventTarget} from '../conversations/thread-display';
 import {readPrivateStorageRoute} from '../storage/private-storage';
 import {DesktopClientMaintenance} from './client-maintenance-desktop';
+import {PendingClientReload,clientReloadPaths,clientRuntimeFiles,clientRuntimeHash,clientReloadEditorsSaved,type ClientRuntimeHashes,type PendingReloadState} from './pending-client-reload';
+import type {Events} from 'obsidian';
 import * as cmState from '@codemirror/state';
 import {loadQuestionRecords} from '../interaction/question-controller';
 import {loadApprovalRecords} from '../interaction/approval-controller';
@@ -212,6 +214,7 @@ export default class SendToT3 extends Plugin {
   private threadDisplays?:ThreadDisplays;
   private threadDisplayOpening?:Promise<void>;
   private clientMaintenance?:DesktopClientMaintenance;
+  private pendingClientReload?:PendingClientReload;
   private saving = Promise.resolve();
   private sharedBaseline='';
   private lastDiskSnapshot='';
@@ -484,6 +487,7 @@ export default class SendToT3 extends Plugin {
       return true;
     }});
     this.app.workspace.onLayoutReady(()=>{
+      this.startPendingClientReload();
       const refresh=()=>{void this.refreshNoteCommandHost().then(()=>this.startThreadDisplays()).catch(error=>logFailure('commands.start',error));};
       refresh();void this.startThreadDisplays().catch(error=>logFailure('reply.follow.start',error));this.registerInlineInterval(refresh,5000);this.registerInlineInterval(()=>{void this.tickCommandHosts();},1000);
     });
@@ -669,6 +673,7 @@ export default class SendToT3 extends Plugin {
       const tick=()=>{
         const now=Date.now();if(now-lastTick>2000)resume();lastTick=now;
         if(performance.now()>=nextNativeRefresh)refreshNative();this.deviceInline?.tick();
+        void this.pendingClientReload?.idleChanged()?.catch(error=>logFailure('client.pending-reload',error));
       };
       tick();this.registerInlineInterval(tick,150);
     });
@@ -1899,6 +1904,46 @@ export default class SendToT3 extends Plugin {
     // these independent channels; command dispatch remains serialized.
     this.syncDiagnosticLogFiles();
     for(const [environmentId,entry] of this.commandHosts)void entry.host.tick().catch(async error=>{if(this.commandHosts.get(environmentId)!==entry)return;this.commandHosts.delete(environmentId);logFailure('commands.poll',error,{environmentId});await entry.host.dispose();entry.rpc.close();});
+  }
+  private startPendingClientReload(){
+    if(this.stopped||this.pendingClientReload)return;
+    const adapter=this.app.vault.adapter,{request:requestPath,result:resultPath}=clientReloadPaths(this.app.vault.configDir,this.deviceId);
+    const runtimeRoot=`${this.app.vault.configDir}/plugins/${this.manifest.id}`,paths=new Set<string>([requestPath,...clientRuntimeFiles.map(name=>`${runtimeRoot}/${name}`)]);
+    const key=`pending-client-reload:${this.settings.vaultId}:${this.deviceId}`;
+    const active=()=>!this.stopped&&!workspaceDocument(this.app).hidden;
+    const idle=()=>!this.busy&&!Object.entries(this.deviceInline?.health()??{}).some(([name,value])=>['sources','readers','opening','queued','canonicalReads','attachments','saveQueued','saveWorkers'].includes(name)&&typeof value==='number'&&value>0);
+    const pending=new PendingClientReload({
+      client:this.clientMaintenance!.client,vaultId:this.settings.vaultId,clientId:this.deviceId,active,idle,editorsSaved:()=>clientReloadEditorsSaved(this.app),
+      request:async()=>{const stat=await adapter.stat(requestPath);if(!stat)return;if(stat.type!=='file'||stat.size>4096)throw Error('Invalid device reload request file.');return adapter.read(requestPath);},
+      runtime:async()=>{
+        const hashes={} as ClientRuntimeHashes;
+        for(const name of clientRuntimeFiles){
+          const path=`${runtimeRoot}/${name}`,stat=await adapter.stat(path);
+          if(!stat||stat.type!=='file'||stat.size>16000000)throw Error('Runtime file is unavailable or too large.');
+          const bytes=await adapter.readBinary(path);if(bytes.byteLength>16000000)throw Error('Runtime file is too large.');
+          hashes[name]=clientRuntimeHash(bytes);
+        }
+        return hashes;
+      },
+      load:()=>deviceState<PendingReloadState>(key),save:state=>deviceState(key,state).then(()=>{}),
+      result:async value=>{await adapter.write(resultPath,JSON.stringify(value)+'\n');},
+      reload:()=>this.serializeCommand(async()=>{
+        if(!active()||!idle())return 'deferred';
+        if(!await clientReloadEditorsSaved(this.app))return 'deferred-save';
+        return !active()||!idle()?'deferred':this.clientMaintenance!.reloadCurrent(()=>!this.stopped);
+      }),
+    });
+    this.pendingClientReload=pending;this.register(()=>pending.dispose());
+    const check=()=>{void pending.check().catch(error=>logFailure('client.pending-reload',error));};
+    const events:Events=this.app.vault;
+    this.registerEvent(events.on('raw',(path:unknown)=>{if(typeof path==='string'&&paths.has(path))check();}));
+    const saved=()=>{void pending.saveChanged()?.catch(error=>logFailure('client.pending-reload',error));};
+    this.registerEvent(this.app.vault.on('modify',file=>{if(this.app.workspace.getLeavesOfType('markdown').some(leaf=>(leaf.view as MarkdownView).file?.path===file.path))saved();}));
+    this.registerEvent(this.app.workspace.on('file-open',saved));this.registerEvent(this.app.workspace.on('layout-change',saved));
+    const activeDocument=workspaceDocument(this.app),activeWindow=activeDocument.defaultView;
+    if(typeof activeDocument.addEventListener==='function')this.registerDomEvent(activeDocument,'visibilitychange',()=>{if(!activeDocument.hidden)check();});
+    if(activeWindow){this.registerDomEvent(activeWindow,'focus',check);this.registerDomEvent(activeWindow,'online',check);}
+    check();
   }
   private syncDiagnosticLogFiles(){
     if(!this.diagnosticArchive)return;
