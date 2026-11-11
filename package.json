@@ -1,6 +1,6 @@
 {
   "name": "t3-obsidian",
-  "version": "0.0.432",
+  "version": "0.0.434",
   "private": true,
   "description": "Bring T3 Code into your vault. Send notes as prompts, stream replies into the editor, and more.",
   "license": "MIT",

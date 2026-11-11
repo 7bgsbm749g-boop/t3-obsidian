@@ -41,7 +41,6 @@ import {isClientCommand} from './client-command';
 import {markdownCodeCacheStatus,escapeReplyHtml} from '../responses/reply-html';
 import pluginManifest from '../../manifest.json';
 import {appendSendFailure,sendFailureLog,type SendFailure} from '../responses/send-failures';
-import {ConnectionRecovery} from '../connection/connection-recovery';
 import {PLUGIN_PERMISSIONS,AGENT_SETUP_PERMISSIONS,hasPluginPermissions} from '../connection/environment-permissions';
 import {REAUTHENTICATE_MESSAGE,SignInRequiredError,signInRequired} from '../connection/sign-in-state';
 import {T3HttpError} from '../conversations/thread-access-cache';
@@ -263,8 +262,6 @@ export default class SendToT3 extends Plugin {
   }
   private diagnosticLog(since?:string){this.memoryCheckpoint('manual');const diagnostics=this.diagnostics?.snapshot(since);return {...sendFailureLog(this.app.loadLocalStorage(this.failureKey()),pluginManifest.version,this.deviceId,since),...(diagnostics?{diagnostics:{...diagnostics,enabled:{...this.diagnosticLogging},responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app)}}:{})};}
   private failedRequests=new WeakSet<Request>();
-  private connectionRecovery?:ConnectionRecovery;
-  private connectionRecoveryTarget(target:ResponseStorageTarget){return JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);}
   private failureKey(){return `t3-send-failures-v1:${this.settings.vaultId}`;}
   private recordSendFailure(request:Request|undefined,error:unknown,stage:string,startedAt:number){
     const derived=(part:string)=>{try{return request?commandId(request.id,part):undefined;}catch{return undefined;}};
@@ -347,7 +344,7 @@ export default class SendToT3 extends Plugin {
     this.compactNoteCommandReceipts();
     const state=await deviceState<Partial<Pick<Settings,'pending'|'completionJobs'|'settlementJobs'>>&{queued?:Array<Request&{threadId:string;superseded?:boolean}>}>(this.deviceId);
     const defaults:Connection={executable:'',host:'direct',transport:'direct'};
-    this.clientMaintenance=new DesktopClientMaintenance(this.app,'','',pluginManifest.version);
+    this.clientMaintenance=new DesktopClientMaintenance(pluginManifest.version);
     this.mode='direct';
     this.connectionMethod=['connect','local','https','ssh'].includes(local?.connectionMethod??'')?local!.connectionMethod!:'connect';
     this.routeOrder=Array.isArray(local?.routeOrder)?local.routeOrder.filter((id):id is string=>typeof id==='string'):[];
@@ -358,16 +355,6 @@ export default class SendToT3 extends Plugin {
     this.signInExpired=local?.signInExpired===true&&!this.nativeAccount;
     this.vaultRegistrations=local?.vaultRegistrations??{};
     this.settings = {threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],vaultHost:loadVaultHost(data?.vaultHost),inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:'keep',archiveFolder:''},completionJobs:[],settlementJobs:data?.autoSettleThreads===true&&Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads===true,hideObsidianThreads:threadHiding(data?.hideObsidianThreads),folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
-    if(!Platform.isMobile){
-      const key=`t3-connection-recovery-v1:${this.settings.vaultId}`;
-      this.connectionRecovery=new ConnectionRecovery({
-        load:()=>{const value:unknown=this.app.loadLocalStorage(key);return value&&typeof value==='object'?value:{};},
-        save:value=>this.app.saveLocalStorage(key,value),
-        reload:beforeDispatch=>this.reloadForConnection(beforeDispatch),
-        failure:()=>{/* Retry only if Obsidian itself could not invoke the reload. */},
-      });
-      this.app.workspace.onLayoutReady(()=>this.registerInlineInterval(()=>this.connectionRecovery?.tick(),1000));
-    }
     this.responseBindingReplica=mergeResponseBindingData(data?.responseBindings,await deviceState(`response-bindings:${this.deviceId}:${this.settings.vaultId}`));
     this.settings.responseBindings=this.responseBindingReplica;
     const completionKey=`t3-completion-glow:${this.settings.vaultId}`;
@@ -471,8 +458,7 @@ export default class SendToT3 extends Plugin {
       localConnection:(id,issue)=>nativeResponses(this.app).connection(id,issue),
       localQuestions:update=>{if(update.questionActivities)this.questions?.observe(update.request.threadEnvironmentId,update.request.threadId,update.questionActivities,update.sequence);},
       localFinalBody:async update=>rewriteReplyReferences(update.body,async reference=>{try{return await resolveReplyReference(this.app,reference,update.request,await this.inlineThreadAccess(update.request.threadEnvironmentId));}catch{return undefined;}}),
-      connectionTimeout:(target,error)=>{if(this.connectionRecovery?.failed(this.connectionRecoveryTarget(target),error))this.recordSendFailure(undefined,error,'connection-timeout',Date.now()-error.elapsedMs);},
-      connectionRecovered:target=>this.connectionRecovery?.recovered(this.connectionRecoveryTarget(target)),
+      connectionTimeout:(_target,error)=>this.recordSendFailure(undefined,error,'connection-timeout',Date.now()-error.elapsedMs),
       completionActor:this.deviceId,
       completionFailed:error=>new Notice(`T3 Code: ${message(error)}`,10000),
       loadStops:()=>{const value:unknown=this.app.loadLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`);return Array.isArray(value)?value.filter((id:unknown):id is string=>typeof id==='string'):[];},
@@ -871,7 +857,7 @@ export default class SendToT3 extends Plugin {
         return {...result,diagnosticSettings:{previous,enabled:{...this.diagnosticLogging}},diagnosticLog:this.diagnosticArchive?.status()};
       }
       if(input.kind==='send-failure-log')return {...result,failureLog:this.diagnosticLog(input.since)};
-      return input.kind==='client-status'?{...result,diagnosticLog:this.diagnosticArchive?.status(),commandServer:{transport:'t3-connect',connected:this.commandHosts.size},connectionRecovery:this.connectionRecovery?.status(),codeRangeCache:markdownCodeCacheStatus(),responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app),legacyRepliesRetired:true}:result;
+      return input.kind==='client-status'?{...result,diagnosticLog:this.diagnosticArchive?.status(),commandServer:{transport:'t3-connect',connected:this.commandHosts.size},codeRangeCache:markdownCodeCacheStatus(),responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app),legacyRepliesRetired:true}:result;
     }
     if(isResponseCommand(input)){
       const command=validateResponseCommand(input);
@@ -1823,7 +1809,6 @@ export default class SendToT3 extends Plugin {
         load:id=>deviceState(`connect-receipt:${this.settings.vaultId}:${this.deviceId}:${id}`),
         save:(id,receipt)=>this.retainCommandReceipt(id,receipt),
         execute:async(command,target)=>{if(this.stopped||!this.settings.paired.some(connection=>connection.environmentId===target.environmentId))throw Error('This T3 machine was disconnected.');const result=await this.executeAgentCommand(command,target);if(!isRecord(result))throw Error('Invalid command result.');return result;},
-        acknowledged:async(command,result)=>{if(isClientCommand(command))await this.clientMaintenance!.acknowledged(command,result as unknown as import('./client-command').ClientCommandResult);},
       });
       if(this.stopped||!this.settings.paired.some(connection=>connection.environmentId===environmentId)){await host.dispose();rpc.close();return;}
       this.commandHosts.set(environmentId,{host,rpc,files});await host.tick();
@@ -1961,15 +1946,6 @@ export default class SendToT3 extends Plugin {
     this.registerInlineInterval(()=>{if(service.active)void service.tick().catch(error=>logFailure('reply.follow',error));},1000);
     this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{void service.rename(oldPath,file.path).catch(error=>logFailure('reply.rename',error));}));
   }
-  private async reloadForConnection(beforeDispatch:()=>boolean){
-    if(this.stopped||Platform.isMobile)return false;
-    const dispatch=()=>{if(!beforeDispatch())return false;new Notice('T3 Code: The connection stopped responding. Reloading Obsidian.',10000);return true;};
-    if(this.clientMaintenance)return this.clientMaintenance.reloadCurrent(dispatch);
-    if(!dispatch())return false;
-    if(!nativeHost(this.app).commands.executeCommandById('app:reload'))throw Error('Obsidian refused the native reload command.');
-    return true;
-  }
-
   private async inlineHostTarget():Promise<ResponseStorageTarget>{
     const machine=this.defaultNoProjectMachine(),paired=this.settings.paired.find(connection=>connection.id===machine)??this.settings.paired[0];
     if(!paired)throw Error('Connect T3 before streaming replies.');
@@ -2937,7 +2913,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
-  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async setThreadHiding(enabled:boolean){this.settings.hideObsidianThreads=enabled;await this.save();await this.syncThreadVisibility();}
   private syncThreadVisibility(force=false):Promise<void>{
     if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve();

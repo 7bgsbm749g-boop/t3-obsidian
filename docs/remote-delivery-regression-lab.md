@@ -1,3 +1,7 @@
+> Historical regression fixture: built-in application reload commands and automatic
+> connection-recovery reloads have been removed. This document describes the old
+> implementation, not a current installation or reload procedure.
+
 # Remote delivery regression on the VPS
 
 This regression uses the two independent desktops in
