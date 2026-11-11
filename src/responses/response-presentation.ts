@@ -17,9 +17,8 @@ export interface RunTiming {startedAt:string;finishedAt?:string}
 export function elapsedRun(timing:RunTiming,now=Date.now()):string {
   const start=Date.parse(timing.startedAt),end=timing.finishedAt?Date.parse(timing.finishedAt):now;
   const seconds=Number.isFinite(start)&&Number.isFinite(end)?Math.max(0,Math.floor((end-start)/1000)):0;
-  const parts=[Math.floor(seconds/60)%60,seconds%60].map(value=>String(value).padStart(2,'0'));
-  if(seconds>=3600)parts.unshift(String(Math.floor(seconds/3600)).padStart(2,'0'));
-  return parts.join(':');
+  if(seconds<60)return `${seconds}s`;
+  return [Math.floor(seconds/3600)?`${Math.floor(seconds/3600)}h`:'',Math.floor(seconds/60)%60?`${Math.floor(seconds/60)%60}m`:'',seconds%60?`${seconds%60}s`:''].filter(Boolean).join(' ');
 }
 export function runTimer(timing:RunTiming):string {
   const start=Date.parse(timing.startedAt),end=Date.parse(timing.finishedAt??'');

@@ -747,7 +747,7 @@ export default class SendToT3 extends Plugin {
       for(const id of cursorId?[cursorId]:ids){
         if(this.deviceInline?.responseStatus(id)?.runTerminal)continue;
         const failed=active.find(job=>job.id===id)?.phase==='error'||failedInlineIds(editor.getValue()).includes(id);
-        const label=/^(?:> \[!t3-progress\][+-] )?\*\*(.+) · (?:Sending…?|Working|Reconnecting|Error)\*\*/m.exec(regionBody(editor.getValue(),id)?.body??'')?.[1];
+        const label=/^(?:> \[!t3-progress\][+-] )?\*\*(.+) · (?:Sending…?|Working(?: for)?|Reconnecting|Error)\*\*/m.exec(regionBody(editor.getValue(),id)?.body??'')?.[1];
         const suffix=ids.length>1?` (${label&&label!=='T3'?label+' · ':''}${id.slice(0,8)})`:'';
         if(failed){
           menu.addItem(item=>item.setTitle('Continue T3 response'+suffix).setIcon('rotate-cw').setDisabled(this.busy).onClick(()=>this.continueInline(id,file.path).catch(error=>new Notice(`T3: ${message(error)}`,10000))));
