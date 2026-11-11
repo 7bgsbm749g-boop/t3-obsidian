@@ -29,6 +29,53 @@ test('established vault startup and device-only saves do not rewrite synced sett
   assert.equal(h.saves(),1,'an actual shared setting change is persisted');
 });
 
+test('automatic thread settlement requires an explicit saved opt-in on startup and Sync refresh',async()=>{
+  for(const value of [undefined,false,null,'true',1,true]){
+    const initial=value===undefined?{vaultId:'vault'}:{vaultId:'vault',autoSettleThreads:value};
+    const h=await harness(initial);
+    assert.equal(h.plugin.settings.autoSettleThreads,value===true);
+    assert.equal(h.saves(),0,'loading a default must not rewrite synced settings');
+    h.plugin.settings.threadTitleGeneration='always';await h.plugin.save();
+    assert.equal(h.current().autoSettleThreads,value===true);
+    const restarted=await harness(h.current());assert.equal(restarted.plugin.settings.autoSettleThreads,value===true);
+    h.setCurrent({...h.current(),autoSettleThreads:true});await h.plugin.onExternalSettingsChange();
+    assert.equal(h.plugin.settings.autoSettleThreads,true);
+    h.plugin.settings.settlementJobs.push({requestId:'pending'});
+    const incoming={...h.current()};delete incoming.autoSettleThreads;h.setCurrent(incoming);
+    await h.plugin.onExternalSettingsChange();
+    assert.equal(h.plugin.settings.autoSettleThreads,false);assert.equal(h.plugin.settings.settlementJobs.length,0);
+  }
+});
+
+test('disabled automatic settlement does not restore device jobs or settle a new send',async()=>{
+  const h=await harness({vaultId:'vault',autoSettleThreads:true});
+  h.plugin.settings.settlementJobs.push({requestId:'pending',messageId:'message',threadId:'thread',projectId:'project',connection:{executable:'',host:'',transport:'direct',environmentId:'environment'}});await h.plugin.saveDeviceState();
+  const enabled=await harness(h.current(),h.deviceId);assert.equal(enabled.plugin.settings.settlementJobs.length,1);
+  const restarted=await harness({vaultId:'vault'},h.deviceId);
+  assert.equal(restarted.plugin.settings.settlementJobs.length,0);
+  restarted.plugin.rememberSettlement({connection:{}},'thread');
+  assert.equal(restarted.plugin.settings.settlementJobs.length,0);
+});
+
+test('saved job changes and reply completion drive settlement without waiting for a timer',async()=>{
+  const h=await harness({vaultId:'vault',autoSettleThreads:true}),synced:unknown[][]=[],wakes:Array<string|undefined>=[];
+  h.plugin.settlementEvents={sync:(jobs:unknown[])=>synced.push([...jobs]),wake:(id?:string)=>wakes.push(id)};
+  const job={requestId:'pending',messageId:'message',threadId:'thread',projectId:'project',connection:{executable:'',host:'',transport:'direct',environmentId:'environment'}};
+  h.plugin.settings.settlementJobs.push(job);await h.plugin.save();assert.equal(synced.at(-1)?.[0],job);
+  h.plugin.busy=true;h.plugin.busy=false;assert.deepEqual(wakes,[undefined]);
+  h.plugin.app.workspace.getLeavesOfType=()=>[];
+  h.plugin.deviceInline.io.localCompleted('binding','Note.md');assert.deepEqual(wakes,[undefined,'binding']);
+  h.setCurrent({...h.current(),autoSettleThreads:false});await h.plugin.onExternalSettingsChange();assert.equal(synced.at(-1)?.length,0);
+});
+
+test('thread hiding leaves T3 unchanged by default and syncs explicit hide and show choices',async()=>{
+  const h=await harness({vaultId:'vault'});assert.equal(h.plugin.settings.hideObsidianThreads,undefined);assert.equal(h.saves(),0);
+  h.plugin.settings.threadTitleGeneration='always';await h.plugin.save();assert.equal(Object.hasOwn(h.current(),'hideObsidianThreads'),false);
+  h.setCurrent({...h.current(),hideObsidianThreads:true});await h.plugin.onExternalSettingsChange();assert.equal(h.plugin.settings.hideObsidianThreads,true);
+  await h.plugin.setThreadHiding(false);assert.equal(h.current().hideObsidianThreads,false);
+  const restarted=await harness(h.current());assert.equal(restarted.plugin.settings.hideObsidianThreads,false);
+});
+
 test('project creation locations sync as complete machine/path choices and persist through restart',async()=>{
   const h=await harness({vaultId:'vault'});
   const locations=[{connectionId:'laptop',environmentId:'windows',parentPath:'C:\\Projects',selectedAt:'2026-10-20T12:00:00Z'}];
