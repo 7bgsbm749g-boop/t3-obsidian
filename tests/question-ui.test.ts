@@ -13,7 +13,7 @@ class Element {
   constructor(public tag='div',public options:any={}){this.textContent=options.text??'';this.type=options.type??'';}
   closest(){return null;}
   focus(){}
-  click(){this.checked=this.type==='checkbox'?!this.checked:true;this.onchange?.();}
+  click(){this.checked=this.type==='checkbox'?!this.checked:true;this.onchange?.();this.onclick?.();}
   addClass(){} addEventListener(){} empty(){this.children=[];}replaceChildren(){this.children=[];}
   createEl(tag:string,options?:any){const child=new Element(tag,options);this.children.push(child);return child;}
   createDiv(options?:any){return this.createEl('div',options);}

@@ -108,7 +108,9 @@ export class QuestionModal extends NoteTabPanel {
           inputs.push(input);label.createSpan({text:`${index<9?`${index+1}. `:''}${option.label}`});if(option.description)label.createEl('small',{text:option.description});
           input.onchange=()=>{
             draft={...draft,selected:inputs.filter(i=>i.checked).map(i=>i.value),mode:'options'};this.controller.draft(this.target,question.id,draft);updateCustom();
-            if(!question.multiSelect&&input.checked){
+          };
+          input.onclick=()=>{
+            if(!question.multiSelect&&input.checked&&!input.disabled){
               if(questionIndex<(view.request?.questions.length??0)-1)this.navigate(questionIndex+1,true);
               else this.submitButton?.focus();
             }
