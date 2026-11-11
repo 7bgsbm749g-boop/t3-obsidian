@@ -38,6 +38,20 @@ export function completionTime(state:InlineThreadState,turnId:string):string {
  * Retain explicit user choices when streaming replaces a callout's DOM. */
 export function installResponsePresentation(root:Document,icon?:(element:HTMLElement,name:string)=>void):()=>void {
   const {setInterval,clearInterval}=clockForDocument(root);
+  const openActivity=(event:Event)=>{
+    const button=(event.target as Element)?.closest?.<HTMLElement>('[data-t3-open-tool-group]');if(!button)return;
+    const id=decodeURIComponent(button.dataset.t3OpenToolGroup??'');
+    const container=button.closest('.workspace-leaf-content')??root;
+    const group=Array.from(container.querySelectorAll<HTMLDetailsElement>('details[data-t3-tool-group]')).find(group=>group.dataset.t3ToolGroup===id);
+    if(!group)return;
+    event.preventDefault();group.open=true;
+    for(let parent=group.parentElement;parent;parent=parent.parentElement){
+      if(parent.matches('details'))(parent as HTMLDetailsElement).open=true;
+      if(parent.matches('.callout.is-collapsed'))parent.querySelector<HTMLElement>(':scope > .callout-title')?.click();
+    }
+    group.scrollIntoView({block:'nearest'});
+  };
+  root.addEventListener('click',openActivity);
   const choices=new WeakMap<Element,Map<string,boolean>>();
   const retained=new WeakMap<Element,Map<string,HTMLElement>>();
   const retainedTools=new WeakMap<Element,Map<string,HTMLElement>>();
@@ -207,5 +221,5 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   observer.observe(root.body,{childList:true,subtree:true});
   root.addEventListener('click',click,true);root.addEventListener('keydown',keyboard);root.addEventListener('toggle',rememberTool,true);
   const timer=setInterval(refresh,1000);refresh();
-  return ()=>{disposed=true;observer.disconnect();resize?.disconnect();for(const actions of aligned){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');}clearInterval(timer);root.removeEventListener('click',click,true);root.removeEventListener('keydown',keyboard);root.removeEventListener('toggle',rememberTool,true);};
+  return ()=>{root.removeEventListener('click',openActivity);disposed=true;observer.disconnect();resize?.disconnect();for(const actions of aligned){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');}clearInterval(timer);root.removeEventListener('click',click,true);root.removeEventListener('keydown',keyboard);root.removeEventListener('toggle',rememberTool,true);};
 }

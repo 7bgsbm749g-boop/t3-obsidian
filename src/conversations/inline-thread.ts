@@ -585,7 +585,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const workRows=historyGroups.map(group=>({createdAt:group.createdAt,sequence:group.sequence??0,body:renderResponseToolGroup(group),hasThoughts:!!group.thoughts?.length}));
   const historyRows=[...workRows,
     ...timelineEmissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
-  const bottom=spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Sending',currentTool?.tool.icon)}`:'';
+  const bottom=spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Sending',currentTool?.tool.icon,toolGroups.filter(group=>group.turnId===turnId).at(-1)?.id)}`:'';
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
   const followupIndex=phase!=='complete'&&transcript?.preserveHistory?segments.reduce((last,segment,index)=>segment.role==='user'?index:last,-1):-1;
