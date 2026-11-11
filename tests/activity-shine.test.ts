@@ -1,5 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {parseHTML} from 'linkedom';
 import {activityShineTargets,installActivityShine} from '../src/ui/activity-shine';
 
 class Element {
@@ -58,23 +59,52 @@ test('shine pauses when offscreen, hidden or reduced, survives native reconcilia
   }finally{globalThis.MutationObserver=previous;}
 });
 
+function loadingDocument():Document {
+  return parseHTML(`<!doctype html><html><body>
+    <strong id="active-title" data-t3-active-title="true">Working</strong>
+    <strong id="inactive-title" data-t3-active-title="false">Complete</strong>
+    <details id="tool" class="send-to-t3-tool" data-t3-tool-status="inProgress">
+      <summary><span id="tool-icon" data-t3-tool-icon="terminal"></span><span id="tool-label">Running command<span id="nested-tool-text">Detail</span></span></summary>
+      <span id="tool-output">Output</span>
+    </details>
+    <details class="send-to-t3-tool" data-t3-tool-status="completed">
+      <summary><span id="completed-tool">Completed command</span></summary>
+    </details>
+    <span id="notice" class="send-to-t3-file-opening">Opening file</span>
+    <span id="other-notice">File opened</span>
+    <div><span id="run-status" class="send-to-t3-run-status" data-status="Running"></span><span id="run-label" class="send-to-t3-run-name">Active run</span></div>
+    <div><span class="send-to-t3-run-status" data-status="Completed"></span><span id="completed-run" class="send-to-t3-run-name">Completed run</span></div>
+    <div><span class="send-to-t3-run-status" data-status="Failed"></span><span id="failed-run" class="send-to-t3-run-name">Failed run</span></div>
+    <div><span data-status="Running"></span><span id="unrelated-run" class="send-to-t3-run-name">Unrelated label</span></div>
+    <div><span class="send-to-t3-run-status" data-status="Running"></span><span></span><span id="nonadjacent-run" class="send-to-t3-run-name">Nonadjacent label</span></div>
+  </body></html>`).document as unknown as Document;
+}
+
+test('loading selectors match active labels and exclude completed labels, icons and unrelated text',()=>{
+  const root=loadingDocument();
+  assert.deepEqual([...activityShineTargets(root)].map(label=>label.id),['active-title','tool-label','notice','run-label']);
+});
+
 test('tool status and transient loading labels refresh shine without new loading markers',async()=>{
   const previous=globalThis.MutationObserver;
   let mutate:Function=()=>{},options:MutationObserverInit|undefined;
   class Observer {constructor(callback:Function){mutate=callback;}observe(_root:unknown,value:MutationObserverInit){options=value;}disconnect(){}}
   globalThis.MutationObserver=Observer as any;
-  const tool=new Element(),notice=new Element(),run=new Element();let active=true;
-  const root={body:{},visibilityState:'visible',defaultView:{},
-    querySelectorAll:(selector:string)=>selector==='.send-to-t3-inline-spinner'?[]:active?[tool,notice,run]:[],
-    addEventListener(){},removeEventListener(){}};
+  const root=loadingDocument(),tool=root.getElementById('tool')!,notice=root.getElementById('notice')!,run=root.getElementById('run-status')!;
+  const labels=['tool-label','notice','run-label'].map(id=>root.getElementById(id)!);
+  Object.defineProperty(root,'visibilityState',{value:'visible'});
+  for(const label of labels)label.setAttribute('data-t3-circle','true');
   try{
-    const dispose=installActivityShine(root as any);
+    const dispose=installActivityShine(root);
     assert.ok(options?.attributeFilter?.includes('data-t3-tool-status'));
     assert.ok(options?.attributeFilter?.includes('data-status'));
     assert.ok(options?.attributeFilter?.includes('class'));
-    for(const label of [tool,notice,run]){assert.equal(label.getAttribute('data-t3-shine'),'true');assert.equal(label.hasAttribute('data-t3-circle'),false);}
-    active=false;mutate([{type:'attributes',attributeName:'data-t3-tool-status'}]);await Promise.resolve();
-    for(const label of [tool,notice,run]){assert.equal(label.hasAttribute('data-t3-shine'),false);assert.equal(label.properties.has('--send-to-t3-shine-state'),false);}
+    for(const label of labels){assert.equal(label.getAttribute('data-t3-shine'),'true');assert.equal(label.hasAttribute('data-t3-circle'),false);}
+    tool.setAttribute('data-t3-tool-status','completed');run.setAttribute('data-status','Completed');notice.classList.remove('send-to-t3-file-opening');
+    mutate([{type:'attributes',target:tool,attributeName:'data-t3-tool-status'},{type:'attributes',target:run,attributeName:'data-status'},{type:'attributes',target:notice,attributeName:'class'}]);await Promise.resolve();
+    assert.deepEqual([...activityShineTargets(root)].map(label=>label.id),['active-title']);
+    for(const label of labels){assert.equal(label.hasAttribute('data-t3-shine'),false);assert.equal(label.style.getPropertyValue('--send-to-t3-shine-state')||'', '');}
+    assert.equal(root.getElementById('active-title')!.getAttribute('data-t3-shine'),'true','unrelated active titles keep their shine');
     dispose();
   }finally{globalThis.MutationObserver=previous;}
 });
