@@ -1,9 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from './build-fixture';
-import {runInNewContext} from './obsidian-context';
+import {runInNewContext as runContext} from './obsidian-context';
 import {createRequire} from 'node:module';
 import type {RunImportResult} from '../src/conversations/run-import';
+const runInNewContext=(code:string,context:Parameters<typeof runContext>[1])=>runContext(code,{setTimeout,clearTimeout,...context});
 
 const bundle=build({stdin:{contents:"export {ImportRunModal,RunImportPicker,openRunImport} from './src/conversations/run-import-ui';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',write:false,external:['obsidian']});
 const drain=()=>new Promise<void>(resolve=>setImmediate(resolve));
@@ -108,11 +109,11 @@ test('native close-before-choose keeps selection alive while cancelled and repla
  module.exports.openRunImport(app,'Synthetic.md',host);await drain();
  assert.equal(signals[0].aborted,false);assert.equal(opened.at(-1).placeholder,'Search recent threads, projects or machines…');
  opened.at(-1).select({...thread,project,projectLabel:''});await drain();assert.equal(opened.at(-1).placeholder,'Choose a T3 response');
- opened.at(-1).select(run);await drain();assert.equal(opened.at(-1).constructor.name,'ImportRunModal');assert.equal(signals[0].aborted,true);
+ opened.at(-1).select(run);await drain();assert.equal(opened.at(-1).constructor.name,'ImportRunModal');
  module.exports.openRunImport(app,'Synthetic.md',host);await drain();
  module.exports.openRunImport(app,'Synthetic.md',host);const replacement=opened.at(-1);assert.equal(signals[1].aborted,true);
  pending.resolve([thread]);await drain();assert.equal(opened.at(-1),replacement,'late results cannot reopen an old flow');
- replacement.close();await drain();replacement.select({...thread,project,projectLabel:''});await drain();assert.equal(signals.at(-1)?.aborted,true);assert.equal(opened.at(-1),replacement);
+ replacement.close();await drain();replacement.select({...thread,project,projectLabel:''});await drain();assert.equal(opened.at(-1),replacement);
 });
 
 test('a thread picker receives fresh rows without losing its filter or choosing a source, and stops watching on close',async()=>{
@@ -198,6 +199,27 @@ test('recent threads load across projects with bounded reads, preserve machine i
  pending[0].resolve([{id:'shared-thread-id',title:'Old',updatedAt:'2026-10-01',status:'Idle'}]);pending[1].resolve([{id:'shared-thread-id',title:'New',updatedAt:'2026-11-01',status:'Active'}]);pending[2].reject(Error('Offline'));pending[3].resolve([]);await drain();await drain();
  for(const task of pending.slice(4))task.resolve([]);await drain();await drain();
  assert.equal(peak,4);assert.equal(pending.length,6);assert.equal(picker.getItems().length,2);assert.equal(picker.getItems()[0].title,'New');assert.equal(picker.getItems()[0].project,projects[1]);assert.equal(picker.inputEl.value,'keep search');assert.equal(picker.getSuggestions('Machine 0').length,1);assert.equal(opened.length,1,'discovery does not open a project picker');
+});
+
+test('one stalled machine cannot block healthy projects and ignored reads expire or cancel',async()=>{
+ const opened:any[]=[],module={exports:{} as any},realRequire=createRequire(import.meta.url),reads:Array<{id:string;signal:AbortSignal}>=[],timers=new Map<number,()=>void>();let timerId=0;
+ const win={setTimeout(callback:()=>void,milliseconds:number){assert.equal(milliseconds,15_000);timers.set(++timerId,callback);return timerId;},clearTimeout(id:number){timers.delete(id);},MutationObserver:class{observe(){}disconnect(){}}};
+ class Modal {modalEl={ownerDocument:{defaultView:win},querySelector:()=>null,addClass(){},createDiv:()=>({setText(){}})};inputEl={value:'keep search',dispatchEvent(){}};open(){opened.push(this);(this as any).onOpen();}close(){(this as any).onClose();}onOpen(){}onClose(){}}
+ class Suggest extends Modal {setPlaceholder(){}getSuggestions(){return [];}}
+ runInNewContext((await bundle).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{FuzzySuggestModal:Suggest,Modal,Notice:class{}}:realRequire(id),AbortController,Event,queueMicrotask});
+ // Distinct route IDs on one machine still share only one loading slot.
+ const projects=Array.from({length:9},(_,i)=>({id:String(i),connectionId:'route-'+i}));
+ module.exports.openRunImport({},'Synthetic.md',{projects:()=>projects,projectLabel:(p:any)=>p.id,machineKey:(p:any)=>Number(p.id)<4?'stalled-machine':'machine-'+p.id,threads:(p:any,signal:AbortSignal)=>{reads.push({id:p.id,signal});return p.id==='4'||p.id==='8'?Promise.resolve([{id:'healthy-'+p.id,title:'Healthy',status:'Idle'}]):new Promise(()=>{});},runs:async()=>[],attach:async()=>{throw Error('Do not import');}});
+ await drain();const picker=opened[0];
+ assert.deepEqual(reads.map(read=>read.id),['0','4','5','6','7']);
+ assert.deepEqual(Array.from(picker.getItems(),(item:any)=>item.id),['healthy-4'],'the fifth project loads before any stalled read resolves');
+ assert.equal(reads.filter(read=>Number(read.id)<4).length,1);
+ // A host that ignores AbortSignal must still release its scheduling slot.
+ for(const callback of [...timers.values()])callback();await drain();
+ assert.deepEqual(Array.from(picker.getItems(),(item:any)=>item.id),['healthy-4','healthy-8'],'deadlines let further machines load');assert.ok(reads.find(read=>read.id==='0')!.signal.aborted);assert.ok(reads.some(read=>read.id==='1'),'the next round proceeds after deadlines');
+ assert.equal(picker.inputEl.value,'keep search');picker.close();await drain();
+ assert.ok(reads.every(read=>read.signal.aborted||read.id==='4'||read.id==='8'));assert.equal(timers.size,0,'closing cancels all owned deadlines');
+ const count=reads.length;await drain();assert.equal(reads.length,count,'closing stops queued projects');
 });
 
 test('All runs appears only after complete history and never previews or imports a synthetic run',async()=>{

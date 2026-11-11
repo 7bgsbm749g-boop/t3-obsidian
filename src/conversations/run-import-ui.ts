@@ -1,13 +1,15 @@
 import {Component,FuzzySuggestModal,Modal,Notice,Setting,setIcon,type App,type FuzzyMatch} from 'obsidian';
 import {projectKey,type Project} from '../app/bridge';
 import {forEachBounded} from '../shared/bounded-work';
+import {abortableRead,requestAborted} from '../connection/t3-api';
+import {clockForDocument} from '../shared/clock';
 import type {ThreadChoice} from './thread-target';
 import {availableImportRun,runImportResultMessage,type ImportRun,type RunImportResult} from './run-import';
 import type {ThreadDisplay} from './thread-display';
 import type {CatchUpThread} from './response-catch-up';
 
 export interface RunImportHost {
-  projects():Project[];projectLabel(project:Project):string;
+  projects():Project[];projectLabel(project:Project):string;machineKey?(project:Project):string;
   threads(project:Project,signal?:AbortSignal):Promise<ThreadChoice[]>;
   watchThreads?(project:Project,changed:(threads:ThreadChoice[])=>void):()=>void;
   runs(project:Project,thread:ThreadChoice,signal?:AbortSignal,progress?:(runs:ImportRun[])=>void):Promise<ImportRun[]>;
@@ -17,6 +19,7 @@ export interface RunImportHost {
   preview?(project:Project,thread:ThreadChoice,run:ImportRun,element:HTMLElement,component:Component,signal:AbortSignal):Promise<void>;
 }
 export const RUN_PREVIEW_DELAY=150;
+export const IMPORT_THREAD_READ_TIMEOUT=15_000;
 /** The native fuzzy picker keeps its search, selection and Enter behavior.
  * Only its run rows and the owned preview have a custom presentation. */
 export class RunImportPicker extends FuzzySuggestModal<ImportRun>{
@@ -133,6 +136,7 @@ export function recentImportThreads(groups:Array<{project:Project;label:string;t
 }
 export class ImportThreadPicker extends FuzzySuggestModal<ImportThread>{
   private selected=false;private closed=false;private stops:Array<()=>void>=[];
+  private reads=new AbortController();
   private items:ImportThread[]=[];private status?:HTMLElement;private observer?:MutationObserver;private restoreSelection?:{key:string;query:string};
   constructor(app:App,private host:RunImportHost,private flow:AbortController,private choose:(item:ImportThread)=>Promise<void>,private prepare:(item:ImportThread|undefined)=>void){super(app);this.setPlaceholder('Search recent threads, projects or machines…');this.emptyStateText='Loading T3 threads…';}
   getItems(){return this.items;}
@@ -151,11 +155,14 @@ export class ImportThreadPicker extends FuzzySuggestModal<ImportThread>{
     this.status=this.modalEl.createDiv({cls:'send-to-t3-import-status',attr:{role:'status','aria-live':'polite'}});this.status.setText('Recent threads · all projects');
     const win=this.modalEl.ownerDocument?.defaultView;
     if(win){this.observer=new win.MutationObserver(()=>{const saved=this.restoreSelection;if(!saved)return;if(this.inputEl.value!==saved.query){this.restoreSelection=undefined;return;}const rows=Array.from(this.modalEl.querySelectorAll<HTMLElement>('[data-t3-import-thread]')),index=rows.findIndex(row=>row.dataset.t3ImportThread===saved.key);if(index<0)return;const chooser=(this as unknown as {chooser?:{setSelectedItem?:(index:number,scroll:boolean)=>void}}).chooser;chooser?.setSelectedItem?.(index,false);this.restoreSelection=undefined;});this.observer.observe(this.modalEl,{childList:true,subtree:true});}
-    this.flow.signal.addEventListener('abort',this.stopWatching,{once:true});void this.load();
+    this.flow.signal.addEventListener('abort',this.stopLoading,{once:true});void this.load();
   }
   private stopWatching=()=>{for(const stop of this.stops)stop();this.stops=[];};
+  private stopLoading=()=>{this.reads.abort(this.flow.signal.reason);this.stopWatching();};
   private async load(){
     const projects=this.host.projects(),groups:Array<{project:Project;label:string;threads:ThreadChoice[]}>=[];let pending=projects.length;const failed:string[]=[];
+    const machines=new Map<string,Project[]>(),clock=clockForDocument(this.modalEl.ownerDocument);
+    for(const project of projects){const key=this.host.machineKey?.(project)??project.connectionId??'local',queue=machines.get(key)??[];queue.push(project);machines.set(key,queue);}
     const publish=()=>{
       if(this.closed||this.flow.signal.aborted)return;
       const selected=this.modalEl.querySelector<HTMLElement>('.suggestion-item.is-selected')?.dataset.t3ImportThread;this.restoreSelection=selected?{key:selected,query:this.inputEl.value}:undefined;
@@ -163,18 +170,25 @@ export class ImportThreadPicker extends FuzzySuggestModal<ImportThread>{
       this.status?.setText(pending?`Recent threads · loading ${pending} projects…`:failed.length?`Could not load ${failed.join(', ')}. Other projects are shown. Reopen import to retry.`:`Recent threads · all ${projects.length} projects`);
       this.inputEl.dispatchEvent(new Event('input'));
     };
-    await forEachBounded(projects,4,async project=>{
+    // Start one project per machine each round. Several projects awaiting the
+    // same connection must not occupy every slot ahead of a healthy machine.
+    while(machines.size&&!this.closed&&!this.flow.signal.aborted)await forEachBounded([...machines],4,async([key,queue])=>{
       if(this.closed||this.flow.signal.aborted)return;
+      const project=queue.shift()!;if(!queue.length)machines.delete(key);
+      const controller=new AbortController(),cancel=()=>controller.abort(this.reads.signal.reason);
+      this.reads.signal.addEventListener('abort',cancel,{once:true});
+      const timer=clock.setTimeout(()=>controller.abort(Error('Thread loading timed out.')),IMPORT_THREAD_READ_TIMEOUT);
       try{
-        const threads=await this.host.threads(project,this.flow.signal);if(this.closed||this.flow.signal.aborted)return;
+        requestAborted(this.reads.signal);
+        const threads=await abortableRead(this.host.threads(project,controller.signal),controller.signal);if(this.closed||this.flow.signal.aborted)return;
         const group={project,label:this.host.projectLabel(project),threads};groups.push(group);
         const stop=this.host.watchThreads?.(project,threads=>{group.threads=threads;publish();});if(stop)this.stops.push(stop);
       }catch{if(!this.flow.signal.aborted)failed.push(this.host.projectLabel(project));}
-      finally{pending--;publish();}
+      finally{clock.clearTimeout(timer);this.reads.signal.removeEventListener('abort',cancel);pending--;publish();}
     });if(!projects.length)publish();
   }
   onChooseItem(item:ImportThread){this.selected=true;void this.choose(item).catch(error=>{if(!this.flow.signal.aborted)new Notice(`Import T3 run: ${error instanceof Error?error.message:String(error)}`,10000);});}
-  onClose(){this.closed=true;this.observer?.disconnect();this.stopWatching();this.flow.signal.removeEventListener('abort',this.stopWatching);queueMicrotask(()=>{if(!this.selected)this.flow.abort();});super.onClose();}
+  onClose(){this.closed=true;this.observer?.disconnect();this.stopLoading();this.flow.signal.removeEventListener('abort',this.stopLoading);queueMicrotask(()=>{if(!this.selected)this.flow.abort();});super.onClose();}
 }
 const importFlows=new WeakMap<App,AbortController>();
 export function openRunImport(app:App,notePath:string,host:RunImportHost){
