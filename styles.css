@@ -588,9 +588,9 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 .send-to-t3-task-text { min-width: 0; overflow-wrap: anywhere; }
 .send-to-t3-task-text > p { margin: 0; }
 .send-to-t3-tool, .send-to-t3-thought, .send-to-t3-tool-group, .send-to-t3-response-activity, .send-to-t3-answer { margin: .5em 0; font-size: var(--font-smaller); }
-.send-to-t3-tool > summary, .send-to-t3-thought > summary, details[data-t3-tool-group] > summary, .send-to-t3-answer > summary { display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); }
-.send-to-t3-tool > summary::before, .send-to-t3-thought > summary::before, details[data-t3-tool-group] > summary::before, .send-to-t3-answer > summary::before { content: '›'; width: .6em; flex: 0 0 .6em; }
-.send-to-t3-tool[open] > summary::before, .send-to-t3-thought[open] > summary::before, details[data-t3-tool-group][open] > summary::before, .send-to-t3-answer[open] > summary::before { transform: rotate(90deg); }
+.send-to-t3-thought > summary, details[data-t3-tool-group] > summary, .send-to-t3-answer > summary { display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); }
+.send-to-t3-thought > summary::before, details[data-t3-tool-group] > summary::before, .send-to-t3-answer > summary::before { content: '›'; width: .6em; flex: 0 0 .6em; }
+.send-to-t3-thought[open] > summary::before, details[data-t3-tool-group][open] > summary::before, .send-to-t3-answer[open] > summary::before { transform: rotate(90deg); }
 .send-to-t3-thought-content { padding-inline-start: 1.7em; }
 .send-to-t3-answer-label { flex-shrink: 0; }
 .send-to-t3-answer-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-normal); }
@@ -604,11 +604,13 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 .send-to-t3-tool-group-content { padding-left: 1.1em; }
 .markdown-rendered .send-to-t3-response-history,.markdown-rendered .send-to-t3-response-history>.send-to-t3-tool-group-content{display:block;margin:0;padding:0;border:0;background:transparent;}
 .markdown-rendered .send-to-t3-response-history>summary{display:none;}
-.send-to-t3-tool[data-t3-tool-status="inProgress"] > summary::after { content: ''; width: .65em; height: .65em; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: send-to-t3-inline-spin .8s linear infinite; }
-.send-to-t3-tool[data-t3-tool-status="failed"] > summary { color: var(--text-error); }
-.send-to-t3-tool pre { max-height: 18em; overflow: auto; white-space: pre-wrap; }
-.send-to-t3-tool pre { position: relative; }
-@media (prefers-reduced-motion: reduce) { .send-to-t3-tool > summary::after { animation: none; } }
+.send-to-t3-tool[data-t3-tool-status="inProgress"]::after { content: ''; width: .65em; height: .65em; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: send-to-t3-inline-spin .8s linear infinite; }
+.send-to-t3-tool[data-t3-tool-status="failed"] { color: var(--text-error); }
+.send-to-t3-tool { display: flex; align-items: center; gap: .5em; color: var(--text-muted); }
+/* Old saved tool details remain on disk; their native display is a flat label. */
+details.send-to-t3-tool > :not(summary) { display: none; }
+details.send-to-t3-tool > summary { display: flex; align-items: center; gap: .5em; list-style: none; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .send-to-t3-tool::after { animation: none; } }
 .send-to-t3-worktree-setup { margin: .5em 0; font-family: var(--font-interface); font-size: 14px; line-height: 1.5; color: var(--text-muted); }
 .send-to-t3-setup-header { display: flex; align-items: baseline; gap: 8px; min-height: 32px; padding: 4px 4px 8px; margin-bottom: 6px; border-bottom: 1px solid color-mix(in srgb, var(--background-modifier-border) 60%, transparent); }
 .send-to-t3-setup-header > .send-to-t3-setup-time { margin-left: auto; }

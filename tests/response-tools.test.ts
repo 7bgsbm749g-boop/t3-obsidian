@@ -9,7 +9,7 @@ test('Windows tool output stays inside one HTML line without losing visible line
  const state={messages:[],activities:[a('windows',1,'tool.completed',{toolCallId:'windows',status:'completed',data:{toolName:'exec_command',command:'ssh laptop',output:'first\r\n** second\rthird <script>'}})]};
  const tool=responseTools(state,['turn'])[0],body=renderResponseTool(tool);
  assert.equal(tool.output,'first\r\n** second\rthird <script>');
- assert.doesNotMatch(body,/[\r\n]/);assert.match(body,/first&#10;\*\* second&#10;third &lt;script&gt;/);
+ assert.doesNotMatch(body,/[\r\n]/);assert.doesNotMatch(body,/<details|<summary|first|script|tool-output/);
 });
 test('v2 web search and T3 thread reads use specific labels with neutral live text',()=>{
   const state={messages:[],activities:[a('search',1,'tool.updated',{toolCallId:'search',itemType:'web_search',data:{toolName:'web_search',input:'{"query":"Obsidian docs"}'}}),
@@ -21,7 +21,7 @@ test('v2 web search and T3 thread reads use specific labels with neutral live te
 test('shell labels match the program while details retain the exact command',()=>{
   const command="/bin/bash -lc 'npm test > /tmp/test.log 2>&1'";assert.equal(commandProgram(command),'npm');assert.equal(commandProgram('cd /tmp && python3 check.py'),'python3');
   const [tool]=responseTools({messages:[],activities:[a('start',1,'tool.started',{toolCallId:'cmd',data:{item:{command,cwd:'/tmp/work'},files:[{path:'/tmp/test.txt'}]}})]},['turn']);
-  assert.equal(tool.label,'Running npm');assert.equal(tool.command,command);assert.match(renderResponseTool(tool),/Directory: <code>\/tmp\/work<\/code>/);assert.match(renderResponseTool(tool),/Files: <code>\/tmp\/test.txt<\/code>/);assert.match(renderResponseTool(tool),/2&gt;&amp;1/);
+  assert.equal(tool.label,'Running npm');assert.equal(tool.command,command);assert.doesNotMatch(renderResponseTool(tool),/<details|<summary|Directory:|Files:|2&gt;&amp;1/);
 });
 test('sparse terminal results retain command data, concurrent identity and terminal status even with a later start',()=>{
   const activities=[a('end',1,'tool.completed',{toolCallId:'one',status:'completed',data:{item:{aggregatedOutput:'<script>bad</script>',exitCode:7,durationMs:1200}}}),a('two',2,'tool.started',{toolCallId:'two',data:{toolName:'Read',input:{path:'/tmp/file.md'}}}),a('late-start',3,'tool.started',{toolCallId:'one',data:{item:{command:'npm test'}}}),a('sparse',4,'tool.updated',{toolCallId:'two',status:'inProgress'})];
@@ -110,10 +110,10 @@ test('alternating thoughts and tools share one stable batch through live, histor
   const live=renderInlineTurn(state,'turn','thread','running','collapse');
   assert.equal(live.match(/data-t3-tool-group=/g)?.length,1);assert.equal(live.match(/class="send-to-t3-thought"/g)?.length,2);
   assert.ok(live.indexOf('Summary first')<live.indexOf('first result')&&live.indexOf('first result')<live.indexOf('Summary second')&&live.indexOf('Summary second')<live.indexOf('data-t3-tool-id="two"'));
-  assert.doesNotMatch(live,/\[!t3-thought\]/);assert.match(live,/data-t3-tool-summary="Ran 2 commands · 2 thoughts"/);
-  const stopped=stoppedResponseBody(live);assert.match(stopped,/Ran 2 commands · 2 thoughts/);assert.match(stopped,/Summary second/);assert.doesNotMatch(stopped,/inline-spinner|data-t3-live-tool/);
+  assert.doesNotMatch(live,/\[!t3-thought\]/);assert.match(live,/data-t3-tool-summary="Ran 2 commands · Thought (×2)"/);
+  const stopped=stoppedResponseBody(live);assert.match(stopped,/Ran 2 commands · Thought (×2)/);assert.match(stopped,/Summary second/);assert.doesNotMatch(stopped,/inline-spinner|data-t3-live-tool/);
   state.messages.push(thought('third',5));
-  const history=renderInlineTurn(state,'turn','thread','running','collapse');assert.equal(history.match(/data-t3-tool-group=/g)?.length,1);assert.match(history,/<span>Ran 2 commands · 3 thoughts<\/span>/);
+  const history=renderInlineTurn(state,'turn','thread','running','collapse');assert.equal(history.match(/data-t3-tool-group=/g)?.length,1);assert.match(history,/<span>Ran 2 commands · Thought (×3)<\/span>/);
 });
 
 test('same-time commentary and other public display items split mixed batches by ordinal',()=>{

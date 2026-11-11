@@ -188,6 +188,5 @@ export function summarizeResponseTools(tools:ResponseTool[]):string {
   return labels.length<2?labels[0]??'':labels.length===2?labels.join(' and '):`${labels.slice(0,-1).join(', ')}, and ${labels.at(-1)}`;
 }
 export function renderResponseTool(tool:ResponseTool):string {
-  const details=[tool.cwd?`<p>Directory: <code>${html(tool.cwd)}</code></p>`:'',tool.files?.length?`<p>Files: ${tool.files.map(file=>`<code>${html(file)}</code>`).join(', ')}</p>`:'',tool.command?`<pre><code>${html(tool.command)}</code></pre>`:'',tool.exitCode!==undefined?`<p>Exit code: ${tool.exitCode}</p>`:'',tool.durationMs!==undefined?`<p>Duration: ${(tool.durationMs/1000).toFixed(1)} s</p>`:'',tool.output?`<pre class="send-to-t3-tool-output"><code>${html(tool.output.slice(0,20000))}${tool.output.length>20000?'&#10;[Output shortened for display]':''}</code></pre>`:''].filter(Boolean).join('');
-  return `<details class="send-to-t3-tool" data-t3-tool-id="${html(tool.id)}" data-t3-tool-key="${html(tool.key)}" data-t3-tool-status="${html(tool.status)}"><summary><span data-t3-tool-icon="${html(tool.icon)}" aria-hidden="true"></span><span>${html(tool.label)}</span></summary>${details}</details>`;
+  return `<div class="send-to-t3-tool" data-t3-tool-id="${html(tool.id)}" data-t3-tool-key="${html(tool.key)}" data-t3-tool-status="${html(tool.status)}"><span data-t3-tool-icon="${html(tool.icon)}" aria-hidden="true"></span><span>${html(tool.label)}</span></div>`;
 }
