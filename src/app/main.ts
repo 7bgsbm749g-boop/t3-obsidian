@@ -135,13 +135,15 @@ import {ApprovalController} from '../interaction/approval-controller';
 import {approvalButton,approvalEditorExtension} from '../interaction/approval-ui';
 import {approvalTargets,parseApprovalUrl,clearApprovalControls,type ApprovalTarget} from '../interaction/approvals';
 import {settlementState,type ThreadSettlementJob} from '../conversations/thread-settlement';
+import {ThreadSettlementEvents} from '../conversations/thread-settlement-events';
+import {ThreadVisibility,threadHiding} from '../conversations/thread-visibility';
 type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;canonicalAnchor?:SelectionAnchor;insertion?:CursorInsertion;referenceSelection?:boolean;initialQuestion?:string;responseId?:string;snapshot?:string;smartDocument?:string;smartScope?:Span;smartQuestion?:string};
 type SteeringSource={document:string;ranges:Span[]};
 type PaletteActionContext={file:TFile;editor?:EditorChatContext;insertion:CursorInsertion|null};
 const NEW_FOLDER_PROJECT='folder:new';
 interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat}
 type PreparedNote={content:string;images:Awaited<ReturnType<typeof collectImages>>};
-interface Settings {threadNoteMode:ThreadNoteMode;projectCreationLocations:ProjectCreationLocation[];noteContexts?:NoteContextRecord[];smartSend?:SmartSendData;responseBindings?:ResponseBindingData;codebase?:CodebaseState; replyFolders:ReplyFolders;threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; vaultHost?:VaultHost; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
+interface Settings {threadNoteMode:ThreadNoteMode;projectCreationLocations:ProjectCreationLocation[];noteContexts?:NoteContextRecord[];smartSend?:SmartSendData;responseBindings?:ResponseBindingData;codebase?:CodebaseState; replyFolders:ReplyFolders;threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; vaultHost?:VaultHost; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean;hideObsidianThreads?:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
 type SharedSettings=Omit<Settings,'pending'|'completionJobs'|'settlementJobs'|'connection'|'projects'|'directProjects'|'selected'|'directSelected'|'directScanId'>;
 type StoredSettings=Omit<Partial<Settings>,'inlineStreaming'>&{inlineStreaming?:Partial<InlineStreamingSettings>&{askT3?:boolean;sendToT3?:boolean}};
 interface DeviceSettings {connectionMethod?:ConnectionMethod;routeOrder?:string[];deviceId?:string;mode?:'direct'|'desktop';connection?:Connection;pairedSessions?:Record<string,PairedSession>;cloudAccount?:CloudAccount|null;nativeAccount?:NativeAccount|null;signInEmail?:string;signInExpired?:boolean;vaultRegistrations?:Record<string,VaultRegistration>}
@@ -198,9 +200,13 @@ export default class SendToT3 extends Plugin {
   set busy(value:boolean){
     if(this.sending===value)return;
     this.sending=value;
+    if(!value)this.settlementEvents?.wake();
     for(const listener of this.busyListeners)try{listener();}catch(error){logFailure('ui.destination.busy-update',error);}
   }
-  private monitoring = false;
+  private settlementEvents?:ThreadSettlementEvents;
+  private threadVisibility?:ThreadVisibility;
+  private visibilitySignature='';
+  private visibilityWork?:Promise<void>;
   private stopped = false;
   private projectCreateModal?:ProjectCreateModal;
   private commandHosts=new Map<string,{host:ConnectCommandHost;rpc:Awaited<ReturnType<typeof connectT3Rpc>>;files:CommandFiles}>();
@@ -351,7 +357,7 @@ export default class SendToT3 extends Plugin {
     this.signInEmail=typeof local?.signInEmail==='string'?local.signInEmail:this.nativeAccount?.identity??'';
     this.signInExpired=local?.signInExpired===true&&!this.nativeAccount;
     this.vaultRegistrations=local?.vaultRegistrations??{};
-    this.settings = {threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],vaultHost:loadVaultHost(data?.vaultHost),inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:'keep',archiveFolder:''},completionJobs:[],settlementJobs:data?.autoSettleThreads===true&&Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads===true,folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
+    this.settings = {threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],vaultHost:loadVaultHost(data?.vaultHost),inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:'keep',archiveFolder:''},completionJobs:[],settlementJobs:data?.autoSettleThreads===true&&Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads===true,hideObsidianThreads:threadHiding(data?.hideObsidianThreads),folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
     if(!Platform.isMobile){
       const key=`t3-connection-recovery-v1:${this.settings.vaultId}`;
       this.connectionRecovery=new ConnectionRecovery({
@@ -461,7 +467,7 @@ export default class SendToT3 extends Plugin {
       openedNotes:()=>this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file&&typeof view.getViewData==='function').map(view=>({path:view.file!.path,document:nativeResponses(this.app).view(view)?.recoveryDocument()??view.getViewData()})),
       saveLocalNote:async path=>{for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file?.path===path&&typeof view.save==='function')await view.save();}},
       localEditSaved:async request=>{await this.markEditSaved(request);},
-      localCompleted:(id,path)=>{nativeResponses(this.app).localCompleted(id,path);void deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${id}`,null).catch(error=>logFailure('response.local.final-cache-cleanup',error));this.inlineChat?.flushAvailable();},
+      localCompleted:(id,path)=>{this.settlementEvents?.wake(id);nativeResponses(this.app).localCompleted(id,path);void deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${id}`,null).catch(error=>logFailure('response.local.final-cache-cleanup',error));this.inlineChat?.flushAvailable();},
       localConnection:(id,issue)=>nativeResponses(this.app).connection(id,issue),
       localQuestions:update=>{if(update.questionActivities)this.questions?.observe(update.request.threadEnvironmentId,update.request.threadId,update.questionActivities,update.sequence);},
       localFinalBody:async update=>rewriteReplyReferences(update.body,async reference=>{try{return await resolveReplyReference(this.app,reference,update.request,await this.inlineThreadAccess(update.request.threadEnvironmentId));}catch{return undefined;}}),
@@ -572,8 +578,9 @@ export default class SendToT3 extends Plugin {
     for(const request of this.settings.pending)request.connection=migrateConnection(request.connection);
     for(const job of this.settings.completionJobs){job.connection=migrateConnection(job.connection);if(retiredConnection(job.connection)&&job.status==='watching'){job.status='kept';job.detail='Kept note: the companion mode was removed. Check the original thread in T3.';}}
     this.settings.settlementJobs=this.settings.settlementJobs.filter(job=>job&&typeof job.requestId==='string'&&typeof job.messageId==='string'&&typeof job.threadId==='string'&&typeof job.projectId==='string'&&job.connection&&!retiredConnection(job.connection)).map(job=>({...job,connection:migrateConnection(job.connection)}));
+    this.threadVisibility=new ThreadVisibility({load:()=>{const value:unknown=this.app.loadLocalStorage(`t3-thread-tags:${this.deviceId}:${this.settings.vaultId}`);return value;},save:jobs=>this.app.saveLocalStorage(`t3-thread-tags:${this.deviceId}:${this.settings.vaultId}`,jobs)});
     await this.initializeProjectCatalog();
-    configureBridge({mobile:Platform.isMobile,access:environmentId=>this.inlineThreadAccess(environmentId),pairedSession:id=>this.sessionFor(id),saveRequest:async request=>{if(!this.settings.pending.includes(request))throw Error('Saved request is missing. Nothing was sent.');this.persistAgentCommand(request);await this.save();}});
+    configureBridge({beforeThreadCreate:request=>{const plan=request.directPlan;if(request.hideObsidianThread&&plan?.create)this.threadVisibility?.queue({id:commandId(request.id,'thread-tag'),threadId:plan.create.threadId,projectId:plan.create.projectId,environmentId:plan.environmentId});},mobile:Platform.isMobile,access:environmentId=>this.inlineThreadAccess(environmentId),pairedSession:id=>this.sessionFor(id),saveRequest:async request=>{if(!this.settings.pending.includes(request))throw Error('Saved request is missing. Nothing was sent.');this.persistAgentCommand(request);await this.save();}});
     // Migrate unfinished desktop requests once, but do not rewrite the shared
     // settings file merely because this device started. Credentials and jobs
     // are device-local.
@@ -634,7 +641,15 @@ export default class SendToT3 extends Plugin {
       }
       this.registerInterval(window.setInterval(()=>void this.checkExternalSettings().catch(error=>new Notice(`T3 settings: ${message(error)}`,12000)),5000));
     });
-    this.app.workspace.onLayoutReady(()=>{if(!this.stopped){this.refreshProjectsInBackground(true);void this.monitorCompletions();this.registerInterval(window.setInterval(()=>{void this.monitorCompletions();},30_000));}});
+    this.app.workspace.onLayoutReady(()=>{
+      if(this.stopped)return;
+      this.refreshProjectsInBackground(true);
+      this.settlementEvents=new ThreadSettlementEvents(async job=>this.inlineThreadAccess(job.connection.environmentId??await this.localInlineEnvironment()),job=>this.monitorSettlement(job),()=>this.stopped||this.busy,error=>logFailure('thread.settlement.failed',error));
+      this.syncSettlementEvents();void this.syncThreadVisibility(true);
+      const recover=()=>{if(!this.stopped){this.settlementEvents?.reconnect();void this.syncThreadVisibility(true);}};
+      if(typeof document.addEventListener==='function')this.registerDomEvent(document,'visibilitychange',()=>{if(!document.hidden)recover();});
+      if(typeof window.addEventListener==='function'){this.registerDomEvent(window,'focus',recover);this.registerDomEvent(window,'online',recover);}
+    });
     this.app.workspace.onLayoutReady(()=>{
       this.registerInterval(window.setInterval(()=>this.refreshProjectsInBackground(),15_000));
       if(typeof document.addEventListener==='function')this.registerDomEvent(document,'visibilitychange',()=>{if(!document.hidden)this.refreshProjectsInBackground();});
@@ -981,13 +996,15 @@ export default class SendToT3 extends Plugin {
     const mergedThreads=mergeNoteThreads(remoteThreads,this.settings.noteThreads);
     this.settings.noteThreads=remoteThreads;
     this.settings.autoSettleThreads=adopted.autoSettleThreads;
+    this.syncSettlementEvents();
+    this.settings.hideObsidianThreads=adopted.hideObsidianThreads;void this.syncThreadVisibility();
     if(!this.settings.autoSettleThreads&&this.settings.settlementJobs.length){this.settings.settlementJobs=[];await this.saveDeviceState();}
     this.settings.vaultId=vaultIdentity(data)??this.settings.vaultId;
     await this.publishVaultIdentity();
     this.settings.vaultLocations=adopted.vaultLocations;
     const connectionsChanged=JSON.stringify(adopted.paired)!==JSON.stringify(this.settings.paired);
     if(connectionsChanged)this.settings.paired=adopted.paired.map((c:PairedConnection)=>this.settings.paired.find(existing=>JSON.stringify(existing)===JSON.stringify(c))??c);
-    this.syncProjectSources();if(connectionsChanged)this.refreshProjectsInBackground(true);
+    this.syncProjectSources();if(connectionsChanged){this.refreshProjectsInBackground(true);void this.syncThreadVisibility();}
     remote.folderLinks=this.settings.folderLinks;remote.folderLinkChanges=this.folderLinkReplica;
     this.sharedBaseline=JSON.stringify(remote);
     this.settings.noteThreads=mergedThreads;
@@ -2204,7 +2221,7 @@ export default class SendToT3 extends Plugin {
       }
       if(this.stopped)throw Error('The plugin was disabled before sending.');
       const title=await this.requestTitle(connection,project,threadId,note?.path);
-      request={...(smartCapture?{smartSend:smartCapture}:{}),...(options?.jobOptions?{jobOptions:options.jobOptions}:{}),id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
+      request={...(this.settings.hideObsidianThreads===true&&!threadId?{hideObsidianThread:true}:{}),...(smartCapture?{smartSend:smartCapture}:{}),...(options?.jobOptions?{jobOptions:options.jobOptions}:{}),id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
       if(note&&!options?.barePrompt)await this.prepareNoteSteering(request,note.path,preparedInput,options?.sourceContext,options?.responseId,steeringSource);
       await options?.onPrepared?.(request,preparedInput);
       logEvent('request.prepared',{requestId:request.id,threadId:request.threadId,projectId:request.project.id,notePath:note?.path,promptHash:contentHash(request.prompt),promptLength:request.prompt.length});
@@ -2308,7 +2325,7 @@ export default class SendToT3 extends Plugin {
     const session=this.pairedSessions[id];const c=this.settings.paired.find(c=>c.id===id);
     // Managed is shared discovery metadata. A manual credential belongs to
     // this device and remains usable without an account session.
-    if(session&&!session.accountId&&session.url===c?.url&&session.environmentId===c.environmentId&&session.expiresAt>Date.now()+5000){if(permissions.some(scope=>!PLUGIN_PERMISSIONS.some(required=>required===scope))&&!permissions.every(scope=>session.permissions?.includes(scope)))throw Error('This pairing does not permit MCP setup. Pair this machine again with agent configuration access, or use your T3 account connection.');return session;}
+    if(session&&!session.accountId&&session.url===c?.url&&session.environmentId===c.environmentId&&session.expiresAt>Date.now()+5000){if(permissions.some(scope=>!PLUGIN_PERMISSIONS.some(required=>required===scope))&&!permissions.every(scope=>session.permissions?.includes(scope)))throw Error(permissions.includes('providers:manage')?'This pairing does not permit MCP setup. Pair this machine again with agent configuration access, or use your T3 account connection.':'This pairing does not permit changing T3 settings. Pair this machine again with settings access, or use your T3 account connection.');return session;}
     if(c?.managed&&!this.nativeAccount)throw new SignInRequiredError(this.signInExpired?REAUTHENTICATE_MESSAGE:'Sign in to T3 on this device to resume replies.');
     if(session?.accountId&&session.accountId!==this.nativeAccount?.userId)throw Error('Sign in to the T3 account that owns this connection.');
     // Pre-v2 account sessions requested only the two orchestration scopes.
@@ -2585,7 +2602,7 @@ export default class SendToT3 extends Plugin {
   private sharedSnapshot():SharedSettings{const {pending,completionJobs,settlementJobs,connection,projects,directProjects,selected,directSelected,directScanId,...shared}=this.settings;return jsonClone(shared);}
   private sharedData(input:unknown):SharedSettings{
     const data=storedSettings(input);
-    return {...this.sharedSnapshot(),threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),responseBindings:loadResponseBindingData(data?.responseBindings),smartSend:loadSmartSend(data?.smartSend),autoSettleThreads:data?.autoSettleThreads===true,
+    return {...this.sharedSnapshot(),threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),responseBindings:loadResponseBindingData(data?.responseBindings),smartSend:loadSmartSend(data?.smartSend),autoSettleThreads:data?.autoSettleThreads===true,hideObsidianThreads:threadHiding(data?.hideObsidianThreads),
       vaultHost:loadVaultHost(data?.vaultHost),
       inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},
       completion:{action:'keep',archiveFolder:''}};
@@ -2631,12 +2648,12 @@ export default class SendToT3 extends Plugin {
       this.lastDiskSnapshot=JSON.stringify(snapshot);
       if(JSON.stringify(this.settings.noteThreads)===intendedThreads)this.settings.noteThreads=snapshot.noteThreads;
       const adopt=<K extends keyof SharedSettings>(key:K)=>{if(JSON.stringify(this.settings[key])===JSON.stringify(intended[key])){const target:SharedSettings=this.settings;target[key]=snapshot[key];}};
-      for(const key of ['inlineStreaming','vaultHost','completion','threadTitleGeneration','autoSettleThreads','paired','vaultLocations','codebase','projectCreationLocations'] as const)adopt(key);
+      for(const key of ['inlineStreaming','vaultHost','completion','threadTitleGeneration','autoSettleThreads','hideObsidianThreads','paired','vaultLocations','codebase','projectCreationLocations'] as const)adopt(key);
       if(!this.settings.autoSettleThreads&&this.settings.settlementJobs.length){this.settings.settlementJobs=[];await this.saveDeviceState();}
       this.codebase?.adopt(this.settings.codebase);
       this.sharedBaseline=JSON.stringify(snapshot);
     });
-    const work=this.saving;void work.finally(()=>{if(this.saving===work)this.queuedSharedSnapshot=undefined;}).catch(()=>{});return work;
+    const work=this.saving;void work.then(()=>{this.syncSettlementEvents();void this.syncThreadVisibility();}).catch(()=>{});void work.finally(()=>{if(this.saving===work)this.queuedSharedSnapshot=undefined;}).catch(()=>{});return work;
   }
   async send(file:TFile, project:Project, options?:{id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;projectOverrideKey?:string;folderPicker?:boolean;folderLink?:FolderLink;prepared?:PreparedNote;streamReply?:boolean;jobOptions?:ResolvedJobOptions;destinations?:string[];destinationSection?:string;insertion?:CursorInsertion|null;onPrepared?:(request:Request)=>Promise<void>}) {
     if (this.busy) {if(options?.throwOnError)throw Error('Obsidian is sending another request. Retry shortly.');return;}
@@ -2666,7 +2683,7 @@ export default class SendToT3 extends Plugin {
       const images=await this.prepareImages(smart.text,file.path,true,content);
       if(inlineView&&this.notePromptDocument(inlineView)!==content)throw Error('The note changed while preparing the send. Try again with the current text.');
       const link=options?.folderLink??folderLinkForPath(this.settings.folderLinks,file.path)??{id:'manual',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:true};
-      request = {smartSend:smart.capture,jobOptions,id:options?.id??randomId(),project:{...project},title:await this.requestTitle(connection,project,threadId,file.path),prompt:images.markdown+this.messageFooter(file.path),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:'keep'},connection,noteThread:this.noteThreadIntent(file.path,project,connection),...this.folderLinkIntent(link)};
+      request = {...(this.settings.hideObsidianThreads===true&&!threadId?{hideObsidianThread:true}:{}),smartSend:smart.capture,jobOptions,id:options?.id??randomId(),project:{...project},title:await this.requestTitle(connection,project,threadId,file.path),prompt:images.markdown+this.messageFooter(file.path),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:'keep'},connection,noteThread:this.noteThreadIntent(file.path,project,connection),...this.folderLinkIntent(link)};
       if(request.prompt.length>120_000) throw new Error('The note and image context exceed T3’s 120,000-character limit. Split the note before sending.');
       const steeringSource={document:content,ranges:smart.ranges};
       if(streaming&&inlineView)await this.prepareStreamBindings(request,options?.destinations?.length?options.destinations:[file.path],undefined,options?.destinationSection,file.path,smart.text,options?.insertion,steeringSource);
@@ -2921,13 +2938,35 @@ export default class SendToT3 extends Plugin {
       const accepted=acceptedRequestThread(request);
       if(accepted){new Notice(`T3 received your message in thread ${accepted.slice(0,8)}. The local response needs recovery. See the send failure log.`,12000);return accepted;}
       throw error;
-    }
+    }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
-  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
-  async monitorCompletions() {
-    if(this.monitoring||this.stopped||this.busy)return;
-    this.monitoring=true;try{await this.monitorSettlements();}finally{this.monitoring=false;}
+  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
+  async setThreadHiding(enabled:boolean){this.settings.hideObsidianThreads=enabled;await this.save();await this.syncThreadVisibility();}
+  private syncThreadVisibility(force=false):Promise<void>{
+    if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve();
+    const enabled=this.settings.hideObsidianThreads,signature=JSON.stringify([enabled,this.settings.paired]);
+    if(this.visibilityWork)return this.visibilityWork.then(()=>this.syncThreadVisibility(force));
+    if(!force&&this.visibilitySignature===signature)return Promise.resolve();
+    this.visibilitySignature=signature;
+    const work=(async()=>{
+      const failures:string[]=[];
+      for(const environmentId of new Set(this.settings.paired.map(paired=>paired.environmentId))){
+        if(this.stopped||this.settings.hideObsidianThreads!==enabled)break;
+        try{
+          let credentialKey='';
+          const access=await environmentAccess(environmentId,{paired:orderedRoutes(this.settings.paired,this.routeOrder,c=>this.connectionScore(c)),openPaired:async paired=>{
+            const session=await this.sessionFor(paired.id,false,[...PLUGIN_PERMISSIONS,'settings:write']);
+            const api=await environmentApi({transport:'direct',host:'direct',executable:'',url:paired.url,environmentId:paired.environmentId,connectionId:paired.id},session);
+            await verifyOrchestrationRead(api);credentialKey=session?.token??paired.id;return {origin:endpoint(paired.url),api};
+          }});
+          try{await this.threadVisibility!.apply(access,environmentId,enabled,credentialKey,force);}finally{await access.close?.();}
+        }catch(error){failures.push(`${this.settings.paired.find(paired=>paired.environmentId===environmentId)?.name??environmentId}: ${message(error)}`);logFailure('thread.visibility.failed',error,{environmentId});}
+      }
+      if(failures.length&&!this.stopped)new Notice(`Thread visibility is waiting on ${failures.join('; ')}. It will be checked again on reconnect.`,12000);
+    })().finally(()=>{if(this.visibilityWork===work)this.visibilityWork=undefined;});
+    this.visibilityWork=work;return work;
   }
+  private syncSettlementEvents(){this.settlementEvents?.sync(this.settings.autoSettleThreads&&!this.stopped?this.settings.settlementJobs:[]);}
   async discardRequest(request:Request){
     if(request.agentCommand)this.app.saveLocalStorage(`${this.localKey}-note-command-${request.agentCommand.id}`,{command:request.agentCommand,discarded:true});
     this.settings.pending=this.settings.pending.filter(r=>r.id!==request.id);await this.save();
@@ -2940,36 +2979,31 @@ export default class SendToT3 extends Plugin {
     if(job.inlineLocal){const file=job.inlineNotePath&&this.app.vault.getFileByPath(job.inlineNotePath);if(!file)return 'discard';return hasResponseMarkers(await this.app.vault.read(file),job.inlineJobId)?'wait':'ready';}
     return job.inlineHost?'discard':this.inlineChat?.settlementStatus(job.inlineJobId)??'wait';
   }
-  private async monitorSettlements(){
-    if(!this.settings.autoSettleThreads||!this.settings.settlementJobs.length)return;
-    for(const job of [...this.settings.settlementJobs]){
-      if(this.stopped||this.busy)return;
-      if(!this.settings.settlementJobs.includes(job))continue;
-      try{
-        if(this.settings.pending.some(request=>request.threadId===job.threadId&&request.connection.environmentId===job.connection.environmentId))continue;
-        const shell=await runBridge(job.connection,['threads','--project',job.projectId]);
-        const summary=readThreadList(shell).find(thread=>thread.id===job.threadId);
-        if(!summary)continue;
-        const full=readThreadSnapshot({thread:await runBridge(job.connection,['read',job.threadId])}).thread;
-        if(this.stopped||this.busy)continue;
-        if(!this.settings.autoSettleThreads||!this.settings.settlementJobs.includes(job))continue;
-        const state=settlementState({...full,backgroundLiveness:summary.backgroundLiveness??full.backgroundLiveness,hasPendingApprovals:summary.hasPendingApprovals??full.hasPendingApprovals,hasPendingUserInput:summary.hasPendingUserInput??full.hasPendingUserInput,settledOverride:summary.settledOverride??full.settledOverride,archivedAt:summary.archivedAt??full.archivedAt,deletedAt:summary.deletedAt??full.deletedAt},job);
-        if(state==='wait')continue;
-        if(state==='settle'){
-          const inline=await this.inlineSettlementStatus(job);
-          if(inline==='wait')continue;
-          if(inline==='ready'&&this.settings.autoSettleThreads&&this.settings.settlementJobs.includes(job)){
-            const access=job.connection.transport==='direct'
-              ?{api:await environmentApi(job.connection,await this.sessionFor(job.connection.connectionId??'')),close:()=>{}}
-              :await this.inlineThreadAccess(job.connection.environmentId??'');
-            try{await access.api('/api/orchestration/dispatch',{type:'thread.settle',commandId:commandId(job.requestId,'settle'),threadId:job.threadId});}
-            finally{await access.close?.();}
-          }
+  private async monitorSettlement(job:ThreadSettlementJob){
+    const current=()=>!this.stopped&&!this.busy&&this.settings.autoSettleThreads&&this.settings.settlementJobs.includes(job);
+    if(!current())return;
+    try{
+      if(this.settings.pending.some(request=>request.threadId===job.threadId&&request.connection.environmentId===job.connection.environmentId))return;
+      const shell=await runBridge(job.connection,['threads','--project',job.projectId]);
+      const summary=readThreadList(shell).find(thread=>thread.id===job.threadId);
+      const full=readThreadSnapshot({thread:await runBridge(job.connection,['read',job.threadId])}).thread;
+      if(!current())return;
+      const state=settlementState({...full,backgroundLiveness:summary?.backgroundLiveness??full.backgroundLiveness,hasPendingApprovals:summary?.hasPendingApprovals??full.hasPendingApprovals,hasPendingUserInput:summary?.hasPendingUserInput??full.hasPendingUserInput,settledOverride:summary?.settledOverride??full.settledOverride,archivedAt:summary?.archivedAt??full.archivedAt,deletedAt:summary?.deletedAt??full.deletedAt},job);
+      if(state==='wait')return;
+      if(state==='settle'){
+        const inline=await this.inlineSettlementStatus(job);
+        if(inline==='wait'||!current())return;
+        if(inline==='ready'){
+          const access=job.connection.transport==='direct'
+            ?{api:await environmentApi(job.connection,await this.sessionFor(job.connection.connectionId??'')),close:()=>{}}
+            :await this.inlineThreadAccess(job.connection.environmentId??'');
+          try{if(!current())return;await access.api('/api/orchestration/dispatch',{type:'thread.settle',commandId:commandId(job.requestId,'settle'),threadId:job.threadId});}
+          finally{await access.close?.();}
         }
-        this.settings.settlementJobs=this.settings.settlementJobs.filter(item=>item!==job);
-        await this.save();
-      }catch{/* Keep the job for a later check after the connection or client recovers. */}
-    }
+      }
+      this.settings.settlementJobs=this.settings.settlementJobs.filter(item=>item!==job);
+      await this.save();
+    }catch(error){logFailure('thread.settlement.failed',error,{threadId:job.threadId});}
   }
 
 }
@@ -3121,7 +3155,8 @@ export class T3Settings extends PluginSettingTab {
       {name:'Stream replies into the editor',desc:'Insert Send and Ask replies into the note. Selection replies appear below the selection; other replies use the captured cursor position or follow its paragraph.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));}},
       {name:'Final answer format',desc:'Applies to new responses. Both formats support images and files.',render:setting=>{setting.addDropdown(dropdown=>dropdown.addOptions({formatted:'Current formatting','raw-markdown':'Raw Markdown'}).setValue(finalAnswerFormat(this.plugin.settings.inlineStreaming.finalAnswerFormat)).onChange(async value=>{this.plugin.settings.inlineStreaming.finalAnswerFormat=finalAnswerFormat(value);await this.plugin.save();}));}},
       {name:'Thread title generation',desc:'Use note titles by default, or let T3 name every new thread. Existing titles stay the same.',render:setting=>{setting.addDropdown(d=>d.addOption('untitled-only','Only for untitled notes').addOption('always','Always use T3').setValue(this.plugin.settings.threadTitleGeneration).onChange(async value=>{this.plugin.settings.threadTitleGeneration=threadTitleGeneration(value);await this.plugin.save();}));}},
-      {name:'Settle completed threads',desc:'Off by default. Move threads to Settled after a successful turn and saved reply. Sending again wakes the thread. Checks run while Obsidian is open.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.autoSettleThreads).onChange(async enabled=>{this.plugin.settings.autoSettleThreads=enabled;if(!enabled)this.plugin.settings.settlementJobs=[];await this.plugin.save();}));}},
+      {name:'Hide Obsidian threads in T3',desc:'Off by default. Tag new threads t3-obsidian and hide them across all connected T3 environments and clients. Enables T3’s hidden-tag filter. Turning off removes only this tag from that filter.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.hideObsidianThreads===true).onChange(async enabled=>{await this.plugin.setThreadHiding(enabled);}));}},
+      {name:'Settle completed threads',desc:'Off by default. Move threads to Settled after a successful turn and saved reply. Sending again wakes the thread. Checks follow thread events and saved replies while Obsidian is open.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.autoSettleThreads).onChange(async enabled=>{this.plugin.settings.autoSettleThreads=enabled;if(!enabled)this.plugin.settings.settlementJobs=[];await this.plugin.save();}));}},
       {name:'Thread and note mode',desc:'Free is the default and allows many-to-many links. 1:1 keeps one thread per note and one note per thread. The most recent links select existing 1:1 pairs. Saved replies and link history are kept when you switch.',render:setting=>{setting.addDropdown(d=>d.addOptions({free:'Free · Many-to-many','one-to-one':'1:1 · One thread per note'}).setValue(threadNoteMode(this.plugin.settings.threadNoteMode)).onChange(async value=>{this.plugin.settings.threadNoteMode=threadNoteMode(value);await this.plugin.save();}));}},
     ];
   }
