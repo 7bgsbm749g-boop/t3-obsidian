@@ -14,7 +14,7 @@ test('Windows tool output stays inside one HTML line without losing visible line
 test('v2 web search and T3 thread reads use specific labels with neutral live text',()=>{
   const state={messages:[],activities:[a('search',1,'tool.updated',{toolCallId:'search',itemType:'web_search',data:{toolName:'web_search',input:'{"query":"Obsidian docs"}'}}),
     a('read',2,'tool.updated',{toolCallId:'read',itemType:'dynamic_tool',data:{toolName:'t3-code.t3_thread_read',input:"{'threadId': 'bc4a870c-6287-59c1-8d17-861e7a9cb050'}"}})]};
-  const tools=responseTools(state,['turn']);assert.equal(tools[0].label,'Searching “Obsidian docs”');assert.equal(tools[0].action,'search');assert.equal(tools[1].label,'Reading thread bc4a870c');assert.equal(tools[1].icon,'messages-square');
+  const tools=responseTools(state,['turn']);assert.equal(tools[0].label,'Searching “Obsidian docs”');assert.equal(tools[0].action,'search');assert.equal(tools[1].label,'Reading a T3 thread');assert.equal(tools[1].icon,'messages-square');
   const data=state.activities[0].payload!.data;assert.ok(data&&typeof data==='object'&&'input' in data);data.input='';assert.equal(responseTools(state,['turn'])[0].label,'Searching web');
   const live=renderInlineTurn(state,'turn','thread','running','collapse');assert.doesNotMatch(live,/<strong>Reading thread/);
 });
@@ -96,7 +96,7 @@ test('summary matches T3 sentence and distinct file counts, including sparse fil
   const tools=responseTools({messages:[],activities},['turn']);assert.equal(tools.length,5);assert.equal(summarizeResponseTools(tools),'Ran 4 commands and changed 7 files');
   assert.deepEqual(tools.at(-1)?.files,['a.ts','b.ts','c.ts','d.ts','e.ts','f.ts','g.ts']);
   tools.push({...tools.at(-1)!,id:'again',files:['a.ts']});assert.equal(summarizeResponseTools(tools),'Ran 4 commands and changed 7 files');
-  const body=renderInlineTurn({messages:[],activities},'turn','thread','complete','collapse');assert.match(body,/<summary><span data-t3-tool-icon="hammer"[^\n]+<span>Ran 4 commands and changed 7 files<\/span><\/summary>/);
+  const body=renderInlineTurn({messages:[],activities},'turn','thread','complete','collapse');assert.match(body,/<summary><span data-t3-tool-icon="wrench"[^\n]+<span>Ran 4 commands and changed 7 files<\/span><\/summary>/);
   const browser=responseTools({messages:[],activities:[a('browser',1,'tool.completed',{toolCallId:'browser',data:{server:'t3-code',tool:'preview_snapshot'}})]},['turn']);
   assert.equal(summarizeResponseTools([...browser,...tools.slice(0,1)]),'Used browser 1 time and ran 1 command');
 });
@@ -164,4 +164,12 @@ test('thought group labels use the total count with a multiplication sign',()=>{
  const group={id:'thoughts',turnId:'turn',tools:[],thoughts:[thought]};
  assert.match(renderResponseToolGroup(group),/data-t3-tool-summary="Thought"/);
  assert.match(renderResponseToolGroup({...group,thoughts:[thought,{...thought,id:'r2'}]}),/Thought \(×2\)/);
+});
+
+test('catalogue labels, source identity and linked thread titles survive normalization',()=>{
+ const state={messages:[],activities:[a('watch',1,'tool.completed',{toolCallId:'watch',status:'completed',data:{toolName:'mcp__t3_code_direct__watch_pull_request'}}),a('source',2,'tool.completed',{toolCallId:'source',status:'completed',data:{toolName:'mcp__calendar__list',toolSource:{name:'Calendar',kind:'integration',icon:{_tag:'themed-logo',logoUrl:'https://example.com/icon.png'}}}}),a('read',3,'tool.completed',{toolCallId:'read',status:'completed',data:{toolName:'t3-code.t3_thread_read',input:{threadId:'target'},output:{thread:{title:'Release checks',link:'t3-thread://v2/env/target'}}}})]};
+ const tools=responseTools(state,['turn']);
+ assert.equal(tools[0].label,'Watching a pull request');assert.equal(tools[0].icon,'git-pull-request');
+ assert.match(renderResponseTool(tools[1]),/Calendar/);assert.match(renderResponseTool(tools[1]),/src="https:\/\/example.com\/icon.png"/);
+ assert.match(renderResponseTool(tools[2]),/href="t3-thread:\/\/v2\/env\/target"/);assert.match(tools[2].label,/Release checks/);
 });

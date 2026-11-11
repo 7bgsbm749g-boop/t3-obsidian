@@ -1,8 +1,9 @@
 import {isRecord,records,parseJson} from '../shared/values';
 import type {InlineActivity,InlineMessage,InlineThreadState} from '../conversations/inline-thread';
+import {resolveT3McpToolDefinition} from './t3-tool-catalogue';
 import {micromark} from 'micromark';
 export type ToolAction='command'|'edit'|'read'|'browser'|'device'|'search'|'code-search'|'thread'|'link-pr'|'unlink-pr'|'list-prs'|'other';
-export interface ResponseTool {id:string;turnId:string;key:string;status:string;label:string;activeLabel:string;icon:string;action:ToolAction;createdAt?:string;startedAt?:string;sequence:number;command?:string;cwd?:string;output?:string;exitCode?:number;durationMs?:number;files?:string[]}
+export interface ResponseTool {id:string;turnId:string;key:string;status:string;label:string;activeLabel:string;icon:string;action:ToolAction;createdAt?:string;startedAt?:string;sequence:number;command?:string;cwd?:string;output?:string;exitCode?:number;durationMs?:number;files?:string[];sourceName?:string;sourceIcon?:string;threadTitle?:string;threadUrl?:string}
 export interface ResponseToolGroup {id:string;turnId:string;createdAt?:string;sequence?:number;tools:ResponseTool[];thoughts?:InlineMessage[]}
 const object=(value:unknown):Record<string,unknown>=>isRecord(value)?value:{};
 const string=(value:unknown)=>typeof value==='string'?value.trim():'';
@@ -46,7 +47,12 @@ function fields(activity:InlineActivity){
   const files=changedFiles(data),allFiles:unknown[]=[...(Array.isArray(p.files)?p.files as unknown[]:[]),...(Array.isArray(data.files)?data.files as unknown[]:[])];for(const file of allFiles){const path=typeof file==='string'?file:object(file).path;if(string(path))files.add(string(path));}
   const query=string(structuredInput.query??structuredInput.q??records(structuredInput.search_query)[0]?.q);
   const threadId=string(structuredInput.threadId)||(/['"]threadId['"]\s*:\s*['"]([\w:-]+)['"]/.exec(typeof rawInput==='string'?rawInput:'')?.[1]??'');
-  return {status,name:/^(?:Tool|Tool updated)$/i.test(name)?undefined:name||undefined,path:path||undefined,kind:data.kind,itemType:p.itemType,requestKind:p.requestKind,query:query||undefined,threadId:threadId||undefined,
+  const source=object(data.toolSource),icon=object(data.toolIcon??source.icon);
+  const safeImage=(value:unknown)=>typeof value==='string'&&/^https:\/\//.test(value)?value:undefined;
+  let target=object(result.thread??result);
+  for(const value of [data.output,...records(data.output).map(row=>row.text),...records(object(data.output).content).map(row=>row.text)])if(typeof value==='string'&&value.length<100000){try{const parsed=object(parseJson(value));if(parsed.thread||parsed.title)target=object(parsed.thread??parsed);}catch{/* Plain text outputs are not metadata. */}}
+  const threadTitle=string(target.title),threadUrl=string(target.link??target.url);
+  return {sourceName:string(source.name)||undefined,sourceIcon:safeImage(icon.faviconUrl??icon.logoUrl),input:structuredInput,threadTitle:threadTitle||undefined,threadUrl:threadUrl.startsWith('t3-thread://')?threadUrl:undefined,status,name:/^(?:Tool|Tool updated)$/i.test(name)?undefined:name||undefined,path:path||undefined,kind:data.kind,itemType:p.itemType,requestKind:p.requestKind,query:query||undefined,threadId:threadId||undefined,
     command:command||undefined,cwd:string(item.cwd??input.workdir??data.cwd)||undefined,output:rawOutput&&rawOutput!==command?rawOutput:undefined,
     exitCode:typeof exitCode==='number'?exitCode:undefined,durationMs:typeof durationMs==='number'?durationMs:undefined,
     files:files.size?[...files]:undefined};
@@ -63,6 +69,15 @@ function toolAction(info:ReturnType<typeof fields>):ToolAction {
 }
 function presentation(info:ReturnType<typeof fields>){
   const {command,path,status}=info,name=info.name??'';
+  const definition=resolveT3McpToolDefinition(name,info.input);
+  if(definition){
+    const [action,running,completed,detail]=definition.labels;
+    const verb=status==='failed'?`Failed to ${action.toLowerCase()}`:status==='declined'?`Declined to ${action.toLowerCase()}`:status==='stopped'?`Stopped ${running.toLowerCase()}`:done(status)?completed:running;
+    const target=definition.summaryAction==='thread-read'?(info.threadTitle??'a T3 thread'):detail;
+    const icon=definition.icon==='pull-request'?'git-pull-request':definition.icon==='browser'?'globe':definition.icon==='device'?'smartphone':'messages-square';
+    return {label:compact(`${verb} ${target}`),icon};
+  }
+  if(info.sourceName)return {label:compact(`${done(status)?'Used':'Using'} ${info.sourceName} · ${name.split(/__|[.]/).at(-1)?.replace(/_/g,' ')??'tool'}`),icon:'plug'};
   const clean=name.replace(/^mcp__t3_code__|^mcp__[^_]+__|^functions[._]/,'').split('.').at(-1)??name;
   let target=command?commandProgram(command):compact(clean).replace(/_/g,' '),icon=command?'terminal':'wrench',action='run';
   if(info.itemType==='web_search'||/^(?:web[._]run|mcp__web__run)$/.test(name)){action='search';target=info.query?`“${compact(info.query)}”`:'web';icon='search';}
@@ -149,7 +164,7 @@ export function renderResponseToolGroup(group:ResponseToolGroup,current?:{tool:R
   const thoughts=group.thoughts??[],count=thoughts.length;
   const batch=[summarizeResponseTools(group.tools),count?(count===1?'Thought':`Thought (×${count})`):''].filter(Boolean).join(' · ');
   const label=current?(current.active?current.tool.activeLabel:current.tool.label):`${batch}${stopped?` · ${stopped} stopped or declined`:''}`;
-  const summary=`<span data-t3-tool-icon="${html(current?.tool.icon??(group.tools.length?'hammer':'brain'))}" aria-hidden="true"></span><span>${html(label)}</span>`+(current?.active?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'');
+  const summary=`<span data-t3-tool-icon="${html(current?.tool.icon??(group.tools.length?new Set(group.tools.map(tool=>tool.icon)).size===1?group.tools[0].icon:'wrench':'brain'))}" aria-hidden="true"></span><span>${html(label)}</span>`+(current?.active?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'');
   const entries=[...group.tools.map(tool=>({createdAt:tool.createdAt,sequence:tool.sequence,body:renderResponseTool(tool)})),...thoughts.map(thought=>({createdAt:thought.createdAt,sequence:thought.sequence??0,body:renderResponseThought(thought)}))].sort(timelineOrder);
   return `<details class="${current?'send-to-t3-response-activity':'send-to-t3-tool-group'}" data-t3-tool-group="${html(group.id)}" data-t3-tool-summary="${html(batch)}"${current?' data-t3-live-tool="true"':''}><summary>${summary}</summary><div class="send-to-t3-tool-group-content">${entries.map(entry=>entry.body).join('')}</div></details>`;
 }
@@ -187,6 +202,7 @@ export function summarizeResponseTools(tools:ResponseTool[]):string {
   }).map((label,index)=>index?label.charAt(0).toLowerCase()+label.slice(1):label);
   return labels.length<2?labels[0]??'':labels.length===2?labels.join(' and '):`${labels.slice(0,-1).join(', ')}, and ${labels.at(-1)}`;
 }
+function toolGlyph(tool:ResponseTool){return tool.sourceIcon?`<img src="${html(tool.sourceIcon)}" alt="${html(tool.sourceName??'Tool source')}" class="send-to-t3-tool-source-icon">`:`<span data-t3-tool-icon="${html(tool.icon)}" aria-hidden="true"></span>`;}
 export function renderResponseTool(tool:ResponseTool):string {
-  return `<div class="send-to-t3-tool" data-t3-tool-id="${html(tool.id)}" data-t3-tool-key="${html(tool.key)}" data-t3-tool-status="${html(tool.status)}"><span data-t3-tool-icon="${html(tool.icon)}" aria-hidden="true"></span><span>${html(tool.label)}</span></div>`;
+  return `<div class="send-to-t3-tool" data-t3-tool-id="${html(tool.id)}" data-t3-tool-key="${html(tool.key)}" data-t3-tool-status="${html(tool.status)}">${toolGlyph(tool)}${tool.threadUrl?`<a href="${html(tool.threadUrl)}">${html(tool.label)}</a>`:`<span>${html(tool.label)}</span>`}</div>`;
 }

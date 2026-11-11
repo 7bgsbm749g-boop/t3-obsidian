@@ -15,6 +15,7 @@ export interface WireTurnItem {
   id:string;type:string;status:string;ordinal:number;updatedAt?:string;runId?:string|null;nodeId?:string;
   startedAt?:string;completedAt?:string;title?:string;summary?:string;text?:string;streaming?:boolean;
   messageId?:string;requestId?:string;toolName?:string;outputOmitted?:boolean;
+  toolSource?:unknown;toolIcon?:unknown;
   input?:unknown;output?:unknown;failure?:{message?:string};steps?:unknown;
   responseMode?:string;questions?:unknown;requestKind?:string;prompt?:string;options?:unknown;appName?:string;
   questionAnswer?:{answers?:unknown};fileName?:string;viewedImagePath?:string;exitCode?:number;
