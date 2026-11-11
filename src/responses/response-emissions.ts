@@ -4,6 +4,12 @@ import {runTimer} from './response-presentation';
 import {renderResponseTasks} from './response-tasks';
 
 export interface ResponseEmission {id:string;turnId:string|null;createdAt?:string;sequence:number;body:string;active:boolean;kind:string}
+const compactionTokens=(count:number)=>{
+  for(const [scale,unit] of [[1e12,'T'],[1e9,'B'],[1e6,'M'],[1e3,'K']] as const){
+    if(count>=scale){const value=count/scale;return value.toFixed(value>=100?0:value>=10?1:2).replace(/\.0+$/,'')+unit;}
+  }
+  return String(Math.round(count));
+};
 const html=(text:string)=>text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\n/g,'&#10;');
 // Blank lines alone let consecutive Markdown quotes merge. A zero-size HTML
 // block makes each native callout a separate block, including inside progress.
@@ -38,8 +44,7 @@ export function responseEmissions(state:InlineThreadState,turns:string[],markdow
       const running=p.status==='inProgress';
       active=running&&!!activeTurn&&activity.turnId===activeTurn;
       const before=p.beforeTokenCount,after=p.afterTokenCount;
-      const tokens=(count:number)=>count>=1000000?`${Number((count/1000000).toFixed(1))}M`:count>=1000?`${Number((count/1000).toFixed(1))}k`:String(count);
-      const counts=typeof before==='number'&&Number.isFinite(before)&&before>=0&&typeof after==='number'&&Number.isFinite(after)&&after>=0?` ${tokens(before)} → ${tokens(after)} tokens`:'';
+      const counts=typeof before==='number'&&Number.isFinite(before)&&before>=0&&typeof after==='number'&&Number.isFinite(after)&&after>=0?` ${compactionTokens(before)} → ${compactionTokens(after)} tokens`:'';
       const timer=activity.createdAt?runTimer({startedAt:activity.createdAt,...(typeof p.completedAt==='string'?{finishedAt:p.completedAt}:{})}):'';
       const label=running?(active?'Compacting for':'Context compaction'):p.status==='failed'?'Context compaction failed':p.status==='stopped'?'Context compaction stopped':'Context compacted'+counts;
       body=`<span class="send-to-t3-context" data-t3-emission-id="${html(activity.id)}"><span data-t3-tool-icon="minimize-2" aria-hidden="true"></span><span>${label}${active&&timer?' '+timer:''}</span>${active?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':''}</span>`;
