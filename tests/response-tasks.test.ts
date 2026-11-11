@@ -33,3 +33,11 @@ test('only the latest Tasks list appears directly below the title in each live d
   const complete=renderInlineTurn(state,'run','thread','complete','collapse');
   assert.equal(/data-t3-tasks-id="([^"]+)"/.exec(live)?.[1],/data-t3-tasks-id="([^"]+)"/.exec(complete)?.[1]);
 });
+
+test('v2 running and legacy in_progress task states have the same active marker',()=>{
+ for(const status of ['running','in_progress']){
+  const body=renderResponseTasks('task',{steps:[{step:'Active task',status}]});
+  assert.match(body,/data-t3-task-state="in_progress"/);
+  assert.doesNotMatch(body,/aria-label="Pending"/);
+ }
+});

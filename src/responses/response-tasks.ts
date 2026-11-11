@@ -13,7 +13,7 @@ function task(text:string,state:TaskState){
 export function renderResponseTasks(id:string,payload:{text?:string;steps?:unknown[]}):string {
   let body='';
   if(Array.isArray(payload.steps)&&payload.steps.length){
-    body=records(payload.steps).map(step=>task(valueText(step.step??step.text??step.content??'').replace(/[\r\n]+/g,' '),step.status==='completed'?'completed':step.status==='in_progress'?'in_progress':'pending')).join('');
+    body=records(payload.steps).map(step=>task(valueText(step.step??step.text??step.content??'').replace(/[\r\n]+/g,' '),step.status==='completed'?'completed':step.status==='running'||step.status==='in_progress'?'in_progress':'pending')).join('');
   }else{
     let prose:string[]=[],fence='';
     const flush=()=>{if(prose.length)body+=micromark(prose.join('\n'));prose=[];};
