@@ -170,7 +170,7 @@ for(const inputKind of ['question answer','steering','repeated mixed inputs'] as
   for(let index=1;index<ordered.length;index++)assert.ok(text.indexOf(ordered[index-1])<text.indexOf(ordered[index]),'transcript retains chronological order');
   const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',document=`<!-- t3-inline:start:${id} -->\n${text}<!-- t3-inline:end:${id} -->`;
   assert.deepEqual(activeInlineIds(document),[id]);
-  assert.deepEqual(failedInlineIds(document.replace(' · Working**',' · Error**')),[id]);
+  assert.deepEqual(failedInlineIds(document.replace(' · Working for**',' · Error**')),[id]);
   assert.doesNotMatch(stoppedResponseBody(document),/ · Working|class="send-to-t3-inline-spinner"/);
 });
 
@@ -221,7 +221,7 @@ test('Collapse status remains discoverable for steering and exact error recovery
   const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
   const initial=initialRegion(id,undefined,'Name','collapse',{startedAt:timing.startedAt});
   assert.deepEqual(activeInlineIds(initial.text),[id]);
-  const failed=initial.text.replace(' · Working**',' · Error**');assert.deepEqual(failedInlineIds(failed),[id]);
+  const failed=initial.text.replace(' · Working for**',' · Error**');assert.deepEqual(failedInlineIds(failed),[id]);
   const stopped=stoppedResponseBody(initial.text);
   assert.match(stopped,/Name · Interrupted/);assert.match(stopped,/data-t3-end=/);assert.doesNotMatch(stopped,/spinner|Working/);
 });
@@ -351,5 +351,6 @@ test('timestamped steering creates measured continuation folds with the final ou
  const messages=[{id:'p',role:'assistant' as const,turnId:'turn',text:'Before steering',createdAt:'2026-10-02T10:00:05Z',streaming:false},{id:'f',role:'assistant' as const,turnId:'turn',text:'Final outside',createdAt:'2026-10-02T10:00:30Z',streaming:false}];
  const conversation={messages,steering:[{messageId:'s',text:'Steer',confirmed:true,createdAt:'2026-10-02T10:00:12Z',before:[messages[0]]}]};
  const output=renderInlineTurn({...state,messages,latestTurn:{turnId:'turn',state:'completed',assistantMessageId:'f',completedAt:'2026-10-02T10:00:30Z'}},'turn','thread','complete','collapse','environment',conversation,undefined,undefined,{startedAt:timing.startedAt,finishedAt:'2026-10-02T10:00:30Z'});
+ const failed=renderInlineTurn({...state,messages},'turn','thread','error','collapse','environment',conversation,undefined,undefined,{startedAt:timing.startedAt,finishedAt:'2026-10-02T10:00:30Z'});assert.match(failed,/· Error/);assert.doesNotMatch(failed,/Working for|inline-spinner/);
  const folds=foldsOf(output);assert.equal(folds.length,2);assert.match(folds[0],/Worked for/);assert.match(folds[0],/>12s<\/span>/);assert.match(folds[1],/Continued for/);assert.match(folds[1],/>18s<\/span>/);for(const fold of folds)assert.doesNotMatch(fold,/Final outside/);
 });

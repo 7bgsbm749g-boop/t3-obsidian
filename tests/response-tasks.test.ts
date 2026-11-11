@@ -41,3 +41,10 @@ test('v2 running and legacy in_progress task states have the same active marker'
   assert.doesNotMatch(body,/aria-label="Pending"/);
  }
 });
+
+test('task and public message ties use canonical sequence inside history',()=>{
+ const at='2026-11-11T12:00:00Z';
+ const state:InlineThreadState={messages:[{id:'before',role:'assistant',turnId:'run',text:'Before tasks',streaming:false,createdAt:at,sequence:1},{id:'after',role:'assistant',turnId:'run',text:'After tasks',streaming:false,createdAt:at,sequence:3}],activities:[{id:'task',turnId:'run',kind:'response.plan',summary:'Tasks',createdAt:at,sequence:2,payload:{steps:[{step:'Ordered task',status:'running'}]}}]};
+ const body=renderInlineTurn(state,'run','thread','running','collapse');
+ assert.ok(body.indexOf('Before tasks')<body.indexOf('Ordered task')&&body.indexOf('Ordered task')<body.indexOf('After tasks'));
+});

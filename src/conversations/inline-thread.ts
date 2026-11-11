@@ -573,7 +573,6 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const errorStatus=lastError&&!errorShown?renderProviderError(`session-error:${turnId}`,lastError,state.latestTurn?.completedAt??state.turns?.[turnId]?.completedAt??undefined):'';
   // Each task item stays at its recorded timeline position. Updates to the
   // same item replace it; distinct items keep their own disclosure identity.
-  const tasks='';
   const timelineEmissions=emissions;
   let currentTool=phase==='running'&&!waiting?currentResponseToolGroup(state,turnId,toolGroups):undefined;
   const latestEmission=phase==='running'?timelineEmissions.at(-1):undefined;
@@ -601,7 +600,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     const separator=body&&previousRole==='assistant'&&segment.role==='assistant'&&!rawFinal(segment.messageId)&&!rawFinal(segments[index-1]?.messageId)&&/^>/.test(body.split('\n').at(-1)??'')&&/^>/.test(rendered)?'\n>\n':'\n\n';
     previousRole=segment.role;
     const next=(body?body+(embedded?'\n\n':separator):'')+embedded+rendered;
-    return index===followupIndex?`${next}\n\n${heading}${timer}${spinner}${tasks?'\n\n'+tasks:''}`:next;
+    return index===followupIndex?`${next}\n\n${heading}${timer}${spinner}`:next;
   },''):messages.some(message=>growing(message.id))?messages.map(message=>assistant(message.text,message.id)).filter(Boolean).join('\n\n'):format==='raw-markdown'?answerBlocks.join('\n\n'):answer?quoteResponse(closeOpenFence(answer)):'';
   if(mode!=='collapse'&&htmlBodies.length){
     if(!transcript)prose=messages.map(message=>htmlBefore(Date.parse(message.createdAt??'')||0)+assistant(message.text,message.id)).filter(Boolean).join('\n\n');
@@ -615,8 +614,8 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   if(mode==='collapse'){
     const pieces=steeringSegments(all,conversation?.steering.filter(item=>item.confirmed)??[]);
     const title=phase==='complete'?`**${label} · ${pending.length?'Waiting for answer':finalReady?'Worked for':'Working for'}**`:heading;
-    // One native callout owns the entire chronological history, including
-    // steering and earlier completed turns. Only the current completed turn's
+    // Native work folds keep chronological history and steering segments.
+    // Only the current completed turn's
     // last final-message piece stays outside. Frozen prefixes of that same
     // message still belong before their steering input inside the history.
     const finalId=finalReady?inlineTurnMessages({...state,messages:all},turnId).at(-1)?.id:undefined;
@@ -625,16 +624,16 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     // placement. Keep their exact input record separate from turn bindings.
     const history:string[]=[...(initialInput?[renderInitialInput(initialInput,timing?.startedAt)]:[])];let final='';
     const completedSegments:string[]=[];let segmentStart=timing?.startedAt,segmentNumber=0;
-    const segmentFold=(contents:string[],end?:string)=>{
-      const finished=!!end,caption=finished?(segmentNumber?'Continued for':'Worked for'):'Working for';
+    const segmentFold=(contents:string[],end?:string,last=false)=>{
+      const finished=!!end,caption=last&&phase==='error'?'Error':last&&phase==='interrupted'?'Interrupted':last&&phase==='cancelled'?'Stopped':finished?(segmentNumber?'Continued for':'Worked for'):'Working for';
       const duration=segmentStart?runTimer({startedAt:segmentStart,...(end?{finishedAt:end}:{})}):'';
       const key=encodeURIComponent(`${threadId}:${segmentStart??turnId}:${segmentNumber}`)+(finished?':complete':':active');
       return `> [!t3-progress]${finished?'-':'+'} **${label} · ${caption}**${duration?' '+duration:''}${!finished?spinner:''} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(contents.length?'\n>\n'+contents.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
     };
     let toolIndex=0;
-    const toolsBefore=(at=Infinity)=>{while(toolIndex<historyRows.length&&(Date.parse(historyRows[toolIndex].createdAt??'')||0)<=at)history.push(historyRows[toolIndex++].body);};
+    const toolsBefore=(at=Infinity,sequence=Infinity)=>{while(toolIndex<historyRows.length){const row=historyRows[toolIndex],time=Date.parse(row.createdAt??'')||0;if(time>at||time===at&&row.sequence>sequence)break;history.push(historyRows[toolIndex++].body);}};
     for(const [index,piece] of pieces.entries()){
-      const message=state.messages.find(message=>message.id===piece.messageId)??all.find(message=>message.id===piece.messageId),createdAt=piece.createdAt??message?.createdAt;if(createdAt)toolsBefore(Date.parse(createdAt));
+      const message=state.messages.find(message=>message.id===piece.messageId)??all.find(message=>message.id===piece.messageId),createdAt=piece.createdAt??message?.createdAt;if(createdAt)toolsBefore(Date.parse(createdAt),message?.sequence??Infinity);
       if(index===finalIndex)final=assistant(piece.text,piece.messageId);
       else if(piece.role==='user'){
         if(!piece.answer&&createdAt&&segmentStart&&Number.isFinite(Date.parse(createdAt))&&Date.parse(createdAt)>=Date.parse(segmentStart)){
@@ -648,13 +647,13 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     if(bottom)history.push(bottom.trim());
     // A steering input starts its own measured continuation segment. Final
     // answer selection above keeps the existing exact response boundary.
-    const fold=completedSegments.length?[...completedSegments,segmentFold(history,finalReady?timing?.finishedAt:undefined)].join('\n\n'):
+    const fold=completedSegments.length?[...completedSegments,segmentFold(history,phase==='running'||phase==='sending'?undefined:timing?.finishedAt,true)].join('\n\n'):
       `> [!t3-progress]${finalReady?'-':'+'} ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`)+(finalReady?':complete':':active')}"></span>`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
     const status=handoffError||errorStatus||approvals;
     return fold+(htmlBodies.length?'\n\n'+htmlBodies.map(value=>value.body).join('\n\n'):'')+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
   }
   const toolHistory=(retain||phase!=='complete'?historyRows:[]).map(item=>item.body).join('\n\n');
-  if(phase==='complete')return (retain&&tasks?tasks+'\n\n':'')+input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
+  if(phase==='complete')return input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
   const status=handoffError?'\n\n'+handoffError:errorStatus?'\n\n'+errorStatus:approvals?'\n\n'+approvals:'';
   const contents=[input.trimEnd(),prose].filter(Boolean).join('\n\n');
   const body=contents?`\n\n${contents}\n`:'';
