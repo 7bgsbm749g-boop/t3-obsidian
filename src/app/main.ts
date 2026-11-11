@@ -1925,7 +1925,11 @@ export default class SendToT3 extends Plugin {
         }
         return hashes;
       },
-      load:()=>deviceState<PendingReloadState>(key),save:state=>deviceState(key,state).then(()=>{}),
+      // The small one-shot journal must survive native WebView reloads. The
+      // SDK local store writes synchronously before dispatch; IndexedDB can
+      // retain an older journal after an abrupt mobile renderer restart.
+      load:async()=>this.app.loadLocalStorage(key) as PendingReloadState|undefined,
+      save:async state=>{this.app.saveLocalStorage(key,state);},
       result:async value=>{await adapter.write(resultPath,JSON.stringify(value)+'\n');},
       reload:()=>this.serializeCommand(async()=>{
         if(!active()||!idle())return 'deferred';

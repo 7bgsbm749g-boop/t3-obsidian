@@ -33,5 +33,5 @@ proves completion. Request files and personal device identities remain private.
 The top-level JSON files use the core plugin settings Sync category. Community
 plugin files must also sync. Custom hidden directories and arbitrary files in
 plugin folders are not a supported delivery route. See Obsidian's
-[Sync settings](https://obsidian.md/help/sync/settings). The state journal lives
-in device-local storage and does not alter notes or user plugin settings.
+[Sync settings](https://obsidian.md/help/sync/settings). The small journal uses synchronous Obsidian local storage so the issued marker
+is saved before a native reload. It does not alter notes or user plugin settings.
