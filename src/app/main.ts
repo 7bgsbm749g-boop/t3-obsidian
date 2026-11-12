@@ -1,3 +1,5 @@
+import {WorkspacePanel,readWorkspace,type WorkspaceTarget} from '../projects/workspace-panel';
+import {PullRequestPanel} from '../projects/pull-request-panel';
 import {modelChoices} from '../conversations/model-picker';
 import {RouteStatus} from '../connection/route-status';
 import {readImportThreads,readImportRuns,readImportRun,readImportPreview,importHistoryState} from '../conversations/import-source';
@@ -395,6 +397,8 @@ export default class SendToT3 extends Plugin {
       if(!checking)void this.openManualAction(file,'',editor.getSelection(),{editor,view},this.commandSendSelector(view)).catch(error=>new Notice(`T3 Code: ${message(error)}`,10000));
       return true;
     }});
+    this.addCommand({id:'workspace-panel',name:'Show workspace panel',callback:()=>this.openWorkspacePanel(false)});
+    this.addCommand({id:'pull-request-panel',name:'Show pull request panel',callback:()=>this.openWorkspacePanel(true)});
     // eslint-disable-next-line obsidianmd/commands/no-default-hotkeys -- The user explicitly requested panel hotkeys.
     this.addCommand({id:'toggle-floating-panels',name:'Hide or show floating panels',hotkeys:[{modifiers:['Mod','Shift'],key:'H'}],callback:()=>toggleNoteTabPanels(this.app)});
     // eslint-disable-next-line obsidianmd/commands/no-default-hotkeys -- The user explicitly requested panel hotkeys.
@@ -1512,6 +1516,23 @@ export default class SendToT3 extends Plugin {
     const projectId=request?.projectId??job?.projectId,environment=request?.threadEnvironmentId??job?.connection?.environmentId;
     const project=[...this.projects(),...this.settings.directProjects,...this.settings.projects].find(project=>project.id===projectId&&(job?.connection?.connectionId?project.connectionId===job.connection.connectionId:environment?project.connectionId?this.settings.paired.find(connection=>connection.id===project.connectionId)?.environmentId===environment:this.eventLocalEnvironmentId===environment:!cached&&!!job?.connection&&!job.connection.connectionId&&!project.connectionId));
     return project&&projectKey(project);
+  }
+  private openWorkspacePanel(pullRequests:boolean){
+    const file=this.app.workspace.getActiveFile(),entry=file&&this.noteThread(file.path);
+    if(!file||!entry){new Notice('Send or link this note to a T3 thread first.');return;}
+    try{
+      const project=this.projectForNoteThread(entry),connection=this.connection(project),environmentId=entry.environmentId??connection.environmentId;
+      if(!environmentId)throw Error('Reconnect this note’s T3 machine first.');
+      const target:WorkspaceTarget={notePath:file.path,projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,threadId:entry.threadId,environmentId,machine:project.connectionName??'T3 machine'};
+      const open=()=>this.inlineThreadAccess(environmentId),load=()=>readWorkspace(target,open);
+      const openPr=()=>new PullRequestPanel(this.app,target,load,async link=>{
+        if(typeof link.repository!=='string'||typeof link.number!=='number'||typeof link.host!=='string')throw Error('T3 returned an invalid pull request link.');
+        const access=await open();let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined;
+        try{rpc=await connectT3Rpc(access.api,access.origin);const ref={projectId:project.id,repository:link.repository,number:link.number,host:link.host};const detail=await rpc.call('pullRequests.detail',ref);if(!isRecord(detail))throw Error('T3 did not return pull request details.');try{const activity=await rpc.call('pullRequests.activity',ref);return {detail,activity:isRecord(activity)?activity:undefined};}catch(error){return {detail,error:message(error)};}}
+        finally{rpc?.close();await access.close?.();}
+      }).open();
+      if(pullRequests)openPr();else new WorkspacePanel(this.app,target,load,openPr).open();
+    }catch(error){new Notice(message(error));}
   }
   private async loadSendModels(key?:string){
     const project=[...this.projects(),...this.settings.directProjects,...this.settings.projects].find(project=>projectKey(project)===key);
