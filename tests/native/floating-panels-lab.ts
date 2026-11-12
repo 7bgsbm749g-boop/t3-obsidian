@@ -13,9 +13,16 @@ export default class FloatingPanelsLab extends Plugin{
     if(!(this.app.vault.adapter instanceof FileSystemAdapter))throw Error('Local isolated vault required.');
     this.root=path.dirname(this.app.vault.adapter.getBasePath());
     if(!fs.existsSync(path.join(this.root,'ISOLATED-NATIVE-LAB')))throw Error('Refuse non-lab vault.');
-    this.app.workspace.onLayoutReady(()=>void this.run().catch(error=>{this.write('ERROR.json',{message:String(error),stack:error.stack,buttons:Array.from(document.querySelectorAll('button')).map(b=>({text:b.textContent,disabled:b.disabled,connected:b.isConnected})),notices:Array.from(document.querySelectorAll('.notice')).map(e=>e.textContent),dialogs:Array.from(document.querySelectorAll('.modal-container,.prompt')).map(e=>e.outerHTML.slice(0,12000))});void this.shot('failure');}));
+    this.app.workspace.onLayoutReady(()=>void this.run().catch(async error=>{this.write('ERROR.json',{message:String(error),stack:error.stack,buttons:Array.from(document.querySelectorAll('button')).map(b=>({text:b.textContent,disabled:b.disabled,connected:b.isConnected})),notices:Array.from(document.querySelectorAll('.notice')).map(e=>e.textContent),dialogs:Array.from(document.querySelectorAll('.modal-container,.prompt')).map(e=>e.outerHTML.slice(0,12000))});await this.shot('failure');this.retain();}));
   }
   private write(name:string,value:unknown){fs.writeFileSync(path.join(this.root,name),JSON.stringify(value,null,2));}
+  private retain(){
+    const target=JSON.parse(fs.readFileSync(path.join(this.root,'REPORTS.json'),'utf8')).evidence;
+    if(!path.isAbsolute(target)||target===this.root)throw Error('Separate report destination required.');
+    for(const name of ['ERROR.json','RESULT.json','failure.png','send.png','minimized.png','ask.png','workspace.png','pull-request.png','pull-request-checks.png','narrow.png']){
+      const source=path.join(this.root,name);if(fs.existsSync(source))fs.copyFileSync(source,path.join(target,name));
+    }
+  }
   private assert(value:unknown,message:string){if(!value)throw Error(message);}
   private async shot(name:string){await wait(250);const image=await remote.getCurrentWindow().webContents.capturePage();fs.writeFileSync(path.join(this.root,name+'.png'),image.toPNG());}
   private async run(){
@@ -39,6 +46,6 @@ export default class FloatingPanelsLab extends Plugin{
     this.app.workspace.leftSplit.collapse();this.app.workspace.rightSplit.collapse();win.setSize(430,820);await this.shot('narrow');const rect=pull.modalEl.getBoundingClientRect();this.assert(rect.width>=300&&rect.width<=430&&rect.left>=0,'Narrow panel fits viewport');
     closeNoteTabPanel(this.app);await this.app.vault.delete(file);this.assert(!this.app.vault.getAbstractFileByPath(file.path),'Fixture note removed');this.assert(!document.querySelector('.t3-floating-launcher'),'Launchers removed');this.assert(sends===0,'Design checks never dispatch');
     this.write('RESULT.json',{ok:true,apiVersion,syntheticApiData:true,nativeDesktop:true,nativeMobile:false,sends,checks:['minimize/restore','hide/show launcher','draft retention','model selection','workspace rendering','PR tabs','narrow viewport'],cleanup:{notesRemoved:true,panelsRemoved:true},screenshots:['send','ask','workspace','minimized','pull-request','pull-request-checks','narrow']});
-    remote.app.quit();
+    this.retain();remote.app.quit();
   }
 }
