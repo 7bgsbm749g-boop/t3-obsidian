@@ -123,7 +123,7 @@ export function responseTools(state:InlineThreadState,turns:string[]):ResponseTo
  * or a turn boundary splits the batch. Canonical ordinals resolve tied times. */
 export function responseToolGroups(state:InlineThreadState,turns:string[]):ResponseToolGroup[] {
   const boundaries=[...state.messages.filter(m=>m.role!=='reasoning'&&m.text.trim()).map(m=>({turnId:m.turnId,createdAt:m.createdAt,sequence:m.sequence??0})),
-    ...state.activities.filter(a=>['user-input.requested','approval.requested','context-compaction','response.plan','response.notification','response.html'].includes(a.kind)).map(a=>({turnId:a.turnId,createdAt:a.createdAt,sequence:a.sequence??0}))];
+    ...state.activities.filter(a=>['user-input.requested','approval.requested','context-compaction','response.plan','response.proposed-plan','response.notification','response.html'].includes(a.kind)).map(a=>({turnId:a.turnId,createdAt:a.createdAt,sequence:a.sequence??0}))];
   const entries=[...responseTools(state,turns).map(tool=>({tool,thought:undefined,turnId:tool.turnId,createdAt:tool.createdAt,sequence:tool.sequence})),
     ...state.messages.filter(m=>m.role==='reasoning'&&turns.includes(m.turnId??'')&&m.text.trim()).map(thought=>({tool:undefined,thought,turnId:thought.turnId!,createdAt:thought.createdAt,sequence:thought.sequence??0}))].sort(timelineOrder);
   const result:ResponseToolGroup[]=[];let previousSlot='';
@@ -153,7 +153,7 @@ export function currentResponseToolGroup(state:InlineThreadState,turnId:string,g
   const group=groups.filter(g=>g.turnId===turnId).at(-1);if(!group)return;
   const latest=group.tools.at(-1);if(!latest)return;
   const at=Date.parse(latest.createdAt??'');
-  if(Number.isFinite(at)&&(state.messages.some(m=>(m.turnId===turnId||m.turnId===null)&&m.text.trim()&&timelineOrder({createdAt:m.createdAt,sequence:m.sequence??0},latest)>0)||state.activities.some(a=>a.turnId===turnId&&['user-input.requested','approval.requested','context-compaction','response.plan','response.notification','response.html'].includes(a.kind)&&timelineOrder({createdAt:a.createdAt,sequence:a.sequence??0},latest)>0)))return;
+  if(Number.isFinite(at)&&(state.messages.some(m=>(m.turnId===turnId||m.turnId===null)&&m.text.trim()&&timelineOrder({createdAt:m.createdAt,sequence:m.sequence??0},latest)>0)||state.activities.some(a=>a.turnId===turnId&&['user-input.requested','approval.requested','context-compaction','response.plan','response.proposed-plan','response.notification','response.html'].includes(a.kind)&&timelineOrder({createdAt:a.createdAt,sequence:a.sequence??0},latest)>0)))return;
   const tool=group.tools.filter(t=>t.status==='inProgress').at(-1)??latest;
   if(tool.status==='failed')return;
   return {group,tool,active:tool.status==='inProgress'||tool.status==='completed'};

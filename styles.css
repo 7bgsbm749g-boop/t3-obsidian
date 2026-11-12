@@ -581,6 +581,15 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 .send-to-t3-tasks > summary::before { content: '›'; width: .6em; flex: 0 0 .6em; }
 .send-to-t3-tasks[open] > summary::before { transform: rotate(90deg); }
 .send-to-t3-tasks-content { padding-inline-start: 1.7em; }
+.send-to-t3-proposed-plan { margin: .75em 0; padding: 1em; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: var(--background-primary-alt); }
+.send-to-t3-plan-header { display: flex; align-items: center; flex-wrap: wrap; gap: .6em; }
+.send-to-t3-plan-header strong { overflow-wrap: anywhere; }
+.send-to-t3-plan-badge { font-size: var(--font-smallest); padding: .15em .5em; border-radius: var(--radius-s); background: var(--background-modifier-hover); color: var(--text-muted); }
+.send-to-t3-plan-status { font-size: var(--font-smallest); color: var(--text-muted); }
+.send-to-t3-plan-content, .send-to-t3-plan-preview { margin-top: .75em; overflow-wrap: anywhere; }
+.send-to-t3-proposed-plan details > summary { margin-top: .75em; cursor: pointer; color: var(--text-accent); }
+.send-to-t3-proposed-plan details:not([open]) .send-to-t3-plan-collapse, .send-to-t3-proposed-plan details[open] .send-to-t3-plan-expand, .send-to-t3-proposed-plan details[open] + .send-to-t3-plan-preview { display: none; }
+.send-to-t3-plan-preview { max-height: 20em; overflow: hidden; mask-image: linear-gradient(#000 70%, transparent); }
 .send-to-t3-task { display: flex; align-items: baseline; gap: .6em; margin: .35em 0; }
 .send-to-t3-task-mark { position: relative; display: inline-block; flex: 0 0 .85em; width: .85em; height: .85em; border: 1.5px solid var(--text-muted); border-radius: 2px; box-sizing: border-box; pointer-events: none; }
 .send-to-t3-task[data-t3-task-state="in_progress"] > .send-to-t3-task-mark::after { content: ''; position: absolute; width: 1.5px; height: 85%; background: var(--text-muted); left: 45%; top: 8%; transform: rotate(35deg); }

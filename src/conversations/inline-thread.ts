@@ -559,7 +559,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const displayedTurns=[...new Set([turnId,...all.map(message=>message.turnId).filter((id):id is string=>!!id)])];
   const htmlResults=responseHtmlResults(state.activities,displayedTurns,environmentId,threadId);
   const htmlBodies:Array<{body:string;at:number;sequence?:number}>=htmlResults.map(reference=>({body:renderHtmlResult(reference),at:Date.parse(state.activities.find(activity=>activity.kind==='response.html'&&activity.payload?.itemId===reference.itemId)?.createdAt??'')||0}));
-  if(mode!=='collapse'&&(retain||phase!=='complete'))htmlBodies.push(...responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim()))).filter(item=>item.kind==='response.plan').map(item=>({body:item.body,at:Date.parse(item.createdAt??'')||0,sequence:item.sequence})));
+  if(mode!=='collapse')htmlBodies.push(...responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim()))).filter(item=>item.kind==='response.proposed-plan'||item.kind==='response.plan'&&(retain||phase!=='complete')).map(item=>({body:item.body,at:Date.parse(item.createdAt??'')||0,sequence:item.sequence})));
   htmlBodies.sort((a,b)=>a.at-b.at||(a.sequence??0)-(b.sequence??0));
   let htmlIndex=0;
   const htmlBefore=(at=Infinity,sequence=Infinity)=>{const parts:string[]=[];while(htmlIndex<htmlBodies.length&&(htmlBodies[htmlIndex].at<at||htmlBodies[htmlIndex].at===at&&(htmlBodies[htmlIndex].sequence??0)<=sequence))parts.push(htmlBodies[htmlIndex++].body);return parts.length?parts.join('\n\n')+'\n\n':'';};
@@ -585,7 +585,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const historyGroups=toolGroups;
   const workRows=historyGroups.map(group=>({createdAt:group.createdAt,sequence:group.sequence??0,body:renderResponseToolGroup(group),hasThoughts:!!group.thoughts?.length}));
   const historyRows=[...workRows,
-    ...timelineEmissions.filter(item=>item!==currentEmission&&(mode==='collapse'||item.kind!=='response.plan'))].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
+    ...timelineEmissions.filter(item=>item!==currentEmission&&(mode==='collapse'||!['response.plan','response.proposed-plan'].includes(item.kind)))].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
   const bottom=spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Sending',currentTool?.tool.icon,toolGroups.filter(group=>group.turnId===turnId).at(-1)?.id)}`:'';
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.

@@ -2,6 +2,7 @@ import type {InlineThreadState} from '../conversations/inline-thread';
 import {renderWorktreeSetup,worktreeSetupPhase} from '../projects/worktree-setup';
 import {runTimer} from './response-presentation';
 import {renderResponseTasks} from './response-tasks';
+import {renderProposedPlan} from './response-plan';
 
 export interface ResponseEmission {id:string;turnId:string|null;createdAt?:string;sequence:number;body:string;active:boolean;kind:string}
 const compactionTokens=(count:number)=>{
@@ -38,7 +39,7 @@ export function responseEmissions(state:InlineThreadState,turns:string[],markdow
       result.push({id:activity.id,turnId:activity.turnId,createdAt:activity.createdAt,sequence:activity.sequence??0,body,active:active&&body.includes('data-worktree-setup-phase="running"'),kind:activity.kind});
       continue;
     }
-    if(!turns.includes(activity.turnId??'')||!['context-compaction','response.plan','response.notification'].includes(activity.kind))continue;
+    if(!turns.includes(activity.turnId??'')||!['context-compaction','response.plan','response.proposed-plan','response.notification'].includes(activity.kind))continue;
     const p=activity.payload??{};let body:string,active=false;
     if(activity.kind==='context-compaction'){
       const running=p.status==='inProgress';
@@ -48,6 +49,9 @@ export function responseEmissions(state:InlineThreadState,turns:string[],markdow
       const timer=activity.createdAt?runTimer({startedAt:activity.createdAt,...(typeof p.completedAt==='string'?{finishedAt:p.completedAt}:{})}):'';
       const label=running?(active?'Compacting for':'Context compaction'):p.status==='failed'?'Context compaction failed':p.status==='stopped'?'Context compaction stopped':'Context compacted'+counts;
       body=`<span class="send-to-t3-context" data-t3-emission-id="${html(activity.id)}"><span data-t3-tool-icon="minimize-2" aria-hidden="true"></span><span>${label}${active&&timer?' '+timer:''}</span>${active?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':''}</span>`;
+    }else if(activity.kind==='response.proposed-plan'){
+      body=renderProposedPlan(activity.id,p);
+      if(!body)continue;
     }else if(activity.kind==='response.plan'){
       body=renderResponseTasks(activity.id,p);
       if(!body)continue;
