@@ -206,5 +206,5 @@ test('the note composer keeps the typed question, canonical note context and cap
  const context=h.plugin.noteComposerContext(h.file,'Review the design',insertion);
  assert.equal(context.smartQuestion,'Review the design');assert.equal(context.initialQuestion,'Review the design');
  assert.equal(context.smartDocument,h.value());assert.deepEqual(context.insertion,insertion);
- h.view.file={path:'Other.md'};assert.throws(()=>h.plugin.noteComposerContext(h.file,'Question',insertion),/original note/);
+ h.view.file={path:'Other.md',extension:'md'};assert.throws(()=>h.plugin.noteComposerContext(h.file,'Question',insertion),/original note/);
 });
