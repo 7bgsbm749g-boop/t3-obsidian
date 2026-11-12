@@ -21,7 +21,7 @@ function fixture(binding=request(),initial?:string,records:ResponseBindingData={
   const callbacks=new Map<string,(update:DirectInlineUpdate)=>void>(),registered:any[]=[],errors:any[]=[],finished:string[]=[];
   const io:any={localBindings:()=>responseBindingRequests(records),saveLocalBinding:async(request:ResponseRequest)=>{records=updateResponseBindingData(records,request,'test');},openedNotes:()=>open?[{path:binding.notePath,document}]:[],readNote:async()=>document,updateNote:async(_path:string,change:(text:string)=>string)=>document=change(document),saveLocalNote:async()=>{},syncReady:()=>ready,isOpen:()=>open,access:async()=>{throw Error('No host or T3 access needed by this replay.');},receiveCoordinated:(record:any)=>registered.push(record),receiveDirect:()=>{},localCompleted:(id:string)=>finished.push(id),completionFailed:(error:any)=>errors.push(error)};
   io.loadStops=()=>stops;
-  const notes={read:async()=>document,compareAndSet:async(_path:string,before:string,after:string,guard?:()=>boolean)=>{if(document!==before||guard?.()===false)return false;document=after;writes++;return true;}};
+  const notes={read:async(_path?:string):Promise<string|undefined>=>document,compareAndSet:async(_path:string,before:string,after:string,guard?:()=>boolean)=>{if(document!==before||guard?.()===false)return false;document=after;writes++;return true;}};
   const manager=new LocalResponseManager(randomUUID(),'vault',io,notes,()=>now,(record,_access,receive)=>{callbacks.set(record.request.id,receive);return {tick:()=>{},update:()=>{},delivery:()=>{},reconnect:()=>{},suspend:()=>{},dispose:()=>{}} as any;});
   return {binding,manager,io,notes,records:()=>records,receiveRecords:(value:ResponseBindingData)=>records=value,callbacks,registered,errors,finished,read:()=>document,write:(text:string)=>document=text,open:(value:boolean)=>open=value,ready:(value:boolean)=>ready=value,advance:()=>now+=1100,writes:()=>writes,emit:(body='Final answer',verified=true,messageId=binding.messageId)=>callbacks.get(binding.id)!({request:binding,messageId,sequence:5,body,turnId:'exact-turn',phase:'complete',completionVerified:verified})};
 }
@@ -555,4 +555,21 @@ test('peer completion metadata arriving after the note rechecks a stopped refusa
  const checked=proofChecks;for(let n=0;n<10;n++)h.manager.tick();await drain();assert.equal(proofChecks,checked,'Unchanged refusals must not spin');
  completed=true;h.receiveRecords({...h.records()});h.manager.resume();await drain();
  assert.equal(h.manager.status(h.binding.id)?.finalSaved,true);assert.equal(h.writes(),0);assert.deepEqual(h.manager.health().pending,[]);h.manager.dispose();
+});
+
+test('checked peer-save recovery adopts a moved stopped binding only with unchanged response identity',async()=>{
+ for(const changed of [false,true]){
+  const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit('Frozen rendering');await drain();h.manager.stopLocally(h.binding.id);
+  const moved={...h.binding,notePath:'Moved.md',...(changed?{messageId:randomUUID()}:{})};h.receiveRecords(updateResponseBindingData(h.records(),moved,'peer'));
+  const document='Saved peer output and user edits';h.notes.read=async(path?:string)=>path===moved.notePath?document:undefined;h.io.savedResponse=async()=>true;
+  if(changed)await assert.rejects(h.manager.retrySave(moved,contentHash(document)),/binding changed/);
+  else{assert.deepEqual(await h.manager.retrySave(moved,contentHash(document)),{saved:true});assert.equal(h.manager.request(h.binding.id)?.notePath,moved.notePath);}
+  assert.equal(h.writes(),0);h.manager.dispose();
+ }
+});
+test('a peer receipt updates a stopped destination before automatic output verification',async()=>{
+ const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit();await drain();h.manager.stopLocally(h.binding.id);
+ const moved={...h.binding,notePath:'Moved.md'};h.receiveRecords(updateResponseBindingData(h.records(),moved,'peer'));
+ h.io.knownCompleted=()=>true;h.io.savedResponse=async(request:ResponseRequest)=>request.notePath===moved.notePath;h.notes.read=async(path?:string)=>path===moved.notePath?'Peer output':undefined;
+ h.ready(true);h.manager.resume();await drain();assert.equal(h.manager.status(h.binding.id)?.finalSaved,true);assert.equal(h.manager.request(h.binding.id)?.notePath,moved.notePath);assert.equal(h.writes(),0);h.manager.dispose();
 });

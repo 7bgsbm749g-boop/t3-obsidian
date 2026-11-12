@@ -1,10 +1,11 @@
 import {Plugin,MarkdownView} from 'obsidian';
+import {DirectInlinePreview} from '../../src/responses/direct-inline-preview';
 import {LocalResponseManager} from '../../src/responses/local-response-manager';
 import {nativeResponses} from '../../src/responses/native-response-manager';
 import {deviceNoteIO,deviceFinalNoteIO} from '../../src/conversations/inline-note-io';
 import {responseAnchor} from '../../src/responses/native-response-projection';
 import {completeResponseBinding,responseBindingRequests,updateResponseBindingData} from '../../src/responses/response-binding-data';
-import {loadSmartSend,rememberResponse} from '../../src/notes/smart-send';
+import {loadSmartSend,rememberResponse,moveSmartNotes} from '../../src/notes/smart-send';
 import {savedResponseProof} from '../../src/responses/saved-response-proof';
 import {contentHash} from '../../src/responses/completion';
 import type {ResponseRequest} from '../../src/responses/response-model';
@@ -41,18 +42,35 @@ export default class StoppedSaveLab extends Plugin {
   await rememberResponse(data,binding.notePath,binding.id,body,'User prefix\n\n','\n\nUser suffix\n',13);
   // Native Vault API models an incoming peer save. Re-open to load disk into
   // the real MarkdownView before proving the note through deviceFinalNoteIO.
-  leaf.detach();const saved=initial.replace(responseAnchor(binding.id),body)+'Compatible later user content\n';await this.app.vault.modify(file,saved);
+  leaf.detach();await this.app.fileManager.renameFile(file,'Moved.md');moveSmartNotes(data,binding.notePath,file.path);
+  const moved={...binding,notePath:file.path};records=updateResponseBindingData(records,moved,'peer');
+  const saved=initial.replace(responseAnchor(binding.id),body)+'Compatible later user content\n';await this.app.vault.modify(file,saved);
   const next=this.app.workspace.getLeaf(false);await next.openFile(file);await drain();
-  this.local.changed(binding.notePath);await drain();
+  this.local.changed(moved.notePath);await drain();
   this.check(!this.local.status(binding.id)?.finalSaved,'Note alone was treated as proof');
-  records=completeResponseBinding(records,binding,'exact-turn',contentHash(body),'peer');this.local.resume();await drain();
+  records=completeResponseBinding(records,moved,'exact-turn',contentHash(body),'peer');this.local.resume();await drain();
   this.check(this.local.status(binding.id)?.finalSaved,'Peer save not reconciled');
   this.check(!this.local.health().pending.length,'Stopped save remains pending');
   this.check(receipt?.saved&&receipt.update===undefined,'Peer completion was replaced with local rendering');
   this.check(await this.app.vault.read(file)===saved,'Proof changed disk bytes');
   this.check((next.view as MarkdownView).editor.getValue()===saved,'Proof changed native editor bytes');
   this.check(attempts===1,'Proof attempted another write');
-  this.write('RESULT.json',{ok:true,checks:{checkedRefusalRetained:true,stoppedPeerSaveReconciled:true,nativeDiskAndEditorUnchanged:true,noExtraWrites:true,portableReceiptPreserved:true},attempts,proofChecks:checks,nativeDesktop:true,nativeMobile:false,network:false,temporaryThreads:[]});
+  this.check(this.local.request(binding.id)?.notePath===moved.notePath,'Stopped destination did not follow the proved peer receipt');
+  this.local.dispose();
+  const turnId='native-question-turn',messageId=crypto.randomUUID(),questionId='synthetic-resolved-question';
+  const questionBinding={...binding,id:crypto.randomUUID(),notePath:'Question.md',messageId,importTurn:{turnId,messageId,state:'completed' as const,ordinal:1,requestedAt:binding.createdAt,completedAt:binding.createdAt}},answerId=crypto.randomUUID();
+  const questionFile=await this.app.vault.create(questionBinding.notePath,'User before\n\n'+responseAnchor(questionBinding.id)+'\n\nUser after'),questionLeaf=this.app.workspace.getLeaf(false);await questionLeaf.openFile(questionFile);
+  const turn={turnId,messageId,state:'completed',assistantMessageId:answerId,requestedAt:binding.createdAt,completedAt:binding.createdAt};
+  const snapshot:any={snapshotSequence:1,thread:{id:binding.threadId,projectId:binding.projectId,protocolVersion:2,historyComplete:true,session:{status:'ready',activeTurnId:null},turns:{[turnId]:turn},latestTurn:turn,messages:[{id:messageId,role:'user',turnId,text:'Synthetic prompt',streaming:false},{id:answerId,role:'assistant',turnId,text:'NATIVE_QUESTION_FINAL',itemId:'native-question-final',streaming:false,updatedAt:binding.createdAt}],activities:[{id:'asked',kind:'user-input.requested',turnId,summary:'Question',payload:{requestId:questionId,responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Synthetic choice?',options:[]}]}}]}};
+  let questionRecords=updateResponseBindingData({},questionBinding,'lab'),live:any,starts=0;
+  const questionIO:any={...notes,localBindings:()=>responseBindingRequests(questionRecords),saveLocalBinding:async(request:ResponseRequest)=>{questionRecords=updateResponseBindingData(questionRecords,request,'lab');},openedNotes:()=>[{path:questionFile.path,document:(questionLeaf.view as MarkdownView).getViewData()}],syncReady:()=>true,access:async()=>({origin:'https://synthetic.invalid',api:async()=>({id:'native-question-final',threadId:binding.threadId,runId:turnId,messageId:answerId,type:'assistant_message',text:'NATIVE_QUESTION_FINAL',status:'completed',streaming:false,updatedAt:binding.createdAt})})};
+  this.local=new LocalResponseManager('lab',binding.vaultId,questionIO,final,Date.now,(record,access,receive,connection)=>new DirectInlinePreview(record,access,receive,((_id:any,_access:any,callbacks:any)=>{starts++;live=callbacks;return {stop(){}};}) as any,undefined,connection));
+  await this.local.register(questionBinding,false,snapshot);await drain();
+  this.check(this.local.status(questionBinding.id)?.pendingSaveReason==='answer'&&starts===1,'Imported question did not hand off to a live monitor');
+  const resolved=structuredClone(snapshot);resolved.snapshotSequence=2;resolved.thread.v2Requests={[questionId]:{id:questionId,status:'dismissed',resolvedAt:binding.createdAt}};live.item({kind:'snapshot',snapshot:resolved});await drain();await this.local.waitForSave(questionBinding.id);
+  this.check(this.local.status(questionBinding.id)?.finalSaved,'Resolved imported question blocked the checked save');
+  const questionSaved=await this.app.vault.read(questionFile);this.check(questionSaved.includes('User before')&&questionSaved.includes('User after')&&questionSaved.includes('NATIVE_QUESTION_FINAL')&&!questionSaved.includes('Synthetic choice?'),'Question resolution changed compatible user text or retained the stale question');
+  this.write('RESULT.json',{ok:true,checks:{checkedRefusalRetained:true,stoppedPeerSaveReconciled:true,nativeDiskAndEditorUnchanged:true,noExtraWrites:true,portableReceiptPreserved:true,movedStoppedDestinationRecovered:true,importedQuestionResolutionSaved:true},attempts,proofChecks:checks,nativeDesktop:true,nativeMobile:false,network:false,temporaryThreads:[]});
  }
  private async cleanup(){
   this.local?.dispose();for(const leaf of this.app.workspace.getLeavesOfType('markdown'))leaf.detach();

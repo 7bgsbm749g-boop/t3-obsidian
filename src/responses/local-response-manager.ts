@@ -156,6 +156,8 @@ export class LocalResponseManager {
       const runtime=this.adopt(bindings[0]);if(!runtime.done&&!runtime.stopped)this.watch(runtime,true);
     }
     for(const runtime of this.jobs.values()){
+      const latest=this.index(stored).get(runtime.request.id);
+      if(!runtime.done&&!runtime.work&&latest&&this.io.savedResponse&&this.io.knownCompleted?.(latest)&&localFinalIdentity(latest)===localFinalIdentity(runtime.request))this.adopt(latest);
       // Note and completion metadata can arrive in either order. A new shared
       // receipt invalidates the earlier refusal even when disk did not change.
       if(stored!==this.recoveryStored&&this.io.savedResponse&&this.io.knownCompleted?.(runtime.request))runtime.attemptRevision=undefined;
@@ -350,7 +352,9 @@ export class LocalResponseManager {
     if(!this.range(current,binding.id)){
       if(!await this.io.savedResponse?.(binding,current))throw Error('The reply anchor is missing. No content was replaced.');
       if(this.closed||await this.notes.read(binding.notePath)!==current)throw Error('The reviewed note changed.');
-      const runtime=this.jobs.get(binding.id)??this.adopt(binding);
+      const prior=this.jobs.get(binding.id);
+      if(prior&&localFinalIdentity(prior.request)!==localFinalIdentity(binding))throw Error('The response binding changed.');
+      const runtime=this.adopt(binding);
       if(!this.current(runtime)||JSON.stringify(compactResponseBinding(runtime.request))!==JSON.stringify(compactResponseBinding(binding)))throw Error('The response binding changed.');
       await this.settle(runtime,true,false);return this.saveResult(runtime);
     }
