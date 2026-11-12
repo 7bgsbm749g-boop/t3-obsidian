@@ -1,6 +1,7 @@
 import {WorkspacePanel,readWorkspace,type WorkspaceTarget} from '../projects/workspace-panel';
 import {PullRequestPanel} from '../projects/pull-request-panel';
 import {modelChoices} from '../conversations/model-picker';
+import {savedResponseProof} from '../responses/saved-response-proof';
 import {RouteStatus} from '../connection/route-status';
 import {readImportThreads,readImportRuns,readImportRun,readImportPreview,importHistoryState} from '../conversations/import-source';
 import {orderedRoutes,routeGroups,routePairing,routeMethod,localRoute,routeNames,type ConnectionMethod} from '../connection/routes';
@@ -447,10 +448,11 @@ export default class SendToT3 extends Plugin {
       rememberNoteEdits:async(request,before,after)=>{if(await rememberNoteEdits(this.smartData(),request.notePath,request.id,before,after))await this.save(true);},
       loadLocalCompletion:async request=>{const receipt=await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`);return isRecord(receipt)&&receipt.identity===localFinalIdentity(request)&&typeof receipt.saved==='boolean'?{saved:receipt.saved,...(receipt.removed===true?{removed:true}:{})}:undefined;},
       isVisible:path=>this.app.workspace.getActiveViewOfType(MarkdownView)?.file?.path===path,
+      savedResponse:(request,document)=>savedResponseProof(request,document,this.settings.responseBindings??{},this.smartData()),
       knownCompleted:request=>this.settings.responseBindings?.[request.id]?.completion?.identity===localFinalIdentity(request),
-      retainLocalCompletion:async(request,saved,update)=>{
+      retainLocalCompletion:async(request,saved,update,savedBody)=>{
         await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`,{version:1,identity:localFinalIdentity(request),saved,...(!saved?{removed:true}:{})});
-        if(saved&&update?.turnId){this.responseBindingReplica=completeResponseBinding(this.responseBindingReplica,request,update.turnId,contentHash(update.body),this.deviceId);this.settings.responseBindings=this.responseBindingReplica;await this.save(true);}
+        if(saved&&update?.turnId){this.responseBindingReplica=completeResponseBinding(this.responseBindingReplica,request,update.turnId,contentHash(savedBody??update.body),this.deviceId);this.settings.responseBindings=this.responseBindingReplica;await this.save(true);}
       },
       localBindings:()=>responseBindingRequests(this.settings.responseBindings??this.responseBindingReplica),
       saveLocalBinding:request=>this.saveResponseBinding(request),
@@ -966,7 +968,7 @@ export default class SendToT3 extends Plugin {
     const adopted=mergeSharedSettings(baseline,remote,this.sharedSnapshot());
     adopted.vaultHost=mergeVaultHost(baseline.vaultHost,remote.vaultHost,this.settings.vaultHost);
     const incomingBindings=loadResponseBindingData(data.responseBindings);
-    const previousBindings=JSON.stringify(this.responseBindingReplica);
+    const previousBindings=JSON.stringify(this.responseBindingReplica),previousSmartSend=JSON.stringify(this.smartReplica);
     Object.assign(this.smartReplica,mergeSmartSend(this.smartReplica,data.smartSend,this.settings.smartSend));this.settings.smartSend=this.smartReplica;await deviceState(`smart-send:${this.deviceId}:${this.settings.vaultId}`,this.smartReplica);
     this.responseBindingReplica=mergeResponseBindingData(this.responseBindingReplica,incomingBindings);
     this.settings.responseBindings=this.responseBindingReplica;
@@ -1002,6 +1004,7 @@ export default class SendToT3 extends Plugin {
     this.settings.noteThreads=mergedThreads;
     if(JSON.stringify(data.smartSend)!==JSON.stringify(this.smartReplica)||restoreFolderLinks||restoreResponseBindings||restoreNoteContexts||JSON.stringify(mergedThreads)!==JSON.stringify(remoteThreads))await this.save(restoreFolderLinks||restoreResponseBindings||restoreNoteContexts);
     if(previousBindings!==JSON.stringify(this.responseBindingReplica))this.deviceInline?.localBindingsChanged();
+    if(previousSmartSend!==JSON.stringify(this.smartReplica))this.deviceInline?.savedResponsesChanged();
     this.refreshFolderIndicators();
   }
   private async publishVaultIdentity():Promise<void>{

@@ -28,8 +28,9 @@ export interface DeviceResponseIO {
   retainLocalFinal?(update:DirectInlineUpdate):Promise<void>;
   loadLocalFinal?(request:ResponseRequest):Promise<DirectInlineUpdate|undefined>;
   loadLocalCompletion?(request:ResponseRequest):Promise<{saved:boolean;removed?:boolean}|undefined>;
-  retainLocalCompletion?(request:ResponseRequest,saved:boolean,update?:DirectInlineUpdate):Promise<void>;
+  retainLocalCompletion?(request:ResponseRequest,saved:boolean,update?:DirectInlineUpdate,savedBody?:string):Promise<void>;
   knownCompleted?(request:ResponseRequest):boolean;
+  savedResponse?(request:ResponseRequest,document:string):Promise<boolean>;
   isVisible?(path:string):boolean;
   localQuestions?(update:DirectInlineUpdate):void;
   connectionTimeout?(target:ResponseStorageTarget,error:T3ConnectionTimeoutError):void;
@@ -78,6 +79,7 @@ export class DeviceResponseManager {
   discardSteering(id:string,messageId:string){return this.local?.discardSteering(id,messageId)??Promise.resolve();}
   resume(){if(!this.stopped)this.manager().resume();}
   reconnect(){if(!this.stopped)this.manager().reconnect();}
+  savedResponsesChanged(){if(!this.stopped)this.local?.savedResponsesChanged();}
   localBindingsChanged(){if(!this.stopped)this.manager().resume();}
   explorerResponses(){return (this.local?.responses()??[]).filter(response=>!this.stops.has(response.id));}
   stoppableResponses(path:string){return this.explorerResponses().filter(response=>response.notePath===path&&response.active).map(response=>({id:response.id,hostTarget:this.local!.record(response.id)!.request.host}));}

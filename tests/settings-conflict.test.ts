@@ -1,3 +1,4 @@
+import {loadSmartSend,rememberResponse} from '../src/notes/smart-send';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -205,4 +206,12 @@ for(const format of [undefined,'formatted','raw-markdown','invalid'])test(`final
   h.plugin.settings.inlineStreaming.finalAnswerFormat='raw-markdown';await h.plugin.save();
   assert.equal(h.current().inlineStreaming.finalAnswerFormat,'raw-markdown');
   assert.equal(h.current().inlineStreaming.intermediateMode,'collapse');
+});
+
+test('Smart Send-only Sync adoption notifies pending peer-save proof without a binding or note change',async()=>{
+ const h=await harness({vaultId:'vault'});let proofs=0,bindings=0;
+ h.plugin.deviceInline.savedResponsesChanged=()=>proofs++;h.plugin.deviceInline.localBindingsChanged=()=>bindings++;
+ const incoming=loadSmartSend(undefined);await rememberResponse(incoming,'Synthetic.md',randomUUID(),'Stored peer output','','',0);
+ h.setCurrent({...h.current(),smartSend:incoming});await h.plugin.onExternalSettingsChange();assert.equal(proofs,1);assert.equal(bindings,0);
+ await h.plugin.onExternalSettingsChange();assert.equal(proofs,1,'Identical settings do not restart proof checks');
 });
