@@ -6,7 +6,7 @@ import {itemActivities} from '../../src/connection/orchestration-v2';
 import {renderInlineTurn,type InlineThreadState} from '../../src/conversations/inline-thread';
 import {renderResponseToolGroup,responseToolGroups} from '../../src/responses/response-tools';
 import {installResponsePresentation} from '../../src/responses/response-presentation';
-import {renderApproval,pendingApprovals,parseApprovalUrl} from '../../src/interaction/approvals';
+import {pendingApprovals,parseApprovalUrl} from '../../src/interaction/approvals';
 import {approvalButton} from '../../src/interaction/approval-ui';
 import {ApprovalController} from '../../src/interaction/approval-controller';
 import {QuestionController} from '../../src/interaction/question-controller';
@@ -74,7 +74,7 @@ export default class DesignParityLab extends Plugin {
   await this.capture('07-continuation-timing.png');
   const activities=['command','file-change','file-read','app-permission','app-access','mcp-elicitation'].map((kind,index)=>({id:kind,turnId:'run',kind:'approval.requested',summary:'Approval',payload:{requestId:kind,requestKind:kind,appName:index>2?'Synthetic app':undefined,options:index===5?[{decision:'acceptAlways',label:'Allow this scope',warning:'Remember this permission'},{decision:'cancel',label:'Cancel'}]:undefined}}));
   const controller=new ApprovalController(async()=>({origin:'https://synthetic.invalid',api:async()=>({thread:{id:'synthetic',activities}})}),{load:()=>[],save:()=>{}},()=>crypto.randomUUID());
-  target=await render('Approval kinds and provider choices',pendingApprovals(activities).map(request=>renderApproval(request,{environmentId:'synthetic',threadId:'synthetic',requestId:request.requestId})).join('\n\n'));
+  target=await render('Approval kinds and provider choices',renderInlineTurn({title:'Approval replay',messages:[],activities,session:{status:'running',activeTurnId:'run'}},'run','synthetic','running','collapse','synthetic'));
   const disposers:Array<()=>void>=[];
   for(const link of Array.from(target.querySelectorAll<HTMLAnchorElement>('a[href^="t3-approval:"]'))){const parsed=parseApprovalUrl(link.getAttribute('href')!);if(parsed){const control=approvalButton(controller,parsed.target,parsed.decision,document);link.replaceWith(control.button);disposers.push(control.unsubscribe);}}
   await controller.refresh(pendingApprovals(activities).map(request=>({environmentId:'synthetic',threadId:'synthetic',requestId:request.requestId})));
