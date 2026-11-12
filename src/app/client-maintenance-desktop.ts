@@ -1,29 +1,12 @@
-import {nativeHost} from '../shared/native-host';
 import {randomId} from '../shared/uuid';
-import type {App} from 'obsidian';
 import {validateClientCommand,type ClientCommand,type ClientCommandResult} from './client-command';
 
-/** Private mailbox reloads invoke the native command immediately. */
+/** Compiled client identity and diagnostics; no application control API. */
 export class DesktopClientMaintenance {
   readonly client:{instanceId:string;loadedVersion:string};
-  private initiated=false;
-  constructor(private app:App,_root:string,_configDir:string,loadedVersion:string,_codeViewTypes:()=>readonly string[]=()=>[],_beforeReload?:()=>Promise<void>){this.client={instanceId:randomId(),loadedVersion};}
-  async reloadCurrent(beforeDispatch:()=>boolean){return this.dispatchReload(beforeDispatch);}
+  constructor(loadedVersion:string){this.client={instanceId:randomId(),loadedVersion};}
   async execute(input:ClientCommand):Promise<ClientCommandResult>{
     const command=validateClientCommand(input);
-    return {id:command.id,ok:true,client:this.client,...(command.kind==='reload-client'?{reloadScheduled:true}:{})};
-  }
-  private dispatchReload(beforeDispatch?:()=>boolean){
-    if(this.initiated||beforeDispatch&&!beforeDispatch())return false;
-    this.initiated=true;
-    try{
-      if(!nativeHost(this.app).commands.executeCommandById('app:reload'))throw Error('Obsidian refused the native reload command.');
-    }catch(error){this.initiated=false;throw error;}
-    return true;
-  }
-  /** Mailbox identity prevents replay; editor and response state never block reload. */
-  async acknowledged(command:ClientCommand,result:ClientCommandResult,beforeDispatch?:()=>boolean){
-    if(command.kind!=='reload-client'||!result.ok||!result.reloadScheduled||result.client?.instanceId!==this.client.instanceId)return false;
-    return this.dispatchReload(beforeDispatch);
+    return {id:command.id,ok:true,client:this.client};
   }
 }

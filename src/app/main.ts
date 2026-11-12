@@ -41,7 +41,6 @@ import {isClientCommand} from './client-command';
 import {markdownCodeCacheStatus,escapeReplyHtml} from '../responses/reply-html';
 import pluginManifest from '../../manifest.json';
 import {appendSendFailure,sendFailureLog,type SendFailure} from '../responses/send-failures';
-import {ConnectionRecovery} from '../connection/connection-recovery';
 import {PLUGIN_PERMISSIONS,AGENT_SETUP_PERMISSIONS,hasPluginPermissions} from '../connection/environment-permissions';
 import {REAUTHENTICATE_MESSAGE,SignInRequiredError,signInRequired} from '../connection/sign-in-state';
 import {T3HttpError} from '../conversations/thread-access-cache';
@@ -263,8 +262,6 @@ export default class SendToT3 extends Plugin {
   }
   private diagnosticLog(since?:string){this.memoryCheckpoint('manual');const diagnostics=this.diagnostics?.snapshot(since);return {...sendFailureLog(this.app.loadLocalStorage(this.failureKey()),pluginManifest.version,this.deviceId,since),...(diagnostics?{diagnostics:{...diagnostics,enabled:{...this.diagnosticLogging},responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app)}}:{})};}
   private failedRequests=new WeakSet<Request>();
-  private connectionRecovery?:ConnectionRecovery;
-  private connectionRecoveryTarget(target:ResponseStorageTarget){return JSON.stringify([target.environmentId,target.workspaceRoot,target.directory]);}
   private failureKey(){return `t3-send-failures-v1:${this.settings.vaultId}`;}
   private recordSendFailure(request:Request|undefined,error:unknown,stage:string,startedAt:number){
     const derived=(part:string)=>{try{return request?commandId(request.id,part):undefined;}catch{return undefined;}};
@@ -347,7 +344,7 @@ export default class SendToT3 extends Plugin {
     this.compactNoteCommandReceipts();
     const state=await deviceState<Partial<Pick<Settings,'pending'|'completionJobs'|'settlementJobs'>>&{queued?:Array<Request&{threadId:string;superseded?:boolean}>}>(this.deviceId);
     const defaults:Connection={executable:'',host:'direct',transport:'direct'};
-    this.clientMaintenance=new DesktopClientMaintenance(this.app,'','',pluginManifest.version);
+    this.clientMaintenance=new DesktopClientMaintenance(pluginManifest.version);
     this.mode='direct';
     this.connectionMethod=['connect','local','https','ssh'].includes(local?.connectionMethod??'')?local!.connectionMethod!:'connect';
     this.routeOrder=Array.isArray(local?.routeOrder)?local.routeOrder.filter((id):id is string=>typeof id==='string'):[];
@@ -358,16 +355,6 @@ export default class SendToT3 extends Plugin {
     this.signInExpired=local?.signInExpired===true&&!this.nativeAccount;
     this.vaultRegistrations=local?.vaultRegistrations??{};
     this.settings = {threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],vaultHost:loadVaultHost(data?.vaultHost),inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:'keep',archiveFolder:''},completionJobs:[],settlementJobs:data?.autoSettleThreads===true&&Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads===true,hideObsidianThreads:threadHiding(data?.hideObsidianThreads),folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
-    if(!Platform.isMobile){
-      const key=`t3-connection-recovery-v1:${this.settings.vaultId}`;
-      this.connectionRecovery=new ConnectionRecovery({
-        load:()=>{const value:unknown=this.app.loadLocalStorage(key);return value&&typeof value==='object'?value:{};},
-        save:value=>this.app.saveLocalStorage(key,value),
-        reload:beforeDispatch=>this.reloadForConnection(beforeDispatch),
-        failure:()=>{/* Retry only if Obsidian itself could not invoke the reload. */},
-      });
-      this.app.workspace.onLayoutReady(()=>this.registerInlineInterval(()=>this.connectionRecovery?.tick(),1000));
-    }
     this.responseBindingReplica=mergeResponseBindingData(data?.responseBindings,await deviceState(`response-bindings:${this.deviceId}:${this.settings.vaultId}`));
     this.settings.responseBindings=this.responseBindingReplica;
     const completionKey=`t3-completion-glow:${this.settings.vaultId}`;
@@ -471,8 +458,7 @@ export default class SendToT3 extends Plugin {
       localConnection:(id,issue)=>nativeResponses(this.app).connection(id,issue),
       localQuestions:update=>{if(update.questionActivities)this.questions?.observe(update.request.threadEnvironmentId,update.request.threadId,update.questionActivities,update.sequence);},
       localFinalBody:async update=>rewriteReplyReferences(update.body,async reference=>{try{return await resolveReplyReference(this.app,reference,update.request,await this.inlineThreadAccess(update.request.threadEnvironmentId));}catch{return undefined;}}),
-      connectionTimeout:(target,error)=>{if(this.connectionRecovery?.failed(this.connectionRecoveryTarget(target),error))this.recordSendFailure(undefined,error,'connection-timeout',Date.now()-error.elapsedMs);},
-      connectionRecovered:target=>this.connectionRecovery?.recovered(this.connectionRecoveryTarget(target)),
+      connectionTimeout:(_target,error)=>this.recordSendFailure(undefined,error,'connection-timeout',Date.now()-error.elapsedMs),
       completionActor:this.deviceId,
       completionFailed:error=>new Notice(`T3 Code: ${message(error)}`,10000),
       loadStops:()=>{const value:unknown=this.app.loadLocalStorage(`t3-stopped-responses:${this.settings.vaultId}`);return Array.isArray(value)?value.filter((id:unknown):id is string=>typeof id==='string'):[];},
@@ -871,7 +857,7 @@ export default class SendToT3 extends Plugin {
         return {...result,diagnosticSettings:{previous,enabled:{...this.diagnosticLogging}},diagnosticLog:this.diagnosticArchive?.status()};
       }
       if(input.kind==='send-failure-log')return {...result,failureLog:this.diagnosticLog(input.since)};
-      return input.kind==='client-status'?{...result,diagnosticLog:this.diagnosticArchive?.status(),commandServer:{transport:'t3-connect',connected:this.commandHosts.size},connectionRecovery:this.connectionRecovery?.status(),codeRangeCache:markdownCodeCacheStatus(),responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app),legacyRepliesRetired:true}:result;
+      return input.kind==='client-status'?{...result,diagnosticLog:this.diagnosticArchive?.status(),commandServer:{transport:'t3-connect',connected:this.commandHosts.size},codeRangeCache:markdownCodeCacheStatus(),responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app),legacyRepliesRetired:true}:result;
     }
     if(isResponseCommand(input)){
       const command=validateResponseCommand(input);
@@ -1215,7 +1201,6 @@ export default class SendToT3 extends Plugin {
     return captureCursorInsertion(adapter.saved(),offset);
   }
   async openNoteSend(file:TFile,showSelector=false,insertion=this.noteSendInsertion(file)){
-    const finishPreview=!showSelector&&this.hasConfirmedNoteSend(file.path)?this.previewSend(file.path,undefined,insertion):()=>{};
     try{
     showSelector ||= await this.noteNeedsRelink(file.path);
     const host:ChatHost=this.withSendAvailability({...this.destinationContext(this.noteContext(file)),
@@ -1226,7 +1211,7 @@ export default class SendToT3 extends Plugin {
       sendToExisting:(_text,key,resolve,back)=>this.openNoteThreads(file,key,resolve,back,insertion),
     });
     return await openNoteSendFlow(this.app,host,showSelector);
-    }catch(error){new Notice(`T3 Code: ${message(error)}`,10000);}finally{finishPreview();}
+    }catch(error){new Notice(`T3 Code: ${message(error)}`,10000);}
   }
   async openNoteThreads(file:TFile,overrideKey?:string,resolve?:()=>ResolvedJobOptions,back?:()=>void,insertion=this.noteSendInsertion(file)){
     if(this.busy)return;
@@ -1412,7 +1397,7 @@ export default class SendToT3 extends Plugin {
   async sendNote(file:TFile,threadId?:string,expectedProjectKey?:string,newThread=false,overrideKey?:string,jobOptions?:ResolvedJobOptions,insertion=this.noteSendInsertion(file)){
     if(this.busy)return;
     jobOptions??=resolveJobOptions(this.settings.inlineStreaming);
-    const finishPreview=this.previewSend(file.path,undefined,insertion,jobOptions.inline.enabled);
+    let finishPreview:(()=>void)|undefined;
     try{
 
       const active=this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -1423,8 +1408,9 @@ export default class SendToT3 extends Plugin {
       const {project,link}=await this.chatTarget(file.path,chosen,Boolean(newThread||expectedProjectKey),overrideKey??expectedProjectKey);
       if(expectedProjectKey&&projectKey(project)!==expectedProjectKey)throw Error('The folder’s linked project changed. Choose a thread again.');
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
+      finishPreview=this.previewSend(file.path,undefined,insertion,jobOptions.inline.enabled);
       await this.send(file,project,{threadId,newThread,projectOverrideKey:overrideKey,folderPicker:Boolean(expectedProjectKey),folderLink:link,jobOptions,throwOnError:true,insertion});
-    }finally{finishPreview();}
+    }finally{finishPreview?.();}
   }
   openChat(prompt?:string,showSelector=false){
     const view=this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -1455,6 +1441,7 @@ export default class SendToT3 extends Plugin {
     const active=this.app.workspace.getActiveViewOfType(MarkdownView);
     const view=captured?.view??(active?.file?.path===file.path?active:undefined);
     const editor=captured?.editor??view?.editor;
+    if(captured&&view?.file?.path!==file.path)throw Error('The original note is no longer open. Reopen it before asking T3.');
     const selected=selection.trim();
     let context:EditorChatContext|undefined;
     if(view?.file?.path===file.path&&editor){
@@ -1467,29 +1454,28 @@ export default class SendToT3 extends Plugin {
     }
     if(context?.anchor)context=this.canonicalChatContext(context);
     const canonicalSelected=context?.canonicalAnchor?.text??selection;
-    const finishPreview=!showSelector&&this.hasConfirmedNoteSend(file.path)?this.previewSend(file.path,context):()=>{};
-    try{
-      if(view&&editor){
-        const document=this.notePromptDocument(view),anchor=context?.canonicalAnchor;
-        let scope:Span|undefined=anchor?[anchor.start,anchor.end]:undefined;
-        if(selected&&!scope){const from=document.indexOf(selection);if(from<0||document.lastIndexOf(selection)!==from)throw Error('The selected text changed. Select it again before sending.');scope=[from,from+selection.length];}
-        context={...context!,smartDocument:document,smartScope:scope,smartQuestion:prompt};
-        if(scope&&prompt.trim()&&!context.referenceSelection){
-          await this.recoverSmartReplies(file.path,document);
-          const data=this.smartData(),projection=await sourceProjection(data,smartNote(data,file.path),document);
-          const ordinary=projection.segments.reduce((sum,segment)=>sum+Math.max(0,Math.min(scope[1],segment.rawTo)-Math.max(scope[0],segment.rawFrom)),0);
-          if(ordinary<scope[1]-scope[0])context.referenceSelection=true;
-        }
-      }else if(selected)throw Error('Open the source note before sending its selection.');
-      const question=selected&&prompt.trim()?`Selected text:\n${canonicalSelected}\n\n**USER ASKS:**\n${prompt}`:selected?canonicalSelected:prompt;
-      return await this.openChatWithNote(this.noteContext(file),question,context,true,showSelector);
-    }finally{finishPreview();}
+    if(context){
+      const document=this.notePromptDocument(context.view),anchor=context.canonicalAnchor;
+      const range=anchor?selectionRange(document,anchor):undefined;
+      if(anchor&&!range)throw Error('The selected text changed. Select it again before sending.');
+      let scope:Span|undefined=range?[range.from,range.to]:undefined;
+      if(selected&&!scope){const from=document.indexOf(selection);if(from<0||document.lastIndexOf(selection)!==from)throw Error('The selected text changed. Select it again before sending.');scope=[from,from+selection.length];}
+      context={...context,smartDocument:document,smartScope:scope,smartQuestion:prompt};
+      if(scope&&prompt.trim()&&!context.referenceSelection){
+        await this.recoverSmartReplies(file.path,document);
+        const data=this.smartData(),projection=await sourceProjection(data,smartNote(data,file.path),document);
+        const ordinary=projection.segments.reduce((sum,segment)=>sum+Math.max(0,Math.min(scope[1],segment.rawTo)-Math.max(scope[0],segment.rawFrom)),0);
+        if(ordinary<scope[1]-scope[0])context.referenceSelection=true;
+      }
+    }else if(selected)throw Error('Open the source note before sending its selection.');
+    const question=selected&&prompt.trim()?`Selected text:\n${canonicalSelected}\n\n**USER ASKS:**\n${prompt}`:selected?canonicalSelected:prompt;
+    return await this.openChatWithNote(this.noteContext(file),question,context,true,showSelector);
   }
   private openEditorChat(selection:string,file:TFile,context:EditorChatContext,showSelector=false){
     return this.openAsk(file,selection,context,showSelector);
   }
-  private previewSend(path?:string,context?:EditorChatContext,insertion?:CursorInsertion|null,enabled=this.settings.inlineStreaming.enabled){
-    if(!path||!enabled||this.busy||this.stopped)return ()=>{};
+  private previewSend(path?:string,context?:EditorChatContext,insertion?:CursorInsertion|null,enabled=this.settings.inlineStreaming.enabled,ownsSend=false){
+    if(!path||!enabled||this.busy&&!ownsSend||this.stopped)return ()=>{};
     const view=context?.view??this.app.workspace?.getLeavesOfType?.('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.file?.path===path);
     if(!view?.editor||view.file?.path!==path)return ()=>{};
     const document=view.editor.getValue();
@@ -1642,9 +1628,11 @@ export default class SendToT3 extends Plugin {
     const jobOptions=options?.jobOptions??resolveJobOptions(this.settings.inlineStreaming);
     const requestId=randomId(),initialInput=context.initialQuestion?{messageId:commandId(requestId,'message'),text:context.initialQuestion}:undefined;
     let job:InlineJob|undefined,delivered=false;
-    const finishPreview=this.previewSend(note.path,context,undefined,jobOptions.inline.enabled);
+    let finishPreview:(()=>void)|undefined;
     try{
-      await this.sendChat(prompt,note,{...options,jobOptions,requestId,sourceContext:context,onPrepared:async request=>{
+      await this.sendChat(prompt,note,{...options,jobOptions,requestId,sourceContext:context,onTargetResolved:()=>{
+        finishPreview=this.previewSend(note.path,context,undefined,jobOptions.inline.enabled,true);
+      },onPrepared:async request=>{
         // The pending indicator never enters image or prompt snapshots.
         if(request.inlineSteering)return;
 
@@ -1652,7 +1640,7 @@ export default class SendToT3 extends Plugin {
         this.sendPreviews.hide(context.view as MarkdownView);
         await manager.prepare(job,request);
       }});delivered=true;if(job)manager.start(job);
-    }catch(error){if(job)await manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)));throw error;}finally{finishPreview();}
+    }catch(error){if(job)await manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)));throw error;}finally{finishPreview?.();}
   }
   private async steeringRecord(id:string):Promise<{record:ResponseRecord;host:ResponseStorageTarget}|undefined>{return this.deviceInline?.cachedResponse(id);}
   private async steeringDestination(id:string,signal?:AbortSignal){
@@ -1824,7 +1812,6 @@ export default class SendToT3 extends Plugin {
         load:id=>deviceState(`connect-receipt:${this.settings.vaultId}:${this.deviceId}:${id}`),
         save:(id,receipt)=>this.retainCommandReceipt(id,receipt),
         execute:async(command,target)=>{if(this.stopped||!this.settings.paired.some(connection=>connection.environmentId===target.environmentId))throw Error('This T3 machine was disconnected.');const result=await this.executeAgentCommand(command,target);if(!isRecord(result))throw Error('Invalid command result.');return result;},
-        acknowledged:async(command,result)=>{if(isClientCommand(command))await this.clientMaintenance!.acknowledged(command,result as unknown as import('./client-command').ClientCommandResult);},
       });
       if(this.stopped||!this.settings.paired.some(connection=>connection.environmentId===environmentId)){await host.dispose();rpc.close();return;}
       this.commandHosts.set(environmentId,{host,rpc,files});await host.tick();
@@ -1962,15 +1949,6 @@ export default class SendToT3 extends Plugin {
     this.registerInlineInterval(()=>{if(service.active)void service.tick().catch(error=>logFailure('reply.follow',error));},1000);
     this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{void service.rename(oldPath,file.path).catch(error=>logFailure('reply.rename',error));}));
   }
-  private async reloadForConnection(beforeDispatch:()=>boolean){
-    if(this.stopped||Platform.isMobile)return false;
-    const dispatch=()=>{if(!beforeDispatch())return false;new Notice('T3 Code: The connection stopped responding. Reloading Obsidian.',10000);return true;};
-    if(this.clientMaintenance)return this.clientMaintenance.reloadCurrent(dispatch);
-    if(!dispatch())return false;
-    if(!nativeHost(this.app).commands.executeCommandById('app:reload'))throw Error('Obsidian refused the native reload command.');
-    return true;
-  }
-
   private async inlineHostTarget():Promise<ResponseStorageTarget>{
     const machine=this.defaultNoProjectMachine(),paired=this.settings.paired.find(connection=>connection.id===machine)??this.settings.paired[0];
     if(!paired)throw Error('Connect T3 before streaming replies.');
@@ -2163,7 +2141,7 @@ export default class SendToT3 extends Plugin {
     const thread=await this.readChatThread(connection,project,threadId);
     return typeof thread.title==='string'&&thread.title.trim()?thread.title.slice(0,160):'T3 thread';
   }
-  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;jobOptions?:ResolvedJobOptions;barePrompt?:boolean;sourceContext?:EditorChatContext;onPrepared?:(request:Request,input:string)=>void|Promise<void>}):Promise<void> {
+  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;jobOptions?:ResolvedJobOptions;barePrompt?:boolean;sourceContext?:EditorChatContext;onTargetResolved?:()=>void;onPrepared?:(request:Request,input:string)=>void|Promise<void>}):Promise<void> {
     if(this.busy)throw Error('Another send is in progress. Wait for it to finish.');
     if(!prompt.trim())throw Error('Enter a message before sending.');
     if(this.stopped)throw Error('The plugin has been disabled. Re-enable it before sending.');
@@ -2181,12 +2159,13 @@ export default class SendToT3 extends Plugin {
       const active=this.noteThread(note?.path);
       const threadId=options?.threadId??(!options?.newThread&&active&&project.id===active.projectId&&((project.connectionId??'')===active.connectionId||!!connection.environmentId&&connection.environmentId===active.environmentId)?active.threadId:undefined);
       await this.assertNoteMode(note?.path,{...connection,projectId:project.id,threadId});
+      options?.onTargetResolved?.();
       if(note&&options?.sourceContext?.smartDocument!==undefined){
         const context=options.sourceContext;
         await this.recoverSmartReplies(note.path,context.smartDocument!);
         const plan=await prepareSmartSend(this.smartData(),note.path,await this.smartKey(project,connection,threadId??''),context.smartDocument!,context.smartScope);
         const question=context.smartQuestion??'';
-        const selected=context.smartScope?explicitSelectionText(context.snapshot??context.smartDocument!,context.smartScope):context.canonicalAnchor?.text??context.anchor?.text??'';
+        const selected=context.smartScope?explicitSelectionText(context.smartDocument!,context.smartScope):context.canonicalAnchor?.text??context.anchor?.text??'';
         // Explicit selections are deliberate input, including text delivered
         // before. Keep the normal capture/ranges for coverage and safe cleanup.
         const material=context.referenceSelection&&selected?`Selected text:\n${selected}`:context.smartScope?selected:plan.text;
@@ -2937,7 +2916,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
-  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.connectionRecovery?.dispose();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async setThreadHiding(enabled:boolean){this.settings.hideObsidianThreads=enabled;await this.save();await this.syncThreadVisibility();}
   private syncThreadVisibility(force=false):Promise<void>{
     if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve();
@@ -3198,5 +3177,9 @@ class ConnectedMachineModal extends FuzzySuggestModal<VaultMachine>{
   getItems(){return this.machines;}
   getItemText(machine:VaultMachine){return machine.name;}
   onChooseItem(machine:VaultMachine){this.chosen=true;this.choose(machine.id);}
-  onClose(){super.onClose();if(!this.chosen)this.cancelled(Error('Machine selection was cancelled.'));}
+  onClose(){
+    super.onClose();
+    // SuggestModal closes before it calls onChooseItem for a selected row.
+    void Promise.resolve().then(()=>{if(!this.chosen)this.cancelled(Error('Machine selection was cancelled.'));});
+  }
 }

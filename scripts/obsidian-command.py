@@ -53,7 +53,7 @@ def remote_failure_log(host, vault, command, retry=False):
 
 def legacy_client(vault,config_dir,command,retry=False,timeout=5):
     """One upgrade bridge for old clients; never used for note edits or sends."""
-    if command['kind'] not in ['client-status','send-failure-log','reload-client']:
+    if command['kind'] not in ['client-status','send-failure-log']:
         return None
     storage_root = vault
     route_path = vault / config_dir / 't3-code' / 'storage-route.json'
@@ -106,10 +106,10 @@ def main():
     parser.add_argument('--retry',action='store_true',help='Explicitly retry a failed command; ambiguous executions never replay')
     parser.add_argument('--ssh-host',help='Existing private Windows route for read-only failure logs')
     parser.add_argument('--output',help='Write the JSON result to an agent-owned file instead of stdout')
-    parser.add_argument('kind',choices=['connected-clients','note-context','client-status','send-failure-log','reload-client','diagnostic-settings','response-recovery-info','retry-response-save','resolve-response-location','response-status','response-import-info','resume-response','prepare-note-edit','submit-note-edit','note-edit-status','cancel-note-edit','create-note','rename-note','repair-response','remove-response','send-note','attach-response','inspect-folder','link-folder','unlink-folder','stream-thread','thread-streams','pause-thread-stream','resume-thread-stream','cancel-thread-stream','remove-stream-destination'])
+    parser.add_argument('kind',choices=['connected-clients','note-context','client-status','send-failure-log','diagnostic-settings','response-recovery-info','retry-response-save','resolve-response-location','response-status','response-import-info','resume-response','prepare-note-edit','submit-note-edit','note-edit-status','cancel-note-edit','create-note','rename-note','repair-response','remove-response','send-note','attach-response','inspect-folder','link-folder','unlink-folder','stream-thread','thread-streams','pause-thread-stream','resume-thread-stream','cancel-thread-stream','remove-stream-destination'])
     parser.add_argument('note',nargs='?')
     parser.add_argument('--diagnostic-preferences',help='JSON object of device-local logging category booleans')
-    for name in ['since','release-version','runtime-hashes','destination-section','binding-id','note-path','hash','edit-id','proposed-file','thread-id','message-id','project-id','environment-id','subscription-id','remove-destination','connection-id','image-folder','file-folder']:
+    for name in ['since','destination-section','binding-id','note-path','hash','edit-id','proposed-file','thread-id','message-id','project-id','environment-id','subscription-id','remove-destination','connection-id','image-folder','file-folder']:
         parser.add_argument('--'+name)
     parser.add_argument('--destination',action='append',default=[])
     parser.add_argument('--stream-scope',choices=['thread'])
@@ -152,12 +152,8 @@ def main():
                     proposal=Path(args.proposed_file)
                     if proposal.stat().st_size>1_000_000: raise ValueError('The proposed note exceeds 1 MB.')
                     command.update(originalHash=args.hash,proposed=proposal.read_bytes().decode('utf-8'))
-        elif args.kind in ['client-status','send-failure-log','reload-client','diagnostic-settings']:
+        elif args.kind in ['client-status','send-failure-log','diagnostic-settings']:
             if args.note or args.destination: raise ValueError('Client commands do not take notes or destinations.')
-            if args.kind=='reload-client':
-                if not args.release_version or not args.runtime_hashes: raise ValueError('Reload needs the exact version and complete runtime hashes.')
-                command.update(releaseVersion=args.release_version,runtimeSha256=json.loads(args.runtime_hashes))
-            elif args.release_version or args.runtime_hashes: raise ValueError('Read-only client commands do not reload the client.')
             if args.kind=='diagnostic-settings' and args.diagnostic_preferences is not None:
                 preferences=json.loads(args.diagnostic_preferences)
                 if not isinstance(preferences,dict) or any(key not in ['connection','response','follow','memory'] or not isinstance(value,bool) for key,value in preferences.items()): raise ValueError('Diagnostic preferences require named boolean categories.')
@@ -203,7 +199,7 @@ def main():
             result=remote_failure_log(args.ssh_host,Path(args.vault),command,args.retry)
         else:
             result=send_command(args.vault,command,root=args.transport_root,client_id=args.client_id,vault_id=args.vault_id,timeout=args.timeout,retry=args.retry)
-            if result is None and args.kind in ['client-status','send-failure-log','reload-client']:
+            if result is None and args.kind in ['client-status','send-failure-log']:
                 try: result=legacy_client(resolve_vault(args.vault),args.config_dir,command,args.retry,args.timeout)
                 except ValueError: pass
             if result is None: result=dict(id=request_id,ok=False,error='No matching connected Obsidian client is ready. Open the vault and connect T3; specify --client-id if needed. No command was queued.')
