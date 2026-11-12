@@ -16,6 +16,43 @@ spec.loader.exec_module(mcp)
 
 
 class AgentMcpTests(unittest.TestCase):
+    def test_continuation_registration_uses_existing_thread_command_without_a_prompt(self):
+        request = '73e8f114-bf46-49e7-9560-482ed8128c5f'
+        for start, extra in [('future', {}), ('after', dict(afterMessageId='original-prompt'))]:
+            with self.subTest(start=start), patch.object(mcp, 'send_command', return_value=dict(ok=True, subscriptionId=request)) as send:
+                result = mcp.call_tool('stream_thread', dict(vault='Lab', clientId='phone', requestId=request,
+                    threadId='thread', projectId='project', environmentId='machine', scope='thread',
+                    destinations=['Replies.md'], start=start, destinationSection='Updates', **extra), '/test/scratch')
+                self.assertFalse(result['isError'])
+                self.assertEqual(json.loads(result['content'][0]['text'])['subscriptionId'], request)
+                self.assertEqual(send.call_args.args, ('Lab', dict(version=1, id=request, kind='stream-thread',
+                    source=dict(threadId='thread', projectId='project', environmentId='machine'), scope='thread',
+                    destinations=['Replies.md'], start=start, destinationSection='Updates', **extra)))
+                self.assertEqual(send.call_args.kwargs['client_id'], 'phone')
+
+    def test_continuation_tools_refuse_incomplete_or_unexpected_input_before_delivery(self):
+        arguments = dict(vault='Lab', threadId='thread', projectId='project', environmentId='machine',
+                         scope='thread', destinations=['Replies.md'], start='future')
+        with patch.object(mcp, 'send_command') as send:
+            for key in ('threadId', 'projectId', 'environmentId', 'destinations', 'scope', 'start'):
+                with self.subTest(missing=key), self.assertRaises(ValueError):
+                    mcp.call_tool('stream_thread', {name: value for name, value in arguments.items() if name != key}, '/test')
+            for overrides in [dict(scope='run'), dict(start='latest'), dict(destinations='Replies.md'), dict(prompt='Do work')]:
+                with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                    mcp.call_tool('stream_thread', {**arguments, **overrides}, '/test')
+            send.assert_not_called()
+
+    def test_thread_follow_inspection_and_management_keep_exact_registration(self):
+        subscription = '73e8f114-bf46-49e7-9560-482ed8128c5f'
+        for name in ('thread_streams', 'pause_thread_stream', 'resume_thread_stream', 'cancel_thread_stream', 'remove_stream_destination'):
+            fields = {} if name == 'thread_streams' else dict(subscriptionId=subscription)
+            if name == 'remove_stream_destination':
+                fields['destination'] = 'Replies.md'
+            with self.subTest(name=name), patch.object(mcp, 'send_command', return_value=dict(ok=True)) as send:
+                mcp.call_tool(name, dict(vault='Lab', requestId=subscription, **fields), '/test')
+                self.assertEqual(send.call_args.args[1], dict(version=1, id=subscription, kind=name.replace('_', '-'), **fields))
+        self.assertTrue(mcp.BY_NAME['thread_streams']['annotations']['readOnlyHint'])
+
     def test_tools_send_exact_checked_commands_and_return_pending_uuid(self):
         with patch.object(mcp, 'send_command', return_value={'ok': False, 'pending': True, 'id': 'preserved'}) as send:
             result = mcp.call_tool('submit_note_edit', dict(vault='Lab', requestId='73e8f114-bf46-49e7-9560-482ed8128c5f', editId='edit', originalHash='hash', proposed='synthetic text'), '/test/scratch')
@@ -49,6 +86,9 @@ class AgentMcpTests(unittest.TestCase):
             self.assertEqual([reply['id'] for reply in replies], [1, 2, 3, 4])
             self.assertIn('safe', replies[0]['result']['instructions'])
             self.assertIn('submit_note_edit', [item['name'] for item in replies[1]['result']['tools']])
+            self.assertIn('stream_thread', [item['name'] for item in replies[1]['result']['tools']])
+            self.assertIn('thread_streams', [item['name'] for item in replies[1]['result']['tools']])
+            self.assertEqual(replies[0]['result']['instructions'], (destination / 'SKILL.md').read_text())
             self.assertEqual(replies[2]['result']['contents'][0]['text'], (destination / 'SKILL.md').read_text())
             self.assertTrue(replies[3]['result']['isError'])
             self.assertTrue((destination / 'last-connected.json').exists())
