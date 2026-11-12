@@ -36,3 +36,26 @@ feature parity. T3 owns editor launch, project-script management, branch mutatio
 commit/merge actions, PR authoring/review writes and workflow execution. These
 remain explicit links to T3. Future controls can use this shell and add native
 implementations with their own authorization and integration checks.
+
+
+## Commands and shortcuts
+
+Open a linked note, then use **T3 Code: Show workspace panel** or
+**T3 Code: Show pull request panel**. Send and Ask retain their existing entry
+points. Hold Control when sending, or use **Send or ask: choose destination…**,
+to open the full send composer instead of sending immediately.
+
+In **Settings → Hotkeys**, assign keys to **T3 Code: Hide or show floating
+panels** and **T3 Code: Minimize or restore floating panels**. Suggested keys are
+Ctrl/Cmd+Shift+H and Ctrl/Cmd+Shift+M if they are unused in your vault. Obsidian
+owns the key assignments; the plugin does not replace existing bindings.
+The header buttons work without a shortcut. A minimized card becomes a small
+floating icon. Switching tabs conceals the card until its original tab is active.
+Closing the panel, replacing its note, closing its leaf, or unloading the plugin
+removes its controls. Ask saves its text to the existing device-local draft.
+
+The model picker reads the selected machine's enabled provider catalog. The
+inherited default remains the first choice. An explicit model applies to that
+send, including an existing idle thread, and stays in its saved dispatch plan
+across retries. Active response steering retains the running model. Changing
+the project clears the model override. No provider or project settings are saved.

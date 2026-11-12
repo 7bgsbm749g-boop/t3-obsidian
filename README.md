@@ -25,6 +25,9 @@ For a local, HTTPS/Tailscale, or existing SSH tunnel connection, choose that met
 - **Follow the reply.** Responses stream into the note. Expand progress to see the agent’s activity, answer its questions, or stop the response. The finished reply becomes Markdown in your note.
 - **Continue your work.** Later sends can reuse the note’s previous thread. Smart Send avoids sending the same automatic note context again.
 
+Floating Send, Ask, workspace and pull request controls can minimize to an icon.
+See [floating controls and shortcuts](docs/floating-panels.md).
+
 ![Ask an agent without leaving your note](docs/images/ask-agent.png)
 
 ## Connect notes and projects
