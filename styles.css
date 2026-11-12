@@ -703,7 +703,7 @@ body [data-t3-codebase-hidden="true"] { display: none; }
   box-shadow: 0 12px 36px var(--background-modifier-box-shadow);
 }
 .send-to-t3-tab-panel .modal-title { padding-right: 100px; min-height: 24px; }
-.t3-floating-tools { position: absolute; top: 12px; right: 12px; display: flex; gap: 2px; }
+.t3-floating-tools { position: absolute; top: 12px; right: 38px; display: flex; gap: 2px; }
 .t3-floating-tools button { width: 28px; height: 28px; color: var(--text-muted); }
 .t3-floating-launcher {
   position: absolute; bottom: max(16px, env(safe-area-inset-bottom)); right: 16px;
@@ -752,4 +752,3 @@ body .send-to-t3-tab-panel[hidden], body .t3-floating-launcher[hidden] { display
 .t3-pr-tabs button[aria-pressed="true"] { background: var(--background-secondary); color: var(--text-accent); }
 .t3-pr-description, .t3-pr-comment p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .t3-pr-comment { padding: 12px 0; border-bottom: 1px solid var(--background-modifier-border); }
-.send-to-t3-tab-panel > .modal-close-button { display: none; }

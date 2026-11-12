@@ -30,7 +30,7 @@ export class PullRequestPanel extends NoteTabPanel {
     panelRow(card,`${displayText(pr.changedFiles??0)} files changed`,'file-diff',`+${displayText(pr.additions??0)} −${displayText(pr.deletions??0)}`);
     const tabs=card.createDiv({cls:'t3-pr-tabs'}),body=card.createDiv();
     const render=(tab:string)=>{
-      body.empty();for(const button of Array.from(tabs.querySelectorAll('button')))button.setAttribute('aria-pressed',displayText(button.textContent===tab));
+      body.empty();for(const button of Array.from(tabs.querySelectorAll('button')))button.setAttribute('aria-pressed',String(button.textContent===tab));
       if(tab==='Overview'){body.createEl('p',{text:displayText(pr.body??'No description.').slice(0,16000),cls:'t3-pr-description'});panelRow(body,'Mergeability','git-merge',displayText(pr.mergeability??'Unknown'));}
       if(tab==='Checks'){const checks=records(pr.checks);if(!checks.length)body.createEl('p',{text:'No checks reported.'});for(const check of checks)panelRow(body,displayText(check.name??'Check'),'circle-check',displayText(check.bucket??check.state??check.status??'Unknown'));}
       if(tab==='Activity'){if(result.error)body.createEl('p',{text:result.error,attr:{role:'alert'}});const comments=records(result.activity?.comments);if(!comments.length&&!result.error)body.createEl('p',{text:'No review activity.'});for(const comment of comments.slice(-30)){const row=body.createDiv({cls:'t3-pr-comment'});row.createEl('strong',{text:isRecord(comment.author)?displayText(comment.author.login??'Reviewer'):'Reviewer'});row.createEl('p',{text:displayText(comment.body??'').slice(0,8000)});}}

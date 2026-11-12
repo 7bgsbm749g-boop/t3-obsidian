@@ -76,3 +76,8 @@ test('minimize and hide preserve content, restore without reopening, and clean u
   assert.equal(panel.contentEl.textContent,'Unsent draft');assert.equal(h.opened,1);
   panel.close();assert.equal(h.host.children.length,0);
 });
+
+test('closing the owning leaf disposes the panel and launcher',async()=>{
+  const h=await fixture(),panel=h.create();panel.open();h.host.isConnected=false;h.events.get('layout-change')!();
+  assert.equal(h.closed,1);assert.equal(h.host.children.length,0);assert.equal(h.events.size,0);
+});

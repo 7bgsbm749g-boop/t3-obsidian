@@ -96,7 +96,7 @@ export class SendDestinationModal extends NoteTabPanel {
   private projectKey?:string;
   private composing:boolean;
   private check?:{key?:string;controller:AbortController;work:Promise<ChatDestination>};
-  constructor(app:App,private host:ChatHost,private prompt?:string){super(app,host.getNotePath());this.composing=prompt===undefined;this.projectKey=host.getDefaultProjectKey?.();this.overrides=host.getJobOverrides?.()??{};}
+  constructor(app:App,private host:ChatHost,private prompt?:string,private allowEmpty=false){super(app,host.getNotePath());this.composing=prompt===undefined;this.projectKey=host.getDefaultProjectKey?.();this.overrides=host.getJobOverrides?.()??{};}
   private cancelCheck(){this.check?.controller.abort(cancelledRequest('Conversation check cancelled.'));this.check=undefined;}
   private checkDestination(key?:string){
     if(this.check&&this.check.key===key&&!this.check.controller.signal.aborted)return this.check.work;
@@ -130,6 +130,7 @@ export class SendDestinationModal extends NoteTabPanel {
     if(this.composing){
       this.field=this.contentEl.createEl('textarea',{cls:'send-to-t3-destination-prompt',attr:{'aria-label':'Message for T3',placeholder:'What would you like to do?',rows:'5'}});
       this.field.value=this.prompt??'';
+      this.field.addEventListener('input',()=>{this.prompt=this.field!.value;if(this.prompt.trim()&&this.defaultButton){this.defaultDisabled=false;this.defaultButton.hidden=false;this.refreshAvailability?.();}});
       this.field.addEventListener('keydown',event=>{
         if(event.key==='Enter'&&(event.metaKey||event.ctrlKey)&&!event.isComposing){event.preventDefault();void this.choose('default');}
       });
@@ -189,7 +190,7 @@ export class SendDestinationModal extends NoteTabPanel {
   private async choose(target:Destination|boolean='default'){
     if(this.choosing||this.host.busy)return;
     target=target===false?'default':target===true?'existing':target;
-    if(this.field){this.prompt=this.field.value;if(!this.prompt.trim()&&this.composing&&this.host.getPreview===undefined)return;}
+    if(this.field){this.prompt=this.field.value;if(!this.prompt.trim()&&!this.allowEmpty)return;}
     logEvent('ui.destination.submitted',{notePath:this.host.getNotePath(),target,projectKey:this.projectKey,steering:this.host.steering});
     const revision=this.revision;this.choosing=true;this.refreshAvailability?.();
     const prompt=this.prompt??'';
@@ -210,7 +211,7 @@ export class SendDestinationModal extends NoteTabPanel {
       const destination=target==='default'?checked:undefined;
       if(!this.opened||revision!==this.revision)return;
       if(destination?.unavailable)throw new RequestDeliveryError(destination.detail??'This conversation is unavailable. Choose another thread.',false);
-      if(destination?.empty){new Notice('Nothing new to send.');return;}
+      if(destination?.empty&&!prompt.trim()){new Notice('Nothing new to send.');return;}
       this.close();
       if(target==='existing')await this.host.sendToExisting(prompt,this.projectKey,resolve,returnToDraft);
       else if(target==='new')await this.host.sendToNew(prompt,this.projectKey,resolve);
@@ -266,7 +267,7 @@ export async function openChatFlow(app:App,host:ChatHost,prompt?:string,showSele
   const modal=new SendDestinationModal(app,host,prompt);modal.open();await modal.ready;
 }
 export async function openNoteSendFlow(app:App,host:ChatHost,showSelector=false):Promise<void>{
-  if(showSelector){new SendDestinationModal(app,host,undefined).open();return;}
+  if(showSelector){new SendDestinationModal(app,host,undefined,true).open();return;}
   await sendDefault(app,host,'');
 }
 
@@ -278,7 +279,7 @@ export class AskComposer extends NoteTabPanel {
   private overrides:JobOverrides={};
   onOpen(){
     this.titleEl.setText('Ask agent');this.contentEl.empty();this.modalEl?.classList.add('send-to-t3-ask-composer');
-    const context=this.contentEl.createDiv({cls:'t3-composer-context'});context.createSpan({text:this.controls?.context?'Selection context':'Note context'});context.createEl('strong',{text:this.controls?.project??pathLabel(this.contentEl)});
+    const context=this.contentEl.createDiv({cls:'t3-composer-context'});context.createSpan({text:this.controls?.context?'Selection context':'Note context'});context.createEl('strong',{text:this.controls?.project??'Current note'});
     if(this.controls?.context){const preview=context.createEl('details');preview.createEl('summary',{text:'Selected text'});preview.createEl('pre',{text:this.controls.context.slice(0,12000)});}
     this.field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Ask agent',placeholder:'Ask agent…',rows:'3'}});this.field.value=this.draft;
     this.field.addEventListener('input',()=>{this.draft=this.field!.value;this.saveDraft(this.draft);});
@@ -292,5 +293,3 @@ export class AskComposer extends NoteTabPanel {
   onClose(){if(this.field){this.draft=this.field.value;this.saveDraft(this.draft);}}
   private async send(choose:boolean){if(this.sending||!this.field?.value.trim())return;this.sending=true;this.draft=this.field.value;this.close();try{await this.submit(this.draft,choose,this.overrides);}catch(error){new Notice(error instanceof Error?error.message:String(error));this.open();}finally{this.sending=false;}}
 }
-
-function pathLabel(element:HTMLElement){return element.closest('.modal')?.getAttribute('aria-label')??'Current note';}

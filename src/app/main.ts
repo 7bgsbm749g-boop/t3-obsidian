@@ -399,10 +399,8 @@ export default class SendToT3 extends Plugin {
     }});
     this.addCommand({id:'workspace-panel',name:'Show workspace panel',callback:()=>this.openWorkspacePanel(false)});
     this.addCommand({id:'pull-request-panel',name:'Show pull request panel',callback:()=>this.openWorkspacePanel(true)});
-    // eslint-disable-next-line obsidianmd/commands/no-default-hotkeys -- The user explicitly requested panel hotkeys.
-    this.addCommand({id:'toggle-floating-panels',name:'Hide or show floating panels',hotkeys:[{modifiers:['Mod','Shift'],key:'H'}],callback:()=>toggleNoteTabPanels(this.app)});
-    // eslint-disable-next-line obsidianmd/commands/no-default-hotkeys -- The user explicitly requested panel hotkeys.
-    this.addCommand({id:'minimize-floating-panels',name:'Minimize or restore floating panels',hotkeys:[{modifiers:['Mod','Shift'],key:'M'}],callback:()=>minimizeNoteTabPanels(this.app)});
+    this.addCommand({id:'toggle-floating-panels',name:'Hide or show floating panels',callback:()=>toggleNoteTabPanels(this.app)});
+    this.addCommand({id:'minimize-floating-panels',name:'Minimize or restore floating panels',callback:()=>minimizeNoteTabPanels(this.app)});
     this.addCommand({id:'ask-agent',name:'Ask agent…',editorCheckCallback:(checking,editor,view)=>{if(this.stopped||this.busy||!view.file)return false;if(!checking)this.openAsk(view.file,editor.getSelection(),{editor,view});return true;}});
     this.addCommand({id:'send-or-ask-choose',name:'Send or ask: choose destination…',editorCheckCallback:(checking,editor,view)=>{
       const file=view.file;
@@ -1214,13 +1212,18 @@ export default class SendToT3 extends Plugin {
     showSelector ||= await this.noteNeedsRelink(file.path);
     const host:ChatHost=this.withSendAvailability({...this.destinationContext(this.noteContext(file)),
       beginSend:options=>this.previewSend(file.path,undefined,insertion,options.inline.enabled),
-      hasNewContent:(destination)=>this.hasSmartContent(file,destination),
-      sendChat:(_text,key,resolve,_back,destination)=>this.sendNote(file,destination?.threadId,destination?.projectKey,false,key,resolve?.(),insertion),
-      sendToNew:(_text,key,resolve)=>this.sendNote(file,undefined,undefined,true,key,resolve?.(),insertion),
-      sendToExisting:(_text,key,resolve,back)=>this.openNoteThreads(file,key,resolve,back,insertion),
+      hasNewContent:(destination,text)=>text.trim()?Promise.resolve(true):this.hasSmartContent(file,destination),
+      sendChat:(text,key,resolve,_back,destination)=>text.trim()?this.sendResolvedChat(text,this.noteContext(file),this.noteComposerContext(file,text,insertion),false,{threadId:destination?.threadId,expectedProjectKey:destination?.projectKey,projectOverrideKey:key,jobOptions:resolve?.()}):this.sendNote(file,destination?.threadId,destination?.projectKey,false,key,resolve?.(),insertion),
+      sendToNew:(text,key,resolve)=>text.trim()?this.sendResolvedChat(text,this.noteContext(file),this.noteComposerContext(file,text,insertion),false,{newThread:true,projectOverrideKey:key,jobOptions:resolve?.()}):this.sendNote(file,undefined,undefined,true,key,resolve?.(),insertion),
+      sendToExisting:(text,key,resolve,back)=>text.trim()?this.openChatThreads(text,this.noteContext(file),this.noteComposerContext(file,text,insertion),false,key,resolve,back):this.openNoteThreads(file,key,resolve,back,insertion),
     });
     return await openNoteSendFlow(this.app,host,showSelector);
     }catch(error){new Notice(`T3 Code: ${message(error)}`,10000);}
+  }
+  private noteComposerContext(file:TFile,text:string,insertion:CursorInsertion|null):EditorChatContext{
+    const view=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.file?.path===file.path);
+    if(!view?.editor)throw Error('Reopen the original note before sending this message.');
+    return {view,editor:view.editor,initialQuestion:text,smartDocument:this.notePromptDocument(view),smartQuestion:text,insertion:insertion??undefined};
   }
   async openNoteThreads(file:TFile,overrideKey?:string,resolve?:()=>ResolvedJobOptions,back?:()=>void,insertion=this.noteSendInsertion(file)){
     if(this.busy)return;
@@ -1528,7 +1531,7 @@ export default class SendToT3 extends Plugin {
       const openPr=()=>new PullRequestPanel(this.app,target,load,async link=>{
         if(typeof link.repository!=='string'||typeof link.number!=='number'||typeof link.host!=='string')throw Error('T3 returned an invalid pull request link.');
         const access=await open();let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined;
-        try{rpc=await connectT3Rpc(access.api,access.origin);const ref={projectId:project.id,repository:link.repository,number:link.number,host:link.host};const detail=await rpc.call('pullRequests.detail',ref);if(!isRecord(detail))throw Error('T3 did not return pull request details.');try{const activity=await rpc.call('pullRequests.activity',ref);return {detail,activity:isRecord(activity)?activity:undefined};}catch(error){return {detail,error:message(error)};}}
+        try{rpc=await connectT3Rpc(access.api,access.origin);const ref={projectId:project.id,repository:link.repository,number:link.number,host:link.host};const detail=await rpc.call('pullRequests.detail',ref);if(!isRecord(detail)||detail.projectId!==project.id||detail.repository!==link.repository||detail.number!==link.number)throw Error('T3 did not return details for this pull request.');try{const activity=await rpc.call('pullRequests.activity',ref);return {detail,activity:isRecord(activity)?activity:undefined};}catch(error){return {detail,error:message(error)};}}
         finally{rpc?.close();await access.close?.();}
       }).open();
       if(pullRequests)openPr();else new WorkspacePanel(this.app,target,load,openPr).open();

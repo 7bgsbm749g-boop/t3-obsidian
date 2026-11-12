@@ -200,3 +200,11 @@ for(const state of ['completed','running'])for(const cursor of [3,'First paragra
   const once=h.value();assert.equal((await h.plugin.importRun(h.file.path,project,threadId,messageId,false,insertion)).duplicate,true);
   assert.equal(h.value(),once);assert.equal(registered.length,2);assert.equal(registered[0].id,registered[1].id);
 });
+
+test('the note composer keeps the typed question, canonical note context and captured insertion together',async()=>{
+ const h=await fixture(),insertion=captureCursorInsertion(h.value(),5);
+ const context=h.plugin.noteComposerContext(h.file,'Review the design',insertion);
+ assert.equal(context.smartQuestion,'Review the design');assert.equal(context.initialQuestion,'Review the design');
+ assert.equal(context.smartDocument,h.value());assert.deepEqual(context.insertion,insertion);
+ h.view.file={path:'Other.md'};assert.throws(()=>h.plugin.noteComposerContext(h.file,'Question',insertion),/original note/);
+});

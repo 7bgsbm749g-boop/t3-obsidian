@@ -10,6 +10,7 @@ export class NoteTabPanel extends Modal {
   private previousFocus?:HTMLElement;
   private leafEvent?:EventRef;
   private fileEvent?:EventRef;
+  private layoutEvent?:EventRef;
   private openedPath?:string;
   private keydown?: (event:KeyboardEvent)=>void;
   private viewportChanged?:()=>void;
@@ -36,7 +37,6 @@ export class NoteTabPanel extends Modal {
     for(const [label,icon,action] of [
       ['Minimize panel','minus',()=>this.toggleMinimized()],
       ['Hide panel','eye-off',()=>this.toggleHidden()],
-      ['Close panel','x',()=>this.close()],
     ] as const){const button=this.tools.createEl('button',{cls:'clickable-icon',attr:{'aria-label':label,title:label}});setIcon(button,icon);button.addEventListener('click',action);}
     this.launcher=host.createEl('button',{cls:'t3-floating-launcher',attr:{'aria-label':`Restore ${this.titleEl.textContent||'T3 Code'}`,title:`Restore ${this.titleEl.textContent||'T3 Code'}`}});
     this.launcher.dataset.panel=this.panelKind;setIcon(this.launcher,this.panelKind==='workspace'?'git-branch':this.panelKind==='pull-requests'?'git-pull-request':'message-circle');
@@ -50,7 +50,7 @@ export class NoteTabPanel extends Modal {
     const host=view?.containerEl;
     if(!host?.isConnected||!this.modalEl?.classList){this.presentation='modal';super.open();return;}
     let group=panels.get(this.app);if(!group){group=new Set();panels.set(this.app,group);}
-    for(const panel of group)if(panel.panelKind===this.panelKind)panel.close(false);group.add(this);
+    for(const panel of group)if(panel.panelKind===this.panelKind&&panel.panelView===view)panel.close(false);group.add(this);
     this.presentation='panel';this.panelHost=host;this.panelView=view;this.openedPath=view?.file?.path;
     const doc=host.ownerDocument;
     this.previousFocus=doc.activeElement instanceof (doc.defaultView?.HTMLElement??HTMLElement)?doc.activeElement:undefined;
@@ -60,6 +60,7 @@ export class NoteTabPanel extends Modal {
     this.keydown=event=>{if(event.key==='Escape'&&this.modalEl.contains(event.target as Node)){event.preventDefault();event.stopPropagation();this.close();}};
     doc.addEventListener('keydown',this.keydown,true);
     this.leafEvent=this.app.workspace.on('active-leaf-change',()=>this.updateVisibility());
+    this.layoutEvent=this.app.workspace.on('layout-change',()=>{if(!this.panelHost?.isConnected)this.close(false);});
     this.fileEvent=this.app.workspace.on('file-open',()=>{if(this.panelView?.file?.path!==this.openedPath)this.close(false);});
     this.viewportChanged=()=>{const height=doc.defaultView?.visualViewport?.height;if(height)this.modalEl.style.setProperty('--t3-panel-viewport-height',`${Math.max(120,height*0.75)}px`);};
     doc.defaultView?.visualViewport?.addEventListener('resize',this.viewportChanged);this.viewportChanged();
@@ -77,6 +78,7 @@ export class NoteTabPanel extends Modal {
     if(this.viewportChanged)host.ownerDocument.defaultView?.visualViewport?.removeEventListener('resize',this.viewportChanged);
     if(this.leafEvent)this.app.workspace.offref(this.leafEvent);
     if(this.fileEvent)this.app.workspace.offref(this.fileEvent);
+    if(this.layoutEvent)this.app.workspace.offref(this.layoutEvent);this.layoutEvent=undefined;
     this.leafEvent=undefined;this.fileEvent=undefined;this.openedPath=undefined;this.modalEl.remove();this.modalEl.classList.remove('send-to-t3-tab-panel');host.classList.remove('send-to-t3-panel-host');
     this.tools?.remove();this.tools=undefined;this.launcher?.remove();this.launcher=undefined;this.minimized=false;this.concealed=false;this.modalEl.hidden=false;
     if([...panels.get(this.app)??[]].some(panel=>panel.panelHost===host))host.classList.add('send-to-t3-panel-host');

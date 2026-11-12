@@ -7,7 +7,7 @@ const require=createRequire(import.meta.url);
 const compiled=build({entryPoints:['src/conversations/chat-ui.ts'],bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
 async function fixture(alternative?:string,closeImmediately=false,initialBusy=false,automatic=false,remembered=true,hasContent?:boolean){
  const modals:any[]=[];
- class Element{value='';text='';style:any={};disabled=false;isConnected=true;children:any[]=[];events:any={};empty(){this.children=[];}setText(t:string){this.text=t;}focus(){}addEventListener(n:string,f:any){this.events[n]=f;}createEl(_tag:string,o:any={}){const el=new Element();el.text=o.text??'';this.children.push(el);return el;}createDiv(options:any={}){return Reflect.apply(this.createEl,this,['div',options]);}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}}
+ class Element{cls?:string;tag?:string;value='';text='';style:any={};disabled=false;isConnected=true;children:any[]=[];events:any={};empty(){this.children=[];}setText(t:string){this.text=t;}focus(){}addEventListener(n:string,f:any){this.events[n]=f;}createEl(_tag:string,o:any={}){const el=new Element();el.text=o.text??'';el.cls=o.cls;el.tag=_tag;this.children.push(el);return el;}createDiv(options:any={}){return Reflect.apply(this.createEl,this,['div',options]);}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}}
  class Modal{titleEl=new Element();contentEl=new Element();constructor(public app:any){}open(){modals.push(this);(this as any).onOpen?.();}close(){(this as any).onClose?.();}setPlaceholder(){}}
  class Setting{buttons:any[]=[];constructor(_el:any){}setClass(){return this;}setDisabled(v:boolean){this.buttons.forEach(b=>b.buttonEl.disabled=v);return this;}addButton(f:any){const b:any={buttonEl:new Element(),setButtonText(t:string){this.buttonEl.text=t;return this;},setCta(){return this;},setDisabled(v:boolean){this.buttonEl.disabled=v;return this;},onClick(fn:any){this.click=fn;return this;}};f(b);this.buttons.push(b);return this;}}
  const module:any={exports:{}},notices:string[]=[],calls:Array<{key?:string;signal:AbortSignal;resolve:(v:any)=>void}>=[],sent:any[]=[];
@@ -73,7 +73,7 @@ test('the previous-thread action is usable immediately and a click waits for its
 test('an open busy window becomes available without losing its route or restarting its thread check',async()=>{
  const h=await fixture(undefined,false,true),modal=h.modal;
  assert.equal(modal.actions.buttons.every((b:any)=>b.buttonEl.disabled),true);
- const busyDetail=modal.contentEl.children[2];assert.match(busyDetail.text,/Another send/);assert.equal(busyDetail.hidden,false);
+ const busyDetail=modal.contentEl.children.find((el:any)=>el.text.startsWith('Another send'));assert.match(busyDetail.text,/Another send/);assert.equal(busyDetail.hidden,false);
  await modal.choose('new');assert.equal(h.sent.length,0);
  h.setBusy(false);
  assert.equal(modal.actions.buttons.every((b:any)=>!b.buttonEl.disabled),true);
@@ -156,7 +156,7 @@ test('an unchanged selector still allows a new destination and typed Ask retains
  await h.modal.choose('new');assert.deepEqual(h.sent,[{target:'new',key:'project'}]);
  const saved:string[]=[],submitted:any[]=[];
  const composer=new h.exports.AskComposer({},'Synthetic.md','Saved question',(text:string)=>saved.push(text),async(text:string,choose:boolean)=>{submitted.push({text,choose});});
- composer.open();assert.equal(composer.titleEl.hidden,true);assert.equal(composer.field.value,'Saved question');
+ composer.open();assert.equal(composer.titleEl.text,'Ask agent');assert.equal(composer.field.value,'Saved question');
  composer.field.value='Another question';composer.field.events.input();await composer.send(true);
  assert.deepEqual(submitted,[{text:'Another question',choose:true}]);assert.ok(saved.includes('Another question'));
 });
