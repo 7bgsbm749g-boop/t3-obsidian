@@ -18,7 +18,7 @@ import type {ThreadAccess} from '../conversations/thread-stream';
 import type {SocketFactory} from './t3-rpc';
 import {PLUGIN_PERMISSIONS,hasPluginPermissions} from './environment-permissions';
 import {ensureNoProject} from '../projects/no-project';
-import {AUTO_THREAD_TITLE} from '../conversations/thread-title';
+import {AUTO_THREAD_TITLE,promptThreadTitle} from '../conversations/thread-title';
 import {ThreadCatalogCache} from './thread-catalog';
 export interface RemoteEnvironmentDescriptor extends Record<string,unknown>{environmentId:string;label:string;orchestrationProtocolVersion:2}
 export interface PairedConnection {id:string;name:string;url:string;environmentId:string;managed?:boolean;routeKind?:'local'|'https'|'ssh'}
@@ -160,7 +160,8 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
   const defaults=await readNewThreadDefaults(environment,access?.origin??endpoint(r.connection.url||''),project);
   const {workspaceStrategy,...accessDefaults}=defaults;
   const common={threadId:commandId(r.id,'thread'),...accessDefaults,interactionMode:'default',createdAt:new Date().toISOString()};
-  r.directPlan={protocolVersion:2,...(r.title===AUTO_THREAD_TITLE||workspaceStrategy?.type==='worktree'?{launch:true,generateTitle:r.title===AUTO_THREAD_TITLE,workspaceStrategy}:{}),hash,environmentId:r.connection.environmentId!,phase:'prepared',create:{...common,type:'thread.create',commandId:commandId(r.id,'create'),projectId:project.id,title:r.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:commandId(r.id,'turn'),message:{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})}}};
+  const generateTitle=r.title===AUTO_THREAD_TITLE,title=generateTitle?promptThreadTitle(r.prompt,r.attachments):r.title;
+  r.directPlan={protocolVersion:2,...(generateTitle||workspaceStrategy?.type==='worktree'?{launch:true,generateTitle,workspaceStrategy}:{}),hash,environmentId:r.connection.environmentId!,phase:'prepared',create:{...common,type:'thread.create',commandId:commandId(r.id,'create'),projectId:project.id,title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:commandId(r.id,'turn'),message:{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})}}};
   }
  }
  // Persist the complete commands before their first attempt AND on every retry.
