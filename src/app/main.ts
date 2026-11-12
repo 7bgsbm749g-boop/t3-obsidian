@@ -1149,7 +1149,7 @@ export default class SendToT3 extends Plugin {
     if(captured&&selection.trim()&&!captured.anchor)captured={...captured,anchor:captureEditorSelection(captured.editor)};
     if(captured&&!captured.anchor)captured={...captured,insertion:captured.insertion??captureCursorInsertion(captured.editor.getValue(),captured.editor.posToOffset(captured.editor.getCursor()))};
     const context=captured?this.canonicalChatContext(captured):undefined;
-    new AskComposer(this.app,file.path,this.localDraft(),text=>this.app.saveLocalStorage(this.chatDraftKey,text),(question,selected)=>this.openManualAction(file,question,selection,context,choose||selected)).open();
+    new AskComposer(this.app,file.path,this.localDraft(),text=>this.app.saveLocalStorage(this.chatDraftKey,text),(question,selected,overrides)=>this.openManualAction(file,question,selection,context,choose||selected,overrides),{project:this.destinationContext(this.noteContext(file),context).getProjectName(),context:selection,loadModels:()=>this.loadSendModels(this.destinationContext(this.noteContext(file),context).getDefaultProjectKey?.()),steering:Boolean(context&&inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId))}).open();
   }
   private previousNoteThread(path:string,threadId:string){return previousNoteThreads(this.noteThreadRelations(),path).find(entry=>entry.threadId===threadId);}
   private projectForNoteThread(entry:NoteThread):Project{

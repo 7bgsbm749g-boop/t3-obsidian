@@ -726,3 +726,6 @@ body .send-to-t3-tab-panel[hidden], body .t3-floating-launcher[hidden] { display
 .t3-composer-hint, .t3-composer-status { color: var(--text-muted); font-size: var(--font-ui-smaller); }
 .t3-composer-status:empty { display: none; }
 .t3-send-composer textarea { width: 100%; min-height: 100px; resize: vertical; margin-top: 12px; border: none; background: transparent; box-shadow: none; }
+
+.send-to-t3-ask-composer .modal-title { display: block; }
+.send-to-t3-ask-actions { flex-wrap: wrap; align-items: center; }

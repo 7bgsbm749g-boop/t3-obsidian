@@ -274,16 +274,23 @@ export async function openNoteSendFlow(app:App,host:ChatHost,showSelector=false)
 export class AskComposer extends NoteTabPanel {
   private field?:HTMLTextAreaElement;
   private sending=false;
-  constructor(app:App,path:string,private draft:string,private saveDraft:(text:string)=>void,private submit:(text:string,choose:boolean)=>Promise<void>){super(app,path);}
+  constructor(app:App,path:string,private draft:string,private saveDraft:(text:string)=>void,private submit:(text:string,choose:boolean,overrides?:JobOverrides)=>Promise<void>,private controls?:{project:string;context?:string;loadModels?:()=>Promise<ModelChoice[]>;steering?:boolean}){super(app,path);}
+  private overrides:JobOverrides={};
   onOpen(){
-    this.titleEl.setText('Ask agent');this.titleEl.hidden=true;this.contentEl.empty();this.modalEl?.classList.add('send-to-t3-ask-composer');
+    this.titleEl.setText('Ask agent');this.contentEl.empty();this.modalEl?.classList.add('send-to-t3-ask-composer');
+    const context=this.contentEl.createDiv({cls:'t3-composer-context'});context.createSpan({text:this.controls?.context?'Selection context':'Note context'});context.createEl('strong',{text:this.controls?.project??pathLabel(this.contentEl)});
+    if(this.controls?.context){const preview=context.createEl('details');preview.createEl('summary',{text:'Selected text'});preview.createEl('pre',{text:this.controls.context.slice(0,12000)});}
     this.field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Ask agent',placeholder:'Ask agent…',rows:'3'}});this.field.value=this.draft;
     this.field.addEventListener('input',()=>{this.draft=this.field!.value;this.saveDraft(this.draft);});
     this.field.addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&!event.isComposing){event.preventDefault();void this.send(false);}});
     const actions=this.contentEl.createDiv({cls:'send-to-t3-ask-actions'});
+    if(this.controls?.loadModels&&!this.controls.steering)modelButton(this.app,actions,()=>this.overrides.modelSelection,this.controls.loadModels,selection=>{this.overrides.modelSelection=selection;});
     actions.createEl('button',{text:'Choose destination…'}).addEventListener('click',()=>void this.send(true));
     actions.createEl('button',{text:'Send',cls:'mod-cta'}).addEventListener('click',()=>void this.send(false));this.field.focus();
+    this.contentEl.createEl('small',{text:'Ctrl / ⌘ Enter to send · Shift Enter for a new line',cls:'t3-composer-hint'});
   }
   onClose(){if(this.field){this.draft=this.field.value;this.saveDraft(this.draft);}}
-  private async send(choose:boolean){if(this.sending||!this.field?.value.trim())return;this.sending=true;this.draft=this.field.value;this.close();try{await this.submit(this.draft,choose);}catch(error){new Notice(error instanceof Error?error.message:String(error));this.open();}finally{this.sending=false;}}
+  private async send(choose:boolean){if(this.sending||!this.field?.value.trim())return;this.sending=true;this.draft=this.field.value;this.close();try{await this.submit(this.draft,choose,this.overrides);}catch(error){new Notice(error instanceof Error?error.message:String(error));this.open();}finally{this.sending=false;}}
 }
+
+function pathLabel(element:HTMLElement){return element.closest('.modal')?.getAttribute('aria-label')??'Current note';}
