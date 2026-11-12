@@ -52,7 +52,7 @@ export class RunImportPicker extends FuzzySuggestModal<ImportRun>{
   }
   renderSuggestion(match:FuzzyMatch<ImportRun>,el:HTMLElement){
     const run=match.item;el.dataset.t3ImportRun=run.messageId;el.addClass('send-to-t3-run-row');
-    const heading=el.createDiv({cls:'send-to-t3-run-heading'}),icon=heading.createSpan({cls:'send-to-t3-run-status',attr:{'aria-hidden':'true','title':run.status}});
+    const heading=el.createDiv({cls:'send-to-t3-run-heading',attr:{title:run.status}}),icon=heading.createSpan({cls:'send-to-t3-run-status',attr:{'aria-hidden':'true'}});
     icon.dataset.status=run.status;
     if(run.status!=='Running')setIcon(icon,run.status==='Completed'?'check':run.status==='Failed'?'x':'pause');
     // The picker searches the complete prompt. Its two-line row needs only a

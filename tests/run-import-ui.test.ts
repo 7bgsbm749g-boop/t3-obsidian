@@ -86,6 +86,7 @@ test('run preview dwell, stale work, search names and modal cleanup share one li
  assert.equal(first.children[0].children[1].text.length,360);assert.ok(first.children[0].children[1].text.endsWith('…'));
  for(const status of ['Running','Completed','Failed']){
   const row=new Element();row.ownerDocument=modal.ownerDocument;picker.renderSuggestion({item:{...base,status}},row);
+  assert.equal(row.children[0].attrs.title,status,'the visible heading exposes status without opening confirmation or hovering a hidden icon');
   const [icon,label]=row.children[0].children;
   assert.equal(label.attrs['aria-label'],undefined,'a generic title span must not rely on an unsupported accessible name');
   assert.equal(icon.attrs['aria-hidden'],'true','the decorative icon must not repeat the status');
