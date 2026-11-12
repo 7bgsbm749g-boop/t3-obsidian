@@ -1,3 +1,4 @@
+import {modelButton,type ModelChoice} from './model-picker';
 import {clockForDocument} from '../shared/clock';
 import {resolveJobOptions,overrideCount,type JobOverrides,type ResolvedJobOptions,type InlineDefaults} from './job-options';
 import {logEvent,logFailure} from '../app/diagnostics';
@@ -18,6 +19,9 @@ export interface ChatDestination {
   detail?:string;
 }
 export interface ChatHost {
+  getJobOverrides?():JobOverrides;
+  loadModels?(projectKey?:string):Promise<ModelChoice[]>;
+  getPreview?():string;
   getThreadChoiceRestriction?():string|undefined;
   steering?:boolean;
   getInlineDefaults?():InlineDefaults;
@@ -56,7 +60,7 @@ class ChatProjectModal extends FuzzySuggestModal<{key:string;label:string}> {
 /** Child edits are isolated until Apply. Closing or Cancel leaves the parent draft intact. */
 export class JobOverridesModal extends Modal {
   private draft:JobOverrides;
-  constructor(app:App,draft:JobOverrides,private defaults:InlineDefaults,private apply:(draft:JobOverrides)=>void){super(app);this.draft={inline:{...draft.inline}};}
+  constructor(app:App,draft:JobOverrides,private defaults:InlineDefaults,private apply:(draft:JobOverrides)=>void){super(app);this.draft={...draft,inline:{...draft.inline}};}
   onOpen(){
     this.titleEl.setText('Overrides for this send');this.contentEl.empty();
     this.contentEl.createEl('p',{text:'Use default inherits your settings. Explicit choices apply to this new job only.'});
@@ -69,14 +73,14 @@ export class JobOverridesModal extends Modal {
     new Setting(this.contentEl).setName('Final answer format').addDropdown(d=>{
       d.addOption('default',`Use default — ${base.finalAnswerFormat==='formatted'?'Current formatting':'Raw Markdown'}`).addOption('formatted','Current formatting').addOption('raw-markdown','Raw Markdown').setValue(inline.finalAnswerFormat??'default').setDisabled(!enabled).onChange(value=>{inline.finalAnswerFormat=value==='default'?undefined:value as NonNullable<typeof inline.finalAnswerFormat>;});
     });
-    new Setting(this.contentEl).addButton(b=>b.setButtonText('Reset overrides').onClick(()=>{this.draft={inline:{}};this.onOpen();})).addButton(b=>b.setButtonText('Cancel').onClick(()=>this.close())).addButton(b=>b.setButtonText('Apply').setCta().onClick(()=>{this.apply(this.draft);this.close();}));
+    new Setting(this.contentEl).addButton(b=>b.setButtonText('Reset overrides').onClick(()=>{this.draft={...this.draft,inline:{}};this.onOpen();})).addButton(b=>b.setButtonText('Cancel').onClick(()=>this.close())).addButton(b=>b.setButtonText('Apply').setCta().onClick(()=>{this.apply(this.draft);this.close();}));
   }
 }
 
 type Destination='default'|'new'|'existing';
 
 /** The same compact destination UI handles whole notes, selections, and typed asks. */
-class SendDestinationModal extends NoteTabPanel {
+export class SendDestinationModal extends NoteTabPanel {
   ready:Promise<ChatDestination|undefined>=Promise.resolve(undefined);
   private revision=0;
   private opened=false;
@@ -92,7 +96,7 @@ class SendDestinationModal extends NoteTabPanel {
   private projectKey?:string;
   private composing:boolean;
   private check?:{key?:string;controller:AbortController;work:Promise<ChatDestination>};
-  constructor(app:App,private host:ChatHost,private prompt?:string){super(app,host.getNotePath());this.composing=prompt===undefined;this.projectKey=host.getDefaultProjectKey?.();}
+  constructor(app:App,private host:ChatHost,private prompt?:string,private allowEmpty=false){super(app,host.getNotePath());this.composing=prompt===undefined;this.projectKey=host.getDefaultProjectKey?.();this.overrides=host.getJobOverrides?.()??{};}
   private cancelCheck(){this.check?.controller.abort(cancelledRequest('Conversation check cancelled.'));this.check=undefined;}
   private checkDestination(key?:string){
     if(this.check&&this.check.key===key&&!this.check.controller.signal.aborted)return this.check.work;
@@ -104,14 +108,15 @@ class SendDestinationModal extends NoteTabPanel {
   onOpen(){
     this.opened=true;const revision=++this.revision;
     logEvent('ui.destination.opened',{notePath:this.host.getNotePath(),steering:this.host.steering,composing:this.composing,projectKey:this.projectKey});
-    this.titleEl.setText('T3 Code');this.contentEl.empty();
+    this.titleEl.setText(this.composing?'Message T3':'Send to T3');this.contentEl.empty();this.modalEl?.classList.add('t3-send-composer');
     const row=this.contentEl.createEl('p',{cls:'send-to-t3-destination-top'});
     const projectButton=row.createEl('button',{text:this.host.getProjectName(this.projectKey),cls:'send-to-t3-note-project',attr:{'aria-label':`Change project for this send: ${this.host.getProjectName(this.projectKey)}`,title:this.host.getTargetDescription(this.projectKey)}});
     projectButton.disabled=Boolean(this.host.busy);
     projectButton.addEventListener('click',()=>{
       if(this.field)this.prompt=this.field.value;
-      new ChatProjectModal(this.app,()=>this.host.getProjectChoices(),key=>{logEvent('ui.destination.project-selected',{projectKey:key});this.projectKey=key;this.onOpen();},this.host.onProjectChange?.bind(this.host)).open();
+      new ChatProjectModal(this.app,()=>this.host.getProjectChoices(),key=>{logEvent('ui.destination.project-selected',{projectKey:key});this.projectKey=key;this.overrides.modelSelection=undefined;this.onOpen();},this.host.onProjectChange?.bind(this.host)).open();
     });
+    if(this.host.loadModels&&!this.host.steering)modelButton(this.app,row,()=>this.overrides.modelSelection,()=>this.host.loadModels!(this.projectKey),selection=>{this.overrides.modelSelection=selection;});
     const count=overrideCount(this.overrides);
     const overridesButton=row.createEl('button',{text:count?`Overrides · ${count}`:'Overrides',attr:{'aria-label':`Overrides for this send: ${count} explicit choices`}});
     overridesButton.disabled=Boolean(this.host.busy);
@@ -119,15 +124,18 @@ class SendDestinationModal extends NoteTabPanel {
       if(this.field)this.prompt=this.field.value;
       new JobOverridesModal(this.app,this.overrides,this.host.getInlineDefaults?.()??{enabled:false},draft=>{this.overrides=draft;this.onOpen();}).open();
     });
-    const detail=this.contentEl.createEl('p',{text:''});
+    const preview=this.contentEl.createEl('details',{cls:'t3-composer-context'});preview.createEl('summary',{text:`Note context · ${this.host.getNotePath().split('/').at(-1)}`});preview.createEl('pre',{text:(this.host.getPreview?.()??this.host.getNotePath()).slice(0,12000)});
+    const detail=this.contentEl.createEl('p',{text:'',cls:'t3-composer-status'});
     const busyDetail=this.contentEl.createEl('p',{text:'Another send is in progress. This window will become available when it finishes.',attr:{role:'status'}});
     if(this.composing){
       this.field=this.contentEl.createEl('textarea',{cls:'send-to-t3-destination-prompt',attr:{'aria-label':'Message for T3',placeholder:'What would you like to do?',rows:'5'}});
       this.field.value=this.prompt??'';
+      this.field.addEventListener('input',()=>{this.prompt=this.field!.value;if(this.prompt.trim()&&this.defaultButton){this.defaultDisabled=false;this.defaultButton.hidden=false;this.refreshAvailability?.();}});
       this.field.addEventListener('keydown',event=>{
         if(event.key==='Enter'&&(event.metaKey||event.ctrlKey)&&!event.isComposing){event.preventDefault();void this.choose('default');}
       });
     }
+    else this.contentEl.createEl('p',{text:this.prompt?.trim()||'Send the current note, its new edits and supported note images.',cls:'t3-composer-hint'});
     const remembered=this.host.getDefaultThread(this.projectKey);
     const restriction=this.host.getThreadChoiceRestriction?.();
     if(restriction)this.contentEl.createEl('p',{text:restriction});
@@ -182,7 +190,7 @@ class SendDestinationModal extends NoteTabPanel {
   private async choose(target:Destination|boolean='default'){
     if(this.choosing||this.host.busy)return;
     target=target===false?'default':target===true?'existing':target;
-    if(this.field){this.prompt=this.field.value;if(!this.prompt.trim())return;}
+    if(this.field){this.prompt=this.field.value;if(!this.prompt.trim()&&!this.allowEmpty)return;}
     logEvent('ui.destination.submitted',{notePath:this.host.getNotePath(),target,projectKey:this.projectKey,steering:this.host.steering});
     const revision=this.revision;this.choosing=true;this.refreshAvailability?.();
     const prompt=this.prompt??'';
@@ -203,7 +211,7 @@ class SendDestinationModal extends NoteTabPanel {
       const destination=target==='default'?checked:undefined;
       if(!this.opened||revision!==this.revision)return;
       if(destination?.unavailable)throw new RequestDeliveryError(destination.detail??'This conversation is unavailable. Choose another thread.',false);
-      if(destination?.empty){new Notice('Nothing new to send.');return;}
+      if(destination?.empty&&!prompt.trim()){new Notice('Nothing new to send.');return;}
       this.close();
       if(target==='existing')await this.host.sendToExisting(prompt,this.projectKey,resolve,returnToDraft);
       else if(target==='new')await this.host.sendToNew(prompt,this.projectKey,resolve);
@@ -224,9 +232,9 @@ async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
     if(!(host.hasConfirmedNoteSend?.()??Boolean(host.getDefaultThread(key)||host.steering))){
       new SendDestinationModal(app,host,prompt).open();return;
     }
-    const finishPreview=host.getDefaultThread(key)||host.steering?host.beginSend?.(resolveJobOptions(host.getInlineDefaults?.()??{enabled:false})):undefined;
+    const finishPreview=host.getDefaultThread(key)||host.steering?host.beginSend?.(resolveJobOptions(host.getInlineDefaults?.()??{enabled:false},host.getJobOverrides?.())):undefined;
     try{
-      const options=resolveJobOptions(host.getInlineDefaults?.()??{enabled:false});
+      const options=resolveJobOptions(host.getInlineDefaults?.()??{enabled:false},host.getJobOverrides?.());
       const resolve=()=>options;
       if(!host.getDefaultThread(key)&&!host.steering){
         if(host.hasNewContent&&!await host.hasNewContent({label:'New thread',projectKey:key},prompt)){new SendDestinationModal(app,host,prompt).open();return;}
@@ -259,7 +267,7 @@ export async function openChatFlow(app:App,host:ChatHost,prompt?:string,showSele
   const modal=new SendDestinationModal(app,host,prompt);modal.open();await modal.ready;
 }
 export async function openNoteSendFlow(app:App,host:ChatHost,showSelector=false):Promise<void>{
-  if(showSelector){new SendDestinationModal(app,host,'').open();return;}
+  if(showSelector){new SendDestinationModal(app,host,undefined,true).open();return;}
   await sendDefault(app,host,'');
 }
 
@@ -267,16 +275,21 @@ export async function openNoteSendFlow(app:App,host:ChatHost,showSelector=false)
 export class AskComposer extends NoteTabPanel {
   private field?:HTMLTextAreaElement;
   private sending=false;
-  constructor(app:App,path:string,private draft:string,private saveDraft:(text:string)=>void,private submit:(text:string,choose:boolean)=>Promise<void>){super(app,path);}
+  constructor(app:App,path:string,private draft:string,private saveDraft:(text:string)=>void,private submit:(text:string,choose:boolean,overrides?:JobOverrides)=>Promise<void>,private controls?:{project:string;context?:string;loadModels?:()=>Promise<ModelChoice[]>;steering?:boolean}){super(app,path);}
+  private overrides:JobOverrides={};
   onOpen(){
-    this.titleEl.setText('Ask agent');this.titleEl.hidden=true;this.contentEl.empty();this.modalEl?.classList.add('send-to-t3-ask-composer');
+    this.titleEl.setText('Ask agent');this.contentEl.empty();this.modalEl?.classList.add('send-to-t3-ask-composer');
+    const context=this.contentEl.createDiv({cls:'t3-composer-context'});context.createSpan({text:this.controls?.context?'Selection context':'Note context'});context.createEl('strong',{text:this.controls?.project??'Current note'});
+    if(this.controls?.context){const preview=context.createEl('details');preview.createEl('summary',{text:'Selected text'});preview.createEl('pre',{text:this.controls.context.slice(0,12000)});}
     this.field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Ask agent',placeholder:'Ask agent…',rows:'3'}});this.field.value=this.draft;
     this.field.addEventListener('input',()=>{this.draft=this.field!.value;this.saveDraft(this.draft);});
     this.field.addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&!event.isComposing){event.preventDefault();void this.send(false);}});
     const actions=this.contentEl.createDiv({cls:'send-to-t3-ask-actions'});
+    if(this.controls?.loadModels&&!this.controls.steering)modelButton(this.app,actions,()=>this.overrides.modelSelection,this.controls.loadModels,selection=>{this.overrides.modelSelection=selection;});
     actions.createEl('button',{text:'Choose destination…'}).addEventListener('click',()=>void this.send(true));
     actions.createEl('button',{text:'Send',cls:'mod-cta'}).addEventListener('click',()=>void this.send(false));this.field.focus();
+    this.contentEl.createEl('small',{text:'Ctrl / ⌘ Enter to send · Shift Enter for a new line',cls:'t3-composer-hint'});
   }
   onClose(){if(this.field){this.draft=this.field.value;this.saveDraft(this.draft);}}
-  private async send(choose:boolean){if(this.sending||!this.field?.value.trim())return;this.sending=true;this.draft=this.field.value;this.close();try{await this.submit(this.draft,choose);}catch(error){new Notice(error instanceof Error?error.message:String(error));this.open();}finally{this.sending=false;}}
+  private async send(choose:boolean){if(this.sending||!this.field?.value.trim())return;this.sending=true;this.draft=this.field.value;this.close();try{await this.submit(this.draft,choose,this.overrides);}catch(error){new Notice(error instanceof Error?error.message:String(error));this.open();}finally{this.sending=false;}}
 }

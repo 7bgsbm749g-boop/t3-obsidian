@@ -18,6 +18,8 @@ async function folderMenuHarness(initial?:any){
   let fileMenu:(...args:any[])=>void=()=>{},failSave=false,networkRequests=0;
   class Element {
     text='';cls='';tag='';settings:any[]=[];children:Element[]=[];disabled=false;onclick?:()=>any;oninput?:()=>any;value='';
+    classList={add:()=>{},remove:()=>{}};
+    focus(){}
     addClass(){}setAttribute(){}
     createDiv(options?:any){return this.createEl('div',options);}
     querySelector(tag:string):Element|undefined{return this.children.find(child=>child.tag===tag)??this.children.map(child=>child.querySelector(tag)).find(Boolean);}
@@ -72,7 +74,7 @@ async function folderMenuHarness(initial?:any){
   class Plugin {
     app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,value:any)=>{local=value;},
       workspace:{getActiveViewOfType:()=>undefined,getLeavesOfType:()=>[],onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{if(name==='file-menu')fileMenu=callback;}},
-      vault:{getName:()=> 'QLO2',read:async()=> '# Synthetic note',getAbstractFileByPath:(path:string)=>path===folder.path?folder:undefined},
+      vault:{getName:()=> 'QLO2',getFileByPath:(path:string)=>path.endsWith('.md')?new File(path):undefined,read:async()=> '# Synthetic note',getAbstractFileByPath:(path:string)=>path===folder.path?folder:undefined},
     };
     async loadData(){return {...(shared.at(-1)??{}),paired:[{id:'c',name:'Laptop',url:'https://folder.example',environmentId:'env'}],directScanId:'c',directProjects:[project],directSelected:['c:project']};}
     async saveData(data:any){if(failSave)throw Error('Simulated settings storage failure');shared.push(data);}
@@ -196,7 +198,7 @@ for(const mobile of [false,true])test(`note menu in a linked folder offers new a
     await item.callback({ctrlKey:true});
     const choices=h.modals.at(-1);assert.ok(choices);
     assert.equal(choices.constructor.name,'SendDestinationModal');
-    assert.equal(choices.titleEl.text,'T3 Code');
+    assert.equal(choices.titleEl.text,'Message T3');
     assert.deepEqual(choices.contentEl.settings.flatMap((setting:any)=>setting.controls.map((control:any)=>control.text)),['New thread','Existing thread…']);
     await h.button(choices,'New thread').click();
     assert.equal(sent.length,1);assert.equal(sent[0].file,file);assert.equal(sent[0].project.id,'nested');assert.equal(sent[0].options.threadId,undefined);

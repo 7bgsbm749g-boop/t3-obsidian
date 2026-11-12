@@ -113,3 +113,12 @@ To save a retained frozen reply, use `response-recovery-info --binding-id ID`,
 then `retry-response-save --binding-id ID --hash CURRENT_HASH`. The same checked
 writer runs again without sending input or another remote Stop. Conflicting
 text must be reviewed; these commands never force an overwrite.
+
+If another device saved the reply while a local checked write was refused, the
+local lifecycle can confirm the existing save without replacing note text. It
+requires the exact binding completion receipt and its checksum-verified retained
+output, present once in the same destination with no reply anchor. A missing
+anchor or a completion hint alone is insufficient. Pending checked note
+proposals are excluded because an output receipt does not prove their edits
+were saved. Compatible surrounding user edits and durable frozen replies remain
+available. Reviewed recovery uses the current note checksum and the same proof.

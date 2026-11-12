@@ -397,3 +397,12 @@ test('an omitted question control resolves from its explicit runtime request aft
  const item=completeV2(h,3,'Source final') as any;item.snapshot.thread.v2Requests={old:{id:'old',status:'dismissed',resolvedAt:'2026-10-06T03:03:00Z'}};h.item(item);await settle();
  const update=h.updates.at(-1)!;assert.equal(update.questionsPending,false);assert.equal(update.completionVerified,true);assert.doesNotMatch(update.body,/Old question|t3-question:/);assert.ok(update.questionActivities?.some(activity=>activity.kind==='user-input.resolved'));h.preview.dispose();
 });
+
+test('a completed import hands pending questions to a live watch and observes an answered request',async()=>{
+ const h=fixture(false,async path=>path.includes('importRuns=true')?stockImported():finalItem());h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed'};
+ const pending=readThreadSnapshot(normalizeV2Snapshot(stockImported()));pending.thread.activities=[{id:'asked',kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId:'pending-import',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Continue?',options:[]}]}}];
+ h.preview.seedImport(pending);h.preview.tick(true);await settle();assert.equal(h.updates.at(-1)?.questionsPending,true);assert.equal(h.streams.length,1,'A one-shot import is not a live subscription');
+ h.preview.tick(true);await settle();assert.equal(h.streams.length,1,'Ticks must not duplicate the shared watcher');
+ const resolved=readThreadSnapshot(normalizeV2Snapshot({...stockImported(),snapshotSequence:9}));resolved.thread.v2Requests={'pending-import':{id:'pending-import',kind:'user-input',status:'dismissed',resolvedAt:'2026-10-06T03:03:00Z'}};
+ h.item({kind:'snapshot',snapshot:resolved});h.clock.advance(80);await settle();assert.equal(h.updates.at(-1)?.questionsPending,false);assert.equal(h.updates.at(-1)?.completionVerified,true);assert.doesNotMatch(h.updates.at(-1)!.body,/Continue\?|t3-question:/);h.preview.dispose();assert.equal(h.streams[0].stopped,true);
+});

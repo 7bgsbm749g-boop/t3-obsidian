@@ -131,6 +131,11 @@
     ],
     "tests/diagnostic-archive.test.ts": [
       "tests/native/stream-memory-lab.ts"
+    ],
+    "tests/note-tab-panel.test.ts": [
+      "tests/native/floating-panels-lab.ts",
+      "scripts/build-floating-panels-lab.mjs",
+      "styles.css"
     ]
   }
 }

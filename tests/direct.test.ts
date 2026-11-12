@@ -230,3 +230,20 @@ test('a new MCP-enabled pairing requests agent configuration access and refuses 
  const result=await pair(url+'/pair#token=code','',fetcher as any,undefined,scopes);assert.equal(requested,scopes.join(' '));assert.ok(result.session.permissions?.includes('providers:manage'));
  for(const missing of ['settings:write','providers:manage']){grant=scopes.filter(permission=>permission!==missing).join(' ');await assert.rejects(pair(url+'/pair#token=code','',fetcher as any,undefined,scopes),/does not permit MCP setup/);}
 });
+
+test('explicit send model reaches a new thread and cannot change on a saved retry',async t=>{
+ const before=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=before;});const commands:any[]=[];
+ const config=modelConfig();globalThis.WebSocket=settingsSocket(()=>config,undefined,(tag,payload)=>{assert.equal(tag,'orchestration.dispatchCommand');commands.push(payload);return {};}) as any;
+ const fetcher:any=async(u:string,o:any)=>{
+  if(u.endsWith('/environment'))return response(descriptor);
+  if(u.endsWith('/shell'))return response({projects:[{id:'p'}]});
+  if(u.endsWith('/api/auth/websocket-ticket'))return response({ticket:'test'});
+  if(u.endsWith('/dispatch')){commands.push(JSON.parse(o.body));return response({});}
+  throw Error(u);
+ };
+ const request:Request={id:'a84caa83-7fc7-47ac-ab47-093a62ad8dc5',project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',url,environmentId:eid,host:'direct',executable:''},title:'Named',prompt:'Prompt',jobOptions:{version:1,inline:{enabled:true,intermediateMode:'collapse',finalAnswerFormat:'formatted'},modelSelection:{instanceId:'codex',model:'chosen',options:[{id:'reasoningEffort',value:'high'}]}}};
+ await sendDirect(request,session,async()=>{},fetcher);
+ assert.equal(commands[0].modelSelection.model,'chosen');assert.deepEqual(commands[1].modelSelection,request.jobOptions!.modelSelection);
+ request.jobOptions!.modelSelection={instanceId:'codex',model:'changed'};
+ await assert.rejects(sendDirect(request,session,async()=>{},fetcher),/original content/);assert.equal(commands.length,2);
+});

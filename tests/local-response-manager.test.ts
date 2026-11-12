@@ -2,7 +2,8 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {contentHash} from '../src/responses/completion';
-import {updateResponseBindingData,responseBindingRequests,type ResponseBindingData} from '../src/responses/response-binding-data';
+import {completeResponseBinding,updateResponseBindingData,responseBindingRequests,type ResponseBindingData} from '../src/responses/response-binding-data';
+import {savedResponseProof} from '../src/responses/saved-response-proof';
 import {LocalResponseManager} from '../src/responses/local-response-manager';
 import {localResponseBindings,localResponseRange,withLocalResponseBinding} from '../src/responses/local-response-binding';
 import {localSyncReady} from '../src/storage/local-sync-state';
@@ -21,7 +22,7 @@ function fixture(binding=request(),initial?:string,records:ResponseBindingData={
   const callbacks=new Map<string,(update:DirectInlineUpdate)=>void>(),registered:any[]=[],errors:any[]=[],finished:string[]=[];
   const io:any={localBindings:()=>responseBindingRequests(records),saveLocalBinding:async(request:ResponseRequest)=>{records=updateResponseBindingData(records,request,'test');},openedNotes:()=>open?[{path:binding.notePath,document}]:[],readNote:async()=>document,updateNote:async(_path:string,change:(text:string)=>string)=>document=change(document),saveLocalNote:async()=>{},syncReady:()=>ready,isOpen:()=>open,access:async()=>{throw Error('No host or T3 access needed by this replay.');},receiveCoordinated:(record:any)=>registered.push(record),receiveDirect:()=>{},localCompleted:(id:string)=>finished.push(id),completionFailed:(error:any)=>errors.push(error)};
   io.loadStops=()=>stops;
-  const notes={read:async()=>document,compareAndSet:async(_path:string,before:string,after:string,guard?:()=>boolean)=>{if(document!==before||guard?.()===false)return false;document=after;writes++;return true;}};
+  const notes={read:async(_path?:string):Promise<string|undefined>=>document,compareAndSet:async(_path:string,before:string,after:string,guard?:()=>boolean)=>{if(document!==before||guard?.()===false)return false;document=after;writes++;return true;}};
   const manager=new LocalResponseManager(randomUUID(),'vault',io,notes,()=>now,(record,_access,receive)=>{callbacks.set(record.request.id,receive);return {tick:()=>{},update:()=>{},delivery:()=>{},reconnect:()=>{},suspend:()=>{},dispose:()=>{}} as any;});
   return {binding,manager,io,notes,records:()=>records,receiveRecords:(value:ResponseBindingData)=>records=value,callbacks,registered,errors,finished,read:()=>document,write:(text:string)=>document=text,open:(value:boolean)=>open=value,ready:(value:boolean)=>ready=value,advance:()=>now+=1100,writes:()=>writes,emit:(body='Final answer',verified=true,messageId=binding.messageId)=>callbacks.get(binding.id)!({request:binding,messageId,sequence:5,body,turnId:'exact-turn',phase:'complete',completionVerified:verified})};
 }
@@ -519,4 +520,80 @@ test('a durable completion receipt prevents network recovery of a resurrected or
  h.io.loadLocalCompletion=async()=>({saved:true});h.io.access=async()=>{ticks++;throw Error('No network');};
  await recover(h);assert.equal(h.manager.status(binding.id)?.finalSaved,true);assert.equal(ticks,0);assert.equal(h.writes(),0);
  const count=h.registered.length;h.manager.resume();await drain();assert.equal(h.registered.length,count);h.manager.dispose();
+});
+
+test('a refused final followed by peer save and local Stop verifies the existing reply without rewriting it',async()=>{
+ const h=fixture();await h.manager.register(h.binding);const compare=h.notes.compareAndSet;let receipt:any;
+ h.notes.compareAndSet=async()=>false;h.emit('Retained local rendering');await drain();
+ h.manager.stopLocally(h.binding.id);h.write('User prefix\nPeer saved reply\nLater user edits');
+ h.io.savedResponse=async(_request:ResponseRequest,document:string)=>document===h.read()&&document.includes('Peer saved reply');
+ h.io.retainLocalCompletion=async(_request:ResponseRequest,saved:boolean,update?:DirectInlineUpdate)=>{receipt={saved,update};};
+ h.notes.compareAndSet=compare;h.manager.changed(h.binding.notePath);await drain();
+ assert.equal(h.writes(),0);assert.equal(h.manager.status(h.binding.id)?.finalSaved,true);assert.equal(h.manager.status(h.binding.id)?.finalWriterPending,false);assert.deepEqual(h.manager.health().pending,[]);
+ assert.deepEqual(receipt,{saved:true,update:undefined},'Do not replace the peer receipt with the refused local rendering');assert.equal(h.read(),'User prefix\nPeer saved reply\nLater user edits');h.manager.dispose();
+});
+test('a reviewed retry can confirm an exact peer save after its anchor was removed',async()=>{
+ const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit('Frozen local rendering');await drain();
+ h.notes.compareAndSet=async()=>false;await assert.rejects(h.manager.stop(h.binding.id,'Frozen local rendering'),/waiting for its local save/);
+ h.write('User text\nVerified peer reply');h.io.savedResponse=async()=>true;
+ assert.deepEqual(await h.manager.retrySave(h.binding,contentHash(h.read()),'Frozen local rendering'),{saved:true});assert.equal(h.writes(),0);assert.equal(h.read(),'User text\nVerified peer reply');assert.equal(h.manager.frozenBody(h.binding.id),'Frozen local rendering');h.manager.dispose();
+});
+test('missing anchors without output proof, and a note changed during proof, never retire the reply',async()=>{
+ for(const change of [false,true]){
+  const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit();await drain();h.manager.stopLocally(h.binding.id);h.write('User text');
+  h.io.savedResponse=async()=>{if(change)h.write('New user text');return change;};
+  await assert.rejects(h.manager.retrySave(h.binding,contentHash(h.read()),'Frozen reply'),change?/reviewed note changed/:/anchor is missing/);
+  assert.equal(h.manager.status(h.binding.id)?.finalSaved,false);assert.equal(h.writes(),0);assert.equal(h.manager.health().pending.length,1);h.manager.dispose();
+ }
+});
+
+
+test('peer completion metadata arriving after the note rechecks a stopped refusal without another file edit',async()=>{
+ const h=fixture();let completed=false,proofChecks=0;
+ h.io.knownCompleted=()=>completed;h.io.savedResponse=async()=>{proofChecks++;return completed;};
+ await h.manager.register(h.binding);h.notes.compareAndSet=async()=>false;h.emit('Local rendering');await drain();h.manager.stopLocally(h.binding.id);
+ h.write('Peer reply and compatible edits');h.manager.changed(h.binding.notePath);await drain();assert.equal(h.manager.status(h.binding.id)?.finalSaved,false);
+ const checked=proofChecks;for(let n=0;n<10;n++)h.manager.tick();await drain();assert.equal(proofChecks,checked,'Unchanged refusals must not spin');
+ completed=true;h.receiveRecords({...h.records()});h.manager.resume();await drain();
+ assert.equal(h.manager.status(h.binding.id)?.finalSaved,true);assert.equal(h.writes(),0);assert.deepEqual(h.manager.health().pending,[]);h.manager.dispose();
+});
+
+test('checked peer-save recovery adopts a moved stopped binding only with unchanged response identity',async()=>{
+ for(const changed of [false,true]){
+  const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit('Frozen rendering');await drain();h.manager.stopLocally(h.binding.id);
+  const moved={...h.binding,notePath:'Moved.md',...(changed?{messageId:randomUUID()}:{})};h.receiveRecords(updateResponseBindingData(h.records(),moved,'peer'));
+  const document='Saved peer output and user edits';h.notes.read=async(path?:string)=>path===moved.notePath?document:undefined;h.io.savedResponse=async()=>true;
+  if(changed)await assert.rejects(h.manager.retrySave(moved,contentHash(document)),/binding changed/);
+  else{assert.deepEqual(await h.manager.retrySave(moved,contentHash(document)),{saved:true});assert.equal(h.manager.request(h.binding.id)?.notePath,moved.notePath);}
+  assert.equal(h.writes(),0);h.manager.dispose();
+ }
+});
+test('a peer receipt updates a stopped destination before automatic output verification',async()=>{
+ const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit();await drain();h.manager.stopLocally(h.binding.id);
+ const moved={...h.binding,notePath:'Moved.md'};h.receiveRecords(updateResponseBindingData(h.records(),moved,'peer'));
+ h.io.knownCompleted=()=>true;h.io.savedResponse=async(request:ResponseRequest)=>request.notePath===moved.notePath;h.notes.read=async(path?:string)=>path===moved.notePath?'Peer output':undefined;
+ h.ready(true);h.manager.resume();await drain();assert.equal(h.manager.status(h.binding.id)?.finalSaved,true);assert.equal(h.manager.request(h.binding.id)?.notePath,moved.notePath);assert.equal(h.writes(),0);h.manager.dispose();
+});
+
+test('a stopped unverified reply confirms a peer save without enabling any local write',async()=>{
+ const h=fixture();let proof=false,checks=0,interrupts=0;
+ h.io.savedResponse=async()=>{checks++;return proof;};h.io.knownCompleted=()=>true;
+ h.io.access=async()=>({origin:'https://synthetic.invalid',api:async(_path:string,payload:unknown)=>{if(payload){interrupts++;return {};}return {thread:{id:h.binding.threadId,projectId:h.binding.projectId,messages:[],activities:[],latestTurn:{turnId:'exact-turn',state:'running',requestedAt:h.binding.createdAt},session:{status:'running',activeTurnId:'exact-turn'}}};}});
+ await h.manager.register(h.binding);h.emit('Still running',false);h.notes.compareAndSet=async()=>false;
+ await assert.rejects(h.manager.stop(h.binding.id,'Frozen running reply'),/waiting for its local save/);assert.equal(interrupts,1);assert.equal(h.manager.status(h.binding.id)?.runTerminal,false);
+ h.write('Peer saved reply with user edits');h.manager.changed(h.binding.notePath);await drain();assert.equal(h.manager.status(h.binding.id)?.finalSaved,false);assert.ok(checks>0,'Unverified stopped reply never checked peer output');
+ const before=checks;for(let n=0;n<10;n++)h.manager.tick();await drain();assert.equal(checks,before,'Unchanged failed proof does not spin');
+ proof=true;h.notes.compareAndSet=async()=>{throw Error('Read-only reconciliation attempted a write');};h.manager.savedResponsesChanged();await drain();
+ assert.equal(h.manager.status(h.binding.id)?.finalSaved,true);assert.equal(h.manager.frozenBody(h.binding.id),'Frozen running reply');assert.deepEqual(h.manager.health().pending,[]);assert.equal(h.read(),'Peer saved reply with user edits');assert.equal(h.writes(),0);h.manager.dispose();
+});
+
+test('completion receipts use the exact rewritten or stopped body recorded for peer proof',async()=>{
+ for(const stopped of [false,true]){
+  const h=fixture(),data=loadSmartSend(undefined);let savedBody:string|undefined;
+  h.io.localFinalBody=async()=> 'Rewritten saved reference';
+  h.io.rememberResponse=(request:ResponseRequest,body:string,before:string,after:string,offset:number)=>rememberResponse(data,request.notePath,request.id,body,before,after,offset);
+  h.io.retainLocalCompletion=async(request:ResponseRequest,saved:boolean,update:DirectInlineUpdate|undefined,actual:string|undefined)=>{savedBody=actual;if(saved&&update)h.receiveRecords(completeResponseBinding(h.records(),request,update.turnId!,contentHash(actual??update.body),'peer'));};
+  await h.manager.register(h.binding);if(stopped)h.ready(false);h.emit('Original remote reference');await drain();if(stopped)await h.manager.stop(h.binding.id,'Frozen saved reference');
+  const expected=stopped?'Frozen saved reference':'Rewritten saved reference';assert.equal(savedBody,expected);assert.equal(h.records()[h.binding.id].completion?.outputHash,contentHash(expected));assert.equal(await savedResponseProof(h.binding,h.read(),h.records(),data),true);h.manager.dispose();
+ }
 });
