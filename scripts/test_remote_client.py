@@ -11,6 +11,13 @@ spec.loader.exec_module(remote)
 
 
 class RemoteClientTransportTests(unittest.TestCase):
+    def test_reload_is_rejected_before_connected_or_ssh_transport(self):
+        with patch.object(remote, 'connected_command') as connected, patch.object(remote.subprocess, 'run') as run:
+            with self.assertRaisesRegex(ValueError, 'reload commands were removed'):
+                remote.mailbox({'vault': 'synthetic'}, {'id': 'fixed', 'kind': 'reload-client'})
+            connected.assert_not_called()
+            run.assert_not_called()
+
     def test_connected_result_returns_without_opening_ssh(self):
         answer = {'id': 'fixed', 'ok': True}
         with patch.object(remote, 'connected_command', return_value=answer), patch.object(remote.subprocess, 'run') as run:
@@ -24,7 +31,7 @@ class RemoteClientTransportTests(unittest.TestCase):
             run.assert_not_called()
 
     def test_unconfirmed_python_and_powershell_commands_preserve_id_without_exposing_output(self):
-        command = {'id': 'fixed-request', 'kind': 'reload-client'}
+        command = {'id': 'fixed-request', 'kind': 'client-status'}
         for powershell in [False, True]:
             for timeout in [False, True]:
                 failure = (subprocess.TimeoutExpired(['ssh'], 15, stderr='private-token') if timeout else

@@ -1,10 +1,10 @@
 # Immediate Send feedback
 
-Send and Ask reserve their streaming box synchronously, before conversation checks,
-smart-send preparation, project creation, images, title lookup, or dispatch.
-Opening the destination chooser alone does not show a block. Its Send actions
-start the indicator before awaiting a pending conversation check. Inline Off
-does not create the indicator.
+Send and Ask show their streaming box after the send destination is resolved,
+before smart-send preparation, images, title lookup, or dispatch. Machine and
+workspace selection show no Sending box. A send to a known previous or running
+thread starts the indicator before awaiting its conversation check. Opening the
+destination chooser alone does not show a block. Inline Off does not create it.
 
 The pending box uses the live response Markdown generator in its Sending phase
 and Obsidian's native Markdown renderer. It has the real collapsible callout,
@@ -22,8 +22,8 @@ Preparation hands it off to the real response block; failure, cancellation,
 empty input, conversation timeout, and unload remove it. Existing response
 ownership checks still decide steering and dispatch.
 
-Regression coverage exercises synchronous creation before project lookup and
-conversation checks, mapping during typing, selection retention, nested scopes,
+Regression coverage exercises destination resolution before creation and early
+feedback for known conversation checks, mapping during typing, selection retention, nested scopes,
 handoff, retries, cleanup, and disabled streaming paths. The native fixture is
 `tests/native/immediate-send-lab.ts`, built with
 `node scripts/build-native-response-lab.mjs evidence/TASK/native --immediate-send`.

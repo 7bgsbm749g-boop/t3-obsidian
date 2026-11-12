@@ -51,18 +51,20 @@ export default class ImmediateSendLab extends Plugin {
     const at=original.indexOf('Later'),insertion=captureCursorInsertion(original,at);
     view.editor.setCursor(view.editor.offsetToPos(at));
     await pause(500);
-    const gate=deferred();subject.chatTarget=async()=>{await gate.work;throw Error('Synthetic cancellation before dispatch');};
+    const targetGate=deferred(),gate=deferred();subject.chatTarget=async()=>{await targetGate.work;return {project:{id:'scratch'},link:{id:'no-project'}};};
+    subject.projectReadinessError=()=>undefined;subject.send=async()=>{await gate.work;throw Error('Synthetic cancellation before dispatch');};
     const started=performance.now(),sending=subject.sendNote(file,undefined,undefined,true,undefined,undefined,insertion).catch((error:Error)=>error.message);
-    const cm=(view.editor as any).cm;
-    // Decoration dispatch is synchronous; DOM measurement may run next frame.
-    const synchronousDecoration=cm.state.facet(require('@codemirror/view').EditorView.decorations).some((value:any)=>typeof value!=='function'&&value.size>0);
+    await pause(120);
+    if(view.contentEl.querySelector('.send-to-t3-send-preview'))throw Error('Sending appeared during destination selection.');
+    events.push({case:'destination-selection',noSendingBox:true,sourceUnchanged:view.editor.getValue()===original});
+    targetGate.resolve();
     await pause(120);
     const pending=view.contentEl.querySelector('.send-to-t3-send-preview'),visibleAt=performance.now()-started;
-    events.push({case:'whole-note',synchronousDecoration,visible:!!pending,visibleAtMilliseconds:visibleAt,sourceUnchanged:view.editor.getValue()===original,diskUnchanged:await this.app.vault.read(file)===original});
+    events.push({case:'whole-note',destinationResolved:true,visible:!!pending,visibleAtMilliseconds:visibleAt,sourceUnchanged:view.editor.getValue()===original,diskUnchanged:await this.app.vault.read(file)===original});
     await pause(500);
     events.push({case:'native-streaming-structure',...checkBox()});
     await capture('send-project-check-pending.png');
-    if(!pending||!synchronousDecoration||view.editor.getValue()!==original)throw Error('Whole-note pending block did not appear before project lookup.');
+    if(!pending||view.editor.getValue()!==original)throw Error('Whole-note pending block did not appear after destination resolution.');
     const fold=pending.querySelector<HTMLElement>('.callout')!,heading=fold.querySelector<HTMLElement>(':scope > .callout-title')!,foldStates:boolean[]=[];
     // Presentation handles the real callout's click at document capture and
     // stops it there. Observe at the window before that handler, then read
@@ -80,7 +82,7 @@ export default class ImmediateSendLab extends Plugin {
     if(view.contentEl.querySelector('.send-to-t3-send-preview')||view.editor.getValue()!==original)throw Error('Failed Send left a block or changed the note.');
 
     await leaf.setViewState({type:'markdown',state:{file:file.path,mode:'preview'},active:true});await pause(500);
-    const readingGate=deferred();subject.chatTarget=async()=>{await readingGate.work;throw Error('Synthetic cancellation before dispatch');};
+    const readingGate=deferred();subject.chatTarget=async()=>({project:{id:'scratch'},link:{id:'no-project'}});subject.send=async()=>{await readingGate.work;throw Error('Synthetic cancellation before dispatch');};
     const reading=subject.sendNote(file,undefined,undefined,true).catch((error:Error)=>error.message);await pause(500);
     const readingPending=!!view.contentEl.querySelector('.markdown-preview-sizer .send-to-t3-send-preview');
     events.push({case:'reading-native-structure',...checkBox()});
@@ -92,7 +94,7 @@ export default class ImmediateSendLab extends Plugin {
 
     const manager=new InlineChatManager(this.app,'immediate-send-lab',async()=>undefined);subject.inlineChat=manager;
     this.register(()=>manager.dispose());this.cleanups.push(()=>manager.dispose());manager.prepare=async(job,request)=>{job.threadId='synthetic-thread';job.messageId=commandId(request.id,'message');};manager.start=()=>{};
-    const askGate=deferred(),dispatchGate=deferred(),prepared=deferred();subject.sendChat=async(_prompt:unknown,_note:unknown,options:any)=>{await askGate.work;await options.onPrepared({id:options.requestId,title:'New thread'});prepared.resolve();await dispatchGate.work;};
+    const askGate=deferred(),dispatchGate=deferred(),prepared=deferred();subject.sendChat=async(_prompt:unknown,_note:unknown,options:any)=>{options.onTargetResolved();await askGate.work;await options.onPrepared({id:options.requestId,title:'New thread'});prepared.resolve();await dispatchGate.work;};
     const asking=subject.sendInlineChat('Explain',{path:file.path},{view,editor:view.editor,insertion},{newThread:true});
     await pause(100);
     const askPending=!!view.contentEl.querySelector('.send-to-t3-send-preview');
