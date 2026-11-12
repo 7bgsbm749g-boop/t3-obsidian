@@ -188,7 +188,7 @@ export class DirectInlinePreview {
     const resolvedQuestions=this.follows.flatMap(item=>{const remote=this.state.v2Requests?.[item.requestId];return remote&&typeof remote.status==='string'&&(remote.status!=='pending'||remote.responseCapability?.type==='not_resumable')&&!this.state.activities.some(activity=>activity.kind==='user-input.resolved'&&activity.payload?.requestId===item.requestId)?[{id:`resolved-question:${item.requestId}`,kind:'user-input.resolved',summary:'Question resolved',turnId:item.turnId,createdAt:remote.resolvedAt,payload:{requestId:item.requestId,answers:remote.answers}}]:[];});
     const current={...this.state,activities:[...this.state.activities,...restoredQuestions,...resolvedQuestions],messages:[...this.prose,...this.state.messages.filter(message=>message.role!=='assistant'&&this.turnIds.includes(message.turnId??''))],turns:{...this.record.state?.presentationTurns,...this.state.turns}};
     if(request.finalAnswerFormat==='raw-markdown')current.turns=rememberInlineTurns(current,this.turnIds,current.turns);
-    const title=request.localOnly&&(phase==='complete'||phase==='interrupted')?request.threadTitle:this.state.title??request.threadTitle;
+    const title=this.state.title??request.threadTitle;
     const body=renderInlineTurn(current,turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,title,{startedAt:request.createdAt,finishedAt:phase==='complete'||phase==='interrupted'?completionTime(this.state,turnId):undefined},finalAnswerFormat(request.finalAnswerFormat));
     this.completionTurnId=turnId;
     const key=finalResponseKey(this.state,turnId,this.completionOptions());
