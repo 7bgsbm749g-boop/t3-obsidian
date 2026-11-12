@@ -127,7 +127,7 @@ import {type ResponseRecord} from '../responses/response-record';
 import {hiddenInlineMarkerExtension,hideResponseContainerBoundaries} from '../conversations/inline-markers';
 import {activeInlineIds,inlineTargetAt,inlineSteeringTarget,selectionOverlapsInlineResponse,selectionAnchor,initialRegion,insertionOffset,endInsertionOffset,failedInlineIds,regionBody,finalizeRegion,type SelectionAnchor} from '../conversations/inline-thread';
 import {QuestionController} from '../interaction/question-controller';
-import {closeNoteTabPanel} from '../notes/note-tab-panel';
+import {closeNoteTabPanel,toggleNoteTabPanels,minimizeNoteTabPanels} from '../notes/note-tab-panel';
 import {QuestionModal,questionButton,questionEditorExtension,installQuestionLinks} from '../interaction/question-ui';
 import {questionTargets,parseQuestionToken,clearResolvedQuestion,removeDismissedQuestions,type QuestionTarget} from '../interaction/questions';
 import {ApprovalController} from '../interaction/approval-controller';
@@ -394,6 +394,8 @@ export default class SendToT3 extends Plugin {
       if(!checking)void this.openManualAction(file,'',editor.getSelection(),{editor,view},this.commandSendSelector(view)).catch(error=>new Notice(`T3 Code: ${message(error)}`,10000));
       return true;
     }});
+    this.addCommand({id:'toggle-floating-panels',name:'Hide or show floating panels',hotkeys:[{modifiers:['Mod','Shift'],key:'H'}],callback:()=>toggleNoteTabPanels(this.app)});
+    this.addCommand({id:'minimize-floating-panels',name:'Minimize or restore floating panels',hotkeys:[{modifiers:['Mod','Shift'],key:'M'}],callback:()=>minimizeNoteTabPanels(this.app)});
     this.addCommand({id:'ask-agent',name:'Ask agent…',editorCheckCallback:(checking,editor,view)=>{if(this.stopped||this.busy||!view.file)return false;if(!checking)this.openAsk(view.file,editor.getSelection(),{editor,view});return true;}});
     this.addCommand({id:'send-or-ask-choose',name:'Send or ask: choose destination…',editorCheckCallback:(checking,editor,view)=>{
       const file=view.file;

@@ -693,3 +693,27 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 .t3-agent-progress { color: var(--text-muted); }
 
 .t3-agent-config { width: 100%; min-height: 12em; font-family: var(--font-monospace); resize: vertical; }
+
+/* Shared floating cards retain native theme tokens and keyboard focus rings. */
+.modal.send-to-t3-tab-panel {
+  inset: auto 16px max(16px, env(safe-area-inset-bottom));
+  width: calc(100% - 32px); max-width: 640px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 22px; padding: 18px;
+  box-shadow: 0 12px 36px var(--background-modifier-box-shadow);
+}
+.send-to-t3-tab-panel .modal-title { padding-right: 100px; min-height: 24px; }
+.t3-floating-tools { position: absolute; top: 12px; right: 12px; display: flex; gap: 2px; }
+.t3-floating-tools button { width: 28px; height: 28px; color: var(--text-muted); }
+.t3-floating-launcher {
+  position: absolute; bottom: max(16px, env(safe-area-inset-bottom)); right: 16px;
+  z-index: 21; width: 44px; height: 44px; border-radius: 50%;
+  background: var(--background-secondary); border: 1px solid var(--background-modifier-border);
+  box-shadow: 0 4px 16px var(--background-modifier-box-shadow); color: var(--text-accent);
+}
+.t3-floating-launcher[data-panel="workspace"] { right: 70px; }
+.t3-floating-launcher[data-panel="pull-requests"] { right: 124px; }
+body .send-to-t3-tab-panel[hidden], body .t3-floating-launcher[hidden] { display: none; }
+@media (max-width: 500px) {
+  .modal.send-to-t3-tab-panel { left: 8px; right: 8px; width: calc(100% - 16px); padding: 14px; border-radius: 18px; }
+}

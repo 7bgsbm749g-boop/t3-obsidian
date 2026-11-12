@@ -7,10 +7,13 @@ const compiled=build({entryPoints:['src/notes/note-tab-panel.ts'],bundle:true,pl
 async function fixture(){
   const callbacks=new Map<string,Function>(),events=new Map<string,Function>();
   class Element {
-    isConnected=true;parentElement?:Element;children:Element[]=[];textContent='Synthetic panel';attributes=new Map<string,string>();focusOptions?:any;
+    hidden=false;dataset:any={};isConnected=true;parentElement?:Element;children:Element[]=[];textContent='Synthetic panel';attributes=new Map<string,string>();focusOptions?:any;
     classList={values:new Set<string>(),add:(name:string)=>this.classList.values.add(name),remove:(name:string)=>this.classList.values.delete(name)};
     style={setProperty:()=>{}};
     ownerDocument:any;
+    createDiv(){const el=new Element();el.ownerDocument=this.ownerDocument;this.appendChild(el);return el;}
+    createEl(){return this.createDiv();}
+    addEventListener(){}
     appendChild(child:Element){child.remove();child.parentElement=this;this.children.push(child);}
     remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(child=>child!==this);this.parentElement=undefined;}
     setAttribute(key:string,value:string){this.attributes.set(key,value);}
@@ -24,17 +27,18 @@ async function fixture(){
   const app={workspace:{activeLeaf:{view},getActiveViewOfType:()=>app.workspace.activeLeaf.view,getLeavesOfType:()=>[{view},{view:other}],on:(key:string,callback:Function)=>{events.set(key,callback);return key;},offref:(key:string)=>events.delete(key)}};
   let nativeOpen=0,nativeClose=0,opened=0,closed=0;
   class Modal {modalEl=new Element();titleEl=new Element();contentEl=new Element();constructor(public app:any){}open(){nativeOpen++;(this as any).onOpen();}close(){nativeClose++;(this as any).onClose();}}
-  const module={exports:{} as any};runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:()=>({Modal}),HTMLElement:Element});
-  const create=(path='Synthetic.md')=>{const panel=new module.exports.NoteTabPanel(app,path);panel.onOpen=()=>opened++;panel.onClose=()=>closed++;return panel;};
+  const module={exports:{} as any};runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:()=>({Modal,setIcon:()=>{}}),HTMLElement:Element});
+  const create=(path='Synthetic.md',kind?:string)=>{const panel=new module.exports.NoteTabPanel(app,path,kind);panel.onOpen=()=>opened++;panel.onClose=()=>closed++;return panel;};
   return {app,host,otherHost,doc,events,callbacks,create,get nativeOpen(){return nativeOpen;},get nativeClose(){return nativeClose;},get opened(){return opened;},get closed(){return closed;}};
 }
 
-test('the panel belongs to the captured note tab and closes once without changing other tabs or scroll focus',async()=>{
+test('the panel belongs to its note tab and hides without discarding its draft on tab change',async()=>{
   const h=await fixture(),panel=h.create();panel.open();
   assert.equal(panel.modalEl.parentElement,h.host);assert.equal(h.otherHost.children.length,0);assert.equal(h.nativeOpen,0);
   assert.equal(panel.modalEl.attributes.get('aria-modal'),'false');
-  h.events.get('active-leaf-change')!({view:{file:{path:'Other.md'}}});
-  assert.equal(panel.modalEl.parentElement,undefined);assert.equal(h.closed,1);assert.equal(h.callbacks.size,0);assert.equal(h.events.size,0);
+  h.app.workspace.activeLeaf.view=h.otherHost as any;h.events.get('active-leaf-change')!();
+  assert.equal(panel.modalEl.hidden,true);assert.equal(h.closed,0);
+  panel.close(false);assert.equal(panel.modalEl.parentElement,undefined);assert.equal(h.closed,1);assert.equal(h.callbacks.size,0);assert.equal(h.events.size,0);
   assert.equal(h.doc.activeElement.focusOptions,undefined,'a tab change must keep focus in the new tab');
   panel.close();assert.equal(h.closed,1);assert.equal(h.nativeClose,0);
 });
@@ -61,4 +65,14 @@ test('opening another file in the same view closes the old panel without restori
   h.app.workspace.activeLeaf.view.file={path:'Other.md'};h.events.get('file-open')!();
   assert.equal(h.closed,1);assert.equal(panel.modalEl.parentElement,undefined);assert.equal(h.doc.activeElement.focusOptions,undefined);
   assert.equal(h.events.size,0);assert.equal(h.callbacks.size,0);
+});
+
+
+test('minimize and hide preserve content, restore without reopening, and clean up the launcher',async()=>{
+  const h=await fixture(),panel=h.create();panel.open();panel.contentEl.textContent='Unsent draft';
+  panel.toggleMinimized();assert.equal(panel.modalEl.hidden,true);assert.equal(h.host.children.length,2);
+  panel.toggleHidden();assert.equal(h.host.children.every((el:any)=>el.hidden),true);
+  panel.toggleHidden();panel.toggleMinimized();assert.equal(panel.modalEl.hidden,false);
+  assert.equal(panel.contentEl.textContent,'Unsent draft');assert.equal(h.opened,1);
+  panel.close();assert.equal(h.host.children.length,0);
 });
