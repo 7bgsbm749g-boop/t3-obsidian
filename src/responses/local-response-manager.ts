@@ -156,6 +156,9 @@ export class LocalResponseManager {
       const runtime=this.adopt(bindings[0]);if(!runtime.done&&!runtime.stopped)this.watch(runtime,true);
     }
     for(const runtime of this.jobs.values()){
+      // Note and completion metadata can arrive in either order. A new shared
+      // receipt invalidates the earlier refusal even when disk did not change.
+      if(stored!==this.recoveryStored&&this.io.savedResponse&&this.io.knownCompleted?.(runtime.request))runtime.attemptRevision=undefined;
       const loaded=locations.get(runtime.request.id);
       if(!loaded){
         // A temporary missing editor projection is not evidence of deletion.
@@ -249,7 +252,7 @@ export class LocalResponseManager {
   }
   private finish(runtime:Runtime){
     this.reportState(runtime);
-    if(this.closed||runtime.done||runtime.stopped||runtime.detached||runtime.restoring||runtime.work||this.now()<runtime.retryAt||this.io.syncReady?.(runtime.request.notePath)===false)return;
+    if(this.closed||runtime.done||(runtime.stopped||runtime.detached)&&!this.io.savedResponse||runtime.restoring||runtime.work||this.now()<runtime.retryAt||this.io.syncReady?.(runtime.request.notePath)===false)return;
     const update=runtime.update;if(!update?.completionVerified||update.questionsPending)return;
     const path=runtime.request.notePath,revision=this.noteVersions.get(path)??0;
     if(runtime.attemptRevision===revision)return;
@@ -271,9 +274,9 @@ export class LocalResponseManager {
     const work=(this.noteWrites.get(path)??Promise.resolve()).catch(()=>{}).then(operation);
     this.noteWrites.set(path,work);void work.finally(()=>{if(this.noteWrites.get(path)===work)this.noteWrites.delete(path);}).catch(()=>{});return work;
   }
-  private async settle(runtime:Runtime,saved:boolean){
+  private async settle(runtime:Runtime,saved:boolean,localWrite=true){
     runtime.done=true;runtime.saved=saved;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,runtime.request.notePath);
-    try{await this.io.retainLocalCompletion?.(runtime.request,saved,runtime.update);}catch(error){logFailure('response.lifecycle.receipt-failed',error,{bindingId:runtime.request.id,saved});}
+    try{await this.io.retainLocalCompletion?.(runtime.request,saved,localWrite?runtime.update:undefined);}catch(error){logFailure('response.lifecycle.receipt-failed',error,{bindingId:runtime.request.id,saved});}
     runtime.request=compactResponseBinding(runtime.request);
     const turn=runtime.update?.turnId?runtime.update.checkpoint?.turns?.[runtime.update.turnId]:undefined,checkpoint=turn?{turns:{[turn.turnId]:turn}}:undefined;
     if(runtime.update)runtime.update={...runtime.update,request:runtime.request,body:'',resume:undefined,questionActivities:undefined,checkpoint};
@@ -288,6 +291,14 @@ export class LocalResponseManager {
     const changes:Array<{runtime:Runtime;update:DirectInlineUpdate;request:string}>=[];
     for(const runtime of batch){
       const update=runtime.update;
+      // A peer may have materialized this exact reply while our checked write
+      // was refused. Verify its portable receipt against the current note;
+      // missing anchors alone never prove a save or removal.
+      const proofRequest=runtime.request;
+      if(!this.closed&&!runtime.done&&proofRequest.notePath===path&&this.current(runtime)&&await this.io.savedResponse?.(proofRequest,current)){
+        if(await this.notes.read(path)===current&&!this.closed&&runtime.request===proofRequest&&this.current(runtime)&&this.io.syncReady?.(path)!==false)await this.settle(runtime,true,false);
+        continue;
+      }
       if(this.closed||runtime.stopped||runtime.done||runtime.detached||runtime.request.notePath!==path||!this.current(runtime)||!update?.completionVerified||update.questionsPending||this.io.syncReady?.(path)===false){runtime.pendingSave='note-changed';continue;}
       let range=this.range(document,runtime.request.id);
       if(!range){this.detach(runtime);continue;}
@@ -336,7 +347,13 @@ export class LocalResponseManager {
   async retrySave(binding:ResponseRequest,expectedHash:string,frozenBody?:string):Promise<LocalResponseSaveResult>{
     if(this.closed||binding.vaultId!==this.vaultId)throw Error('This reply is unavailable on this client.');
     const current=await this.notes.read(binding.notePath);if(current===undefined||contentHash(current)!==expectedHash)throw Error('The reviewed note changed.');
-    if(!this.range(current,binding.id))throw Error('The reply anchor is missing. No content was replaced.');
+    if(!this.range(current,binding.id)){
+      if(!await this.io.savedResponse?.(binding,current))throw Error('The reply anchor is missing. No content was replaced.');
+      if(this.closed||await this.notes.read(binding.notePath)!==current)throw Error('The reviewed note changed.');
+      const runtime=this.jobs.get(binding.id)??this.adopt(binding);
+      if(!this.current(runtime)||JSON.stringify(compactResponseBinding(runtime.request))!==JSON.stringify(compactResponseBinding(binding)))throw Error('The response binding changed.');
+      await this.settle(runtime,true,false);return this.saveResult(runtime);
+    }
     const prior=this.jobs.get(binding.id),body=prior?.stopBody??frozenBody;
     if(prior?.stopped&&body===undefined)throw Error('The frozen reply is unavailable on this device.');
     const runtime=this.adopt(binding);

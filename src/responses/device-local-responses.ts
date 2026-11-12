@@ -30,6 +30,7 @@ export interface DeviceResponseIO {
   loadLocalCompletion?(request:ResponseRequest):Promise<{saved:boolean;removed?:boolean}|undefined>;
   retainLocalCompletion?(request:ResponseRequest,saved:boolean,update?:DirectInlineUpdate):Promise<void>;
   knownCompleted?(request:ResponseRequest):boolean;
+  savedResponse?(request:ResponseRequest,document:string):Promise<boolean>;
   isVisible?(path:string):boolean;
   localQuestions?(update:DirectInlineUpdate):void;
   connectionTimeout?(target:ResponseStorageTarget,error:T3ConnectionTimeoutError):void;

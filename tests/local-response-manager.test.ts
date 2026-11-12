@@ -520,3 +520,39 @@ test('a durable completion receipt prevents network recovery of a resurrected or
  await recover(h);assert.equal(h.manager.status(binding.id)?.finalSaved,true);assert.equal(ticks,0);assert.equal(h.writes(),0);
  const count=h.registered.length;h.manager.resume();await drain();assert.equal(h.registered.length,count);h.manager.dispose();
 });
+
+test('a refused final followed by peer save and local Stop verifies the existing reply without rewriting it',async()=>{
+ const h=fixture();await h.manager.register(h.binding);const compare=h.notes.compareAndSet;let receipt:any;
+ h.notes.compareAndSet=async()=>false;h.emit('Retained local rendering');await drain();
+ h.manager.stopLocally(h.binding.id);h.write('User prefix\nPeer saved reply\nLater user edits');
+ h.io.savedResponse=async(_request:ResponseRequest,document:string)=>document===h.read()&&document.includes('Peer saved reply');
+ h.io.retainLocalCompletion=async(_request:ResponseRequest,saved:boolean,update?:DirectInlineUpdate)=>{receipt={saved,update};};
+ h.notes.compareAndSet=compare;h.manager.changed(h.binding.notePath);await drain();
+ assert.equal(h.writes(),0);assert.equal(h.manager.status(h.binding.id)?.finalSaved,true);assert.equal(h.manager.status(h.binding.id)?.finalWriterPending,false);assert.deepEqual(h.manager.health().pending,[]);
+ assert.deepEqual(receipt,{saved:true,update:undefined},'Do not replace the peer receipt with the refused local rendering');assert.equal(h.read(),'User prefix\nPeer saved reply\nLater user edits');h.manager.dispose();
+});
+test('a reviewed retry can confirm an exact peer save after its anchor was removed',async()=>{
+ const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit('Frozen local rendering');await drain();
+ h.notes.compareAndSet=async()=>false;await assert.rejects(h.manager.stop(h.binding.id,'Frozen local rendering'),/waiting for its local save/);
+ h.write('User text\nVerified peer reply');h.io.savedResponse=async()=>true;
+ assert.deepEqual(await h.manager.retrySave(h.binding,contentHash(h.read()),'Frozen local rendering'),{saved:true});assert.equal(h.writes(),0);assert.equal(h.read(),'User text\nVerified peer reply');assert.equal(h.manager.frozenBody(h.binding.id),'Frozen local rendering');h.manager.dispose();
+});
+test('missing anchors without output proof, and a note changed during proof, never retire the reply',async()=>{
+ for(const change of [false,true]){
+  const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit();await drain();h.manager.stopLocally(h.binding.id);h.write('User text');
+  h.io.savedResponse=async()=>{if(change)h.write('New user text');return change;};
+  await assert.rejects(h.manager.retrySave(h.binding,contentHash(h.read()),'Frozen reply'),change?/reviewed note changed/:/anchor is missing/);
+  assert.equal(h.manager.status(h.binding.id)?.finalSaved,false);assert.equal(h.writes(),0);assert.equal(h.manager.health().pending.length,1);h.manager.dispose();
+ }
+});
+
+
+test('peer completion metadata arriving after the note rechecks a stopped refusal without another file edit',async()=>{
+ const h=fixture();let completed=false,proofChecks=0;
+ h.io.knownCompleted=()=>completed;h.io.savedResponse=async()=>{proofChecks++;return completed;};
+ await h.manager.register(h.binding);h.notes.compareAndSet=async()=>false;h.emit('Local rendering');await drain();h.manager.stopLocally(h.binding.id);
+ h.write('Peer reply and compatible edits');h.manager.changed(h.binding.notePath);await drain();assert.equal(h.manager.status(h.binding.id)?.finalSaved,false);
+ const checked=proofChecks;for(let n=0;n<10;n++)h.manager.tick();await drain();assert.equal(proofChecks,checked,'Unchanged refusals must not spin');
+ completed=true;h.receiveRecords({...h.records()});h.manager.resume();await drain();
+ assert.equal(h.manager.status(h.binding.id)?.finalSaved,true);assert.equal(h.writes(),0);assert.deepEqual(h.manager.health().pending,[]);h.manager.dispose();
+});

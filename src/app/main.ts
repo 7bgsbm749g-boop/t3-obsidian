@@ -1,3 +1,4 @@
+import {savedResponseProof} from '../responses/saved-response-proof';
 import {RouteStatus} from '../connection/route-status';
 import {readImportThreads,readImportRuns,readImportRun,readImportPreview,importHistoryState} from '../conversations/import-source';
 import {orderedRoutes,routeGroups,routePairing,routeMethod,localRoute,routeNames,type ConnectionMethod} from '../connection/routes';
@@ -440,6 +441,7 @@ export default class SendToT3 extends Plugin {
       rememberNoteEdits:async(request,before,after)=>{if(await rememberNoteEdits(this.smartData(),request.notePath,request.id,before,after))await this.save(true);},
       loadLocalCompletion:async request=>{const receipt=await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`);return isRecord(receipt)&&receipt.identity===localFinalIdentity(request)&&typeof receipt.saved==='boolean'?{saved:receipt.saved,...(receipt.removed===true?{removed:true}:{})}:undefined;},
       isVisible:path=>this.app.workspace.getActiveViewOfType(MarkdownView)?.file?.path===path,
+      savedResponse:(request,document)=>savedResponseProof(request,document,this.settings.responseBindings??{},this.smartData()),
       knownCompleted:request=>this.settings.responseBindings?.[request.id]?.completion?.identity===localFinalIdentity(request),
       retainLocalCompletion:async(request,saved,update)=>{
         await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`,{version:1,identity:localFinalIdentity(request),saved,...(!saved?{removed:true}:{})});
