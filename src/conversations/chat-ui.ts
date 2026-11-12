@@ -1,3 +1,4 @@
+import {modelButton,type ModelChoice} from './model-picker';
 import {clockForDocument} from '../shared/clock';
 import {resolveJobOptions,overrideCount,type JobOverrides,type ResolvedJobOptions,type InlineDefaults} from './job-options';
 import {logEvent,logFailure} from '../app/diagnostics';
@@ -18,6 +19,9 @@ export interface ChatDestination {
   detail?:string;
 }
 export interface ChatHost {
+  getJobOverrides?():JobOverrides;
+  loadModels?(projectKey?:string):Promise<ModelChoice[]>;
+  getPreview?():string;
   getThreadChoiceRestriction?():string|undefined;
   steering?:boolean;
   getInlineDefaults?():InlineDefaults;
@@ -56,7 +60,7 @@ class ChatProjectModal extends FuzzySuggestModal<{key:string;label:string}> {
 /** Child edits are isolated until Apply. Closing or Cancel leaves the parent draft intact. */
 export class JobOverridesModal extends Modal {
   private draft:JobOverrides;
-  constructor(app:App,draft:JobOverrides,private defaults:InlineDefaults,private apply:(draft:JobOverrides)=>void){super(app);this.draft={inline:{...draft.inline}};}
+  constructor(app:App,draft:JobOverrides,private defaults:InlineDefaults,private apply:(draft:JobOverrides)=>void){super(app);this.draft={...draft,inline:{...draft.inline}};}
   onOpen(){
     this.titleEl.setText('Overrides for this send');this.contentEl.empty();
     this.contentEl.createEl('p',{text:'Use default inherits your settings. Explicit choices apply to this new job only.'});
@@ -69,14 +73,14 @@ export class JobOverridesModal extends Modal {
     new Setting(this.contentEl).setName('Final answer format').addDropdown(d=>{
       d.addOption('default',`Use default — ${base.finalAnswerFormat==='formatted'?'Current formatting':'Raw Markdown'}`).addOption('formatted','Current formatting').addOption('raw-markdown','Raw Markdown').setValue(inline.finalAnswerFormat??'default').setDisabled(!enabled).onChange(value=>{inline.finalAnswerFormat=value==='default'?undefined:value as NonNullable<typeof inline.finalAnswerFormat>;});
     });
-    new Setting(this.contentEl).addButton(b=>b.setButtonText('Reset overrides').onClick(()=>{this.draft={inline:{}};this.onOpen();})).addButton(b=>b.setButtonText('Cancel').onClick(()=>this.close())).addButton(b=>b.setButtonText('Apply').setCta().onClick(()=>{this.apply(this.draft);this.close();}));
+    new Setting(this.contentEl).addButton(b=>b.setButtonText('Reset overrides').onClick(()=>{this.draft={...this.draft,inline:{}};this.onOpen();})).addButton(b=>b.setButtonText('Cancel').onClick(()=>this.close())).addButton(b=>b.setButtonText('Apply').setCta().onClick(()=>{this.apply(this.draft);this.close();}));
   }
 }
 
 type Destination='default'|'new'|'existing';
 
 /** The same compact destination UI handles whole notes, selections, and typed asks. */
-class SendDestinationModal extends NoteTabPanel {
+export class SendDestinationModal extends NoteTabPanel {
   ready:Promise<ChatDestination|undefined>=Promise.resolve(undefined);
   private revision=0;
   private opened=false;
@@ -92,7 +96,7 @@ class SendDestinationModal extends NoteTabPanel {
   private projectKey?:string;
   private composing:boolean;
   private check?:{key?:string;controller:AbortController;work:Promise<ChatDestination>};
-  constructor(app:App,private host:ChatHost,private prompt?:string){super(app,host.getNotePath());this.composing=prompt===undefined;this.projectKey=host.getDefaultProjectKey?.();}
+  constructor(app:App,private host:ChatHost,private prompt?:string){super(app,host.getNotePath());this.composing=prompt===undefined;this.projectKey=host.getDefaultProjectKey?.();this.overrides=host.getJobOverrides?.()??{};}
   private cancelCheck(){this.check?.controller.abort(cancelledRequest('Conversation check cancelled.'));this.check=undefined;}
   private checkDestination(key?:string){
     if(this.check&&this.check.key===key&&!this.check.controller.signal.aborted)return this.check.work;
@@ -104,14 +108,15 @@ class SendDestinationModal extends NoteTabPanel {
   onOpen(){
     this.opened=true;const revision=++this.revision;
     logEvent('ui.destination.opened',{notePath:this.host.getNotePath(),steering:this.host.steering,composing:this.composing,projectKey:this.projectKey});
-    this.titleEl.setText('T3 Code');this.contentEl.empty();
+    this.titleEl.setText(this.composing?'Message T3':'Send to T3');this.contentEl.empty();this.modalEl?.classList.add('t3-send-composer');
     const row=this.contentEl.createEl('p',{cls:'send-to-t3-destination-top'});
     const projectButton=row.createEl('button',{text:this.host.getProjectName(this.projectKey),cls:'send-to-t3-note-project',attr:{'aria-label':`Change project for this send: ${this.host.getProjectName(this.projectKey)}`,title:this.host.getTargetDescription(this.projectKey)}});
     projectButton.disabled=Boolean(this.host.busy);
     projectButton.addEventListener('click',()=>{
       if(this.field)this.prompt=this.field.value;
-      new ChatProjectModal(this.app,()=>this.host.getProjectChoices(),key=>{logEvent('ui.destination.project-selected',{projectKey:key});this.projectKey=key;this.onOpen();},this.host.onProjectChange?.bind(this.host)).open();
+      new ChatProjectModal(this.app,()=>this.host.getProjectChoices(),key=>{logEvent('ui.destination.project-selected',{projectKey:key});this.projectKey=key;this.overrides.modelSelection=undefined;this.onOpen();},this.host.onProjectChange?.bind(this.host)).open();
     });
+    if(this.host.loadModels&&!this.host.steering)modelButton(this.app,row,()=>this.overrides.modelSelection,()=>this.host.loadModels!(this.projectKey),selection=>{this.overrides.modelSelection=selection;});
     const count=overrideCount(this.overrides);
     const overridesButton=row.createEl('button',{text:count?`Overrides · ${count}`:'Overrides',attr:{'aria-label':`Overrides for this send: ${count} explicit choices`}});
     overridesButton.disabled=Boolean(this.host.busy);
@@ -119,7 +124,8 @@ class SendDestinationModal extends NoteTabPanel {
       if(this.field)this.prompt=this.field.value;
       new JobOverridesModal(this.app,this.overrides,this.host.getInlineDefaults?.()??{enabled:false},draft=>{this.overrides=draft;this.onOpen();}).open();
     });
-    const detail=this.contentEl.createEl('p',{text:''});
+    const preview=this.contentEl.createEl('details',{cls:'t3-composer-context'});preview.createEl('summary',{text:`Note context · ${this.host.getNotePath().split('/').at(-1)}`});preview.createEl('pre',{text:(this.host.getPreview?.()??this.host.getNotePath()).slice(0,12000)});
+    const detail=this.contentEl.createEl('p',{text:'',cls:'t3-composer-status'});
     const busyDetail=this.contentEl.createEl('p',{text:'Another send is in progress. This window will become available when it finishes.',attr:{role:'status'}});
     if(this.composing){
       this.field=this.contentEl.createEl('textarea',{cls:'send-to-t3-destination-prompt',attr:{'aria-label':'Message for T3',placeholder:'What would you like to do?',rows:'5'}});
@@ -128,6 +134,7 @@ class SendDestinationModal extends NoteTabPanel {
         if(event.key==='Enter'&&(event.metaKey||event.ctrlKey)&&!event.isComposing){event.preventDefault();void this.choose('default');}
       });
     }
+    else this.contentEl.createEl('p',{text:this.prompt?.trim()||'Send the current note, its new edits and supported note images.',cls:'t3-composer-hint'});
     const remembered=this.host.getDefaultThread(this.projectKey);
     const restriction=this.host.getThreadChoiceRestriction?.();
     if(restriction)this.contentEl.createEl('p',{text:restriction});
@@ -182,7 +189,7 @@ class SendDestinationModal extends NoteTabPanel {
   private async choose(target:Destination|boolean='default'){
     if(this.choosing||this.host.busy)return;
     target=target===false?'default':target===true?'existing':target;
-    if(this.field){this.prompt=this.field.value;if(!this.prompt.trim())return;}
+    if(this.field){this.prompt=this.field.value;if(!this.prompt.trim()&&this.composing&&this.host.getPreview===undefined)return;}
     logEvent('ui.destination.submitted',{notePath:this.host.getNotePath(),target,projectKey:this.projectKey,steering:this.host.steering});
     const revision=this.revision;this.choosing=true;this.refreshAvailability?.();
     const prompt=this.prompt??'';
@@ -224,9 +231,9 @@ async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
     if(!(host.hasConfirmedNoteSend?.()??Boolean(host.getDefaultThread(key)||host.steering))){
       new SendDestinationModal(app,host,prompt).open();return;
     }
-    const finishPreview=host.getDefaultThread(key)||host.steering?host.beginSend?.(resolveJobOptions(host.getInlineDefaults?.()??{enabled:false})):undefined;
+    const finishPreview=host.getDefaultThread(key)||host.steering?host.beginSend?.(resolveJobOptions(host.getInlineDefaults?.()??{enabled:false},host.getJobOverrides?.())):undefined;
     try{
-      const options=resolveJobOptions(host.getInlineDefaults?.()??{enabled:false});
+      const options=resolveJobOptions(host.getInlineDefaults?.()??{enabled:false},host.getJobOverrides?.());
       const resolve=()=>options;
       if(!host.getDefaultThread(key)&&!host.steering){
         if(host.hasNewContent&&!await host.hasNewContent({label:'New thread',projectKey:key},prompt)){new SendDestinationModal(app,host,prompt).open();return;}
@@ -259,7 +266,7 @@ export async function openChatFlow(app:App,host:ChatHost,prompt?:string,showSele
   const modal=new SendDestinationModal(app,host,prompt);modal.open();await modal.ready;
 }
 export async function openNoteSendFlow(app:App,host:ChatHost,showSelector=false):Promise<void>{
-  if(showSelector){new SendDestinationModal(app,host,'').open();return;}
+  if(showSelector){new SendDestinationModal(app,host,undefined).open();return;}
   await sendDefault(app,host,'');
 }
 

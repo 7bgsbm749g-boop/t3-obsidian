@@ -1,3 +1,4 @@
+import {modelChoices} from '../conversations/model-picker';
 import {RouteStatus} from '../connection/route-status';
 import {readImportThreads,readImportRuns,readImportRun,readImportPreview,importHistoryState} from '../conversations/import-source';
 import {orderedRoutes,routeGroups,routePairing,routeMethod,localRoute,routeNames,type ConnectionMethod} from '../connection/routes';
@@ -55,7 +56,7 @@ import {responseMoveHistory} from '../responses/response-move';
 import {incomingLabel} from '../conversations/inline-steering';
 import {isT3MessageId} from '../connection/t3-message-id';
 import {ProjectDiscovery,type ProjectSource,type ProjectSnapshot} from '../projects/project-discovery';
-import {resolveJobOptions,type ResolvedJobOptions} from '../conversations/job-options';
+import {resolveJobOptions,type JobOverrides,type ResolvedJobOptions} from '../conversations/job-options';
 import {intermediateMode,installResponsePresentation,finalAnswerFormat,type FinalAnswerFormat,type IntermediateMode} from '../responses/response-presentation';
 import {installActivityShine} from '../ui/activity-shine';
 import {activityLeafPath,decorateActivityTabs,decorateMobileActivityTabs,type ActivityLeaf} from '../ui/activity-titles';
@@ -394,7 +395,9 @@ export default class SendToT3 extends Plugin {
       if(!checking)void this.openManualAction(file,'',editor.getSelection(),{editor,view},this.commandSendSelector(view)).catch(error=>new Notice(`T3 Code: ${message(error)}`,10000));
       return true;
     }});
+    // eslint-disable-next-line obsidianmd/commands/no-default-hotkeys -- The user explicitly requested panel hotkeys.
     this.addCommand({id:'toggle-floating-panels',name:'Hide or show floating panels',hotkeys:[{modifiers:['Mod','Shift'],key:'H'}],callback:()=>toggleNoteTabPanels(this.app)});
+    // eslint-disable-next-line obsidianmd/commands/no-default-hotkeys -- The user explicitly requested panel hotkeys.
     this.addCommand({id:'minimize-floating-panels',name:'Minimize or restore floating panels',hotkeys:[{modifiers:['Mod','Shift'],key:'M'}],callback:()=>minimizeNoteTabPanels(this.app)});
     this.addCommand({id:'ask-agent',name:'Ask agent…',editorCheckCallback:(checking,editor,view)=>{if(this.stopped||this.busy||!view.file)return false;if(!checking)this.openAsk(view.file,editor.getSelection(),{editor,view});return true;}});
     this.addCommand({id:'send-or-ask-choose',name:'Send or ask: choose destination…',editorCheckCallback:(checking,editor,view)=>{
@@ -1436,7 +1439,7 @@ export default class SendToT3 extends Plugin {
     if(source&&!prompt.trim()&&!selection.trim())return this.openNoteSend(file,showSelector,source.insertion);
     return this.openManualAction(file,prompt,selection,source?.editor,showSelector);
   }
-  private async openManualAction(file:TFile,prompt:string,selection:string,captured?:EditorChatContext,showSelector=false){
+  private async openManualAction(file:TFile,prompt:string,selection:string,captured?:EditorChatContext,showSelector=false,overrides?:JobOverrides){
     if(!prompt.trim()&&!selection.trim()){
       return this.openNoteSend(file,showSelector,captured?.insertion);
     }
@@ -1471,7 +1474,7 @@ export default class SendToT3 extends Plugin {
       }
     }else if(selected)throw Error('Open the source note before sending its selection.');
     const question=selected&&prompt.trim()?`Selected text:\n${canonicalSelected}\n\n**USER ASKS:**\n${prompt}`:selected?canonicalSelected:prompt;
-    return await this.openChatWithNote(this.noteContext(file),question,context,true,showSelector);
+    return await this.openChatWithNote(this.noteContext(file),question,context,true,showSelector,overrides);
   }
   private openEditorChat(selection:string,file:TFile,context:EditorChatContext,showSelector=false){
     return this.openAsk(file,selection,context,showSelector);
@@ -1510,7 +1513,16 @@ export default class SendToT3 extends Plugin {
     const project=[...this.projects(),...this.settings.directProjects,...this.settings.projects].find(project=>project.id===projectId&&(job?.connection?.connectionId?project.connectionId===job.connection.connectionId:environment?project.connectionId?this.settings.paired.find(connection=>connection.id===project.connectionId)?.environmentId===environment:this.eventLocalEnvironmentId===environment:!cached&&!!job?.connection&&!job.connection.connectionId&&!project.connectionId));
     return project&&projectKey(project);
   }
-  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'hasConfirmedNoteSend'|'getThreadChoiceRestriction'|'getInlineDefaults'|'steering'|'getNotePath'|'getProjectName'|'getDefaultProjectKey'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'getDefaultDestination'|'getAlternativeProjectKey'|'onProjectChange'>{
+  private async loadSendModels(key?:string){
+    const project=[...this.projects(),...this.settings.directProjects,...this.settings.projects].find(project=>projectKey(project)===key);
+    const connection=project?this.connection(project):undefined;
+    const environmentId=connection?.environmentId??noProjectMachine(key??NO_PROJECT)??this.defaultNoProjectMachine();
+    if(!environmentId)throw Error('Choose a connected T3 machine first.');
+    const access=await this.inlineThreadAccess(environmentId);let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined;
+    try{rpc=await connectT3Rpc(access.api,access.origin);return modelChoices(await rpc.call('server.getConfig',{}),project?.id??'');}
+    finally{rpc?.close();await access.close?.();}
+  }
+  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'hasConfirmedNoteSend'|'getThreadChoiceRestriction'|'getInlineDefaults'|'steering'|'getNotePath'|'getProjectName'|'getDefaultProjectKey'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'getDefaultDestination'|'getAlternativeProjectKey'|'onProjectChange'|'loadModels'|'getPreview'>{
     // Capture the destination once. A later editor update must not redirect a send.
     const responseId=inline&&inlineSteeringTarget(inline.editor.getValue(),inline.editor.posToOffset(inline.editor.getCursor()),inline.responseId);
     const remembered=this.noteThread(note?.path);
@@ -1532,6 +1544,8 @@ export default class SendToT3 extends Plugin {
       hasConfirmedNoteSend:()=>this.hasConfirmedNoteSend(note?.path),
       getThreadChoiceRestriction:()=>threadNoteMode(this.settings.threadNoteMode)==='one-to-one'&&this.noteThread(note?.path)?'1:1 mode keeps this note in its linked thread. Switch to Free mode to choose another.':undefined,
       getInlineDefaults:()=>({...this.settings.inlineStreaming}),
+      loadModels:key=>this.loadSendModels(key??selectedKey),
+      getPreview:()=>{const file=note&&this.app.vault.getFileByPath(note.path);return inline?.anchor?.text??(file?this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.file?.path===file.path)?.editor?.getValue():undefined)??note?.path??'Current note';},
       steering:!!responseId,
       getNotePath:()=>note?.path??'No note open',
       getProjectName:projectName,
@@ -1569,12 +1583,13 @@ export default class SendToT3 extends Plugin {
       },
     };
   }
-  private async openChatWithNote(note:{path:string;absolutePath?:string}|undefined,prompt?:string,inline?:EditorChatContext,answerOnly=false,showSelector=false){
+  private async openChatWithNote(note:{path:string;absolutePath?:string}|undefined,prompt?:string,inline?:EditorChatContext,answerOnly=false,showSelector=false,overrides?:JobOverrides){
     // Generated text is captured context, never a source to move. Classify it
     // before the chooser/network waits: streaming may replace its surroundings.
     if(inline?.anchor)inline=this.canonicalChatContext(inline);
     const send=(text:string,options:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions})=>this.sendResolvedChat(text,note,inline,answerOnly,options);
     const host:ChatHost=this.withSendAvailability({...this.destinationContext(note,inline),
+      getJobOverrides:()=>overrides??{},
       beginSend:options=>this.previewSend(note?.path,inline,undefined,options.inline.enabled),
       hasNewContent:note?(destination)=>this.hasSmartContent(this.app.vault.getFileByPath(note.path)!,destination,inline):undefined,
       sendChat:(text,key,resolve,_back,destination)=>send(text,{threadId:destination?.threadId,responseId:destination?.responseId,expectedProjectKey:destination?.projectKey,projectOverrideKey:key,jobOptions:resolve?.()}),

@@ -12,3 +12,11 @@ for(const mode of ['remove','keep','collapse'] as const)test(`new jobs use the p
   assert.equal(resolveJobOptions({enabled:true,intermediateMode:mode},{inline:{intermediateMode:mode}}).inline.intermediateMode,'collapse');
   assert.equal(overrideCount({inline:{intermediateMode:mode}}),0);
 });
+
+test('model overrides are copied per send without changing output defaults',()=>{
+ const draft={modelSelection:{instanceId:'provider',model:'chosen',options:[{id:'reasoningEffort',value:'high'}]}};
+ const result=resolveJobOptions({enabled:true},draft);
+ assert.deepEqual(result.modelSelection,draft.modelSelection);result.modelSelection!.options![0].value='low';
+ assert.equal(draft.modelSelection.options[0].value,'high');
+ assert.equal(result.inline.enabled,true);assert.equal(resolveJobOptions({enabled:true}).modelSelection,undefined);
+});
