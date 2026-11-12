@@ -17,7 +17,7 @@ export function noteThreadTitle(notePath:string|undefined,mode:ThreadTitleGenera
 /** Match T3 clients' readable initial title while server generation runs. */
 export function promptThreadTitle(prompt:string,attachments:readonly {type:string;name:string}[]=[]):string {
   const images=new Set<string>();
-  const prose=visibleInlineInput(prompt).replace(/!?\[((?:\\.|[^\]\\\r\n])*)\]\(t3-context:\/\/([^\s)]+)\)/g,(_match,label:string,reference:string)=>{
+  const prose=visibleInlineInput(prompt,{stripFooterInsideCode:true}).replace(/!?\[((?:\\.|[^\]\\\r\n])*)\]\(t3-context:\/\/([^\s)]+)\)/g,(_match,label:string,reference:string)=>{
     if(/^(?:v1\/)?image(?:\/|$)/.test(reference)){images.add(reference);return '';}
     return label.replace(/\\([\\[\]])/g,'$1');
   }).trim().replace(/\s+/gu,' ');

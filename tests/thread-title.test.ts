@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {noteThreadTitle,promptThreadTitle,threadTitleGeneration} from '../src/conversations/thread-title';
 import {obsidianFooter} from '../src/notes/obsidian-prompt';
+import {visibleInlineInput} from '../src/responses/input-presentation';
 
 test('default generates only whole untitled basenames and preserves named notes',()=>{
   for(const path of ['Untitled.md','Folder/Untitled 1.md','Untitled 202.md',' untitled 2 .md'])assert.equal(noteThreadTitle(path,'untitled-only'),'New thread');
@@ -27,6 +28,17 @@ test('prompt titles hide image context URLs and use attachment labels for image-
   assert.equal(promptThreadTitle('',[{type:'image',name:'garden.png'}]),'Attached image');
   assert.equal(promptThreadTitle('',[{type:'image',name:'one.png'},{type:'image',name:'two.png'}]),'Attached images');
   assert.equal(promptThreadTitle('Use [selected code](t3-context://v1/selection/code)'),'Use selected code');
+});
+
+test('unfinished code cannot put generated delivery metadata into a title',()=>{
+  for(const fence of ['```','~~~']){
+    const prompt=fence+'\nx',raw=prompt+obsidianFooter('Synthetic','Untitled.md');
+    assert.equal(promptThreadTitle(raw),fence+' x');
+    assert.equal(visibleInlineInput(raw),raw,'message display still preserves code examples');
+    const legacy=prompt+'\n\nSent from Obsidian.\nObsidian vault: "Synthetic"\nDestination note path: "Untitled.md"';
+    assert.equal(promptThreadTitle(legacy),fence+' x');
+    assert.equal(visibleInlineInput(legacy),legacy);
+  }
 });
 
 test('always mode and note-free conversations use T3 generation',()=>{
