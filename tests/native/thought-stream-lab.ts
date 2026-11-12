@@ -60,7 +60,7 @@ export default class ThoughtStreamLab extends Plugin {
     const thoughts=(leaf:any)=>Array.from(batch(leaf)?.querySelectorAll<HTMLDetailsElement>('.send-to-t3-thought')??[]);
     const rows:Array<{name:string;pass:boolean}>=[],check=(name:string,pass:boolean)=>rows.push({name,pass});
     const command=(id:string,ordinal:number,status='completed')=>event('v2.turn-item.updated',{id,runId:'turn',type:'command_execution',ordinal,status,input:'pwd',command:'pwd',output:'Synthetic exact result',startedAt:at(ordinal),updatedAt:at(ordinal)});
-    thinking('one',1,'**Check the request**');command('command-one',2);thinking('two',3,'**Check the result**',true);
+    thinking('one',1,'**Check the request**\n\nRead the public request before proceeding.');command('command-one',2);thinking('two',3,'**Check the result**',true);
     await until(()=>leaves.every(leaf=>batch(leaf)?.querySelector(':scope > summary')?.textContent?.includes('Ran 1 command · Thought (×2)')));
     check('alternating thoughts and tools share one closed batch in both views',leaves.every(leaf=>groups(leaf).length===1&&!batch(leaf)?.open&&batch(leaf)?.querySelector(':scope > summary')?.textContent?.includes('Ran 1 command · Thought (×2)')===true));
     check('standalone thought callouts are absent',leaves.every(leaf=>!fold(leaf)?.querySelector('.callout[data-callout="t3-thought"]')));
@@ -70,6 +70,8 @@ export default class ThoughtStreamLab extends Plugin {
     check('live public preview opens its batch in Live Preview and Reading',leaves.every(leaf=>!!batch(leaf)?.open&&fold(leaf)?.querySelector('button[data-t3-open-tool-group]')?.textContent?.includes('Check the result')===true));
     check('thoughts and tools are direct peers in chronological order',leaves.every(leaf=>Array.from(batch(leaf)?.querySelector('.send-to-t3-tool-group-content')?.children??[]).map(el=>el.className).join(',')==='send-to-t3-thought,send-to-t3-tool,send-to-t3-thought'));
     await until(()=>leaves.every(leaf=>thoughts(leaf).length===2&&thoughts(leaf).every(thought=>!!thought.querySelector('.send-to-t3-thought-time')?.textContent?.trim()&&!!thought.querySelector('.lucide-brain'))));
+    check('short summaries are labelled rows without expansion',leaves.every(leaf=>thoughts(leaf)[1]?.tagName==='DIV'&&thoughts(leaf)[1]?.textContent?.includes('Check the result')===true&&!thoughts(leaf)[1]?.querySelector('summary')));
+    check('long public traces expose their summary before expansion',leaves.every(leaf=>thoughts(leaf)[0]?.tagName==='DETAILS'&&thoughts(leaf)[0]?.querySelector('summary')?.textContent?.includes('Check the request')===true));
     check('thought timestamps and brain icons render',leaves.every(leaf=>thoughts(leaf).length===2&&thoughts(leaf).every(thought=>!!thought.querySelector('.send-to-t3-thought-time')?.textContent?.trim()&&!!thought.querySelector('.lucide-brain'))));
     for(const leaf of leaves)thoughts(leaf)[0]?.querySelector<HTMLElement>(':scope > summary')?.click();
     await until(()=>leaves.every(leaf=>thoughts(leaf)[0]?.open));

@@ -601,6 +601,9 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 .send-to-t3-thought > summary::before, details[data-t3-tool-group] > summary::before, .send-to-t3-answer > summary::before { content: '›'; width: .6em; flex: 0 0 .6em; }
 .send-to-t3-thought[open] > summary::before, details[data-t3-tool-group][open] > summary::before, .send-to-t3-answer[open] > summary::before { transform: rotate(90deg); }
 .send-to-t3-thought-content { padding-inline-start: 1.7em; }
+div.send-to-t3-thought { display: flex; align-items: center; gap: .5em; padding-inline-start: 1.1em; color: var(--text-muted); }
+.send-to-t3-thought-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.send-to-t3-thought-time { flex: 0 0 auto; }
 .send-to-t3-answer-label { flex-shrink: 0; }
 .send-to-t3-answer-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-normal); }
 .send-to-t3-answer-time { margin-left: auto; flex-shrink: 0; font-size: var(--font-ui-smaller); }

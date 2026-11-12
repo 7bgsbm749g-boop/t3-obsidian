@@ -2,6 +2,7 @@ import {isRecord,records,parseJson} from '../shared/values';
 import type {InlineActivity,InlineMessage,InlineThreadState} from '../conversations/inline-thread';
 import {resolveT3McpToolDefinition} from './t3-tool-catalogue';
 import {micromark} from 'micromark';
+import {thoughtPresentation} from './response-thought';
 export type ToolAction='command'|'edit'|'read'|'browser'|'device'|'search'|'code-search'|'thread'|'link-pr'|'unlink-pr'|'list-prs'|'other';
 export interface ResponseTool {id:string;turnId:string;key:string;status:string;label:string;activeLabel:string;icon:string;action:ToolAction;createdAt?:string;startedAt?:string;sequence:number;command?:string;cwd?:string;output?:string;exitCode?:number;durationMs?:number;files?:string[];sourceName?:string;sourceIcon?:string;threadTitle?:string;threadUrl?:string}
 export interface ResponseToolGroup {id:string;turnId:string;createdAt?:string;sequence?:number;tools:ResponseTool[];thoughts?:InlineMessage[]}
@@ -172,10 +173,14 @@ export function renderResponseToolGroup(group:ResponseToolGroup,current?:{tool:R
 function renderResponseThought(thought:InlineMessage):string {
   const at=Date.parse(thought.createdAt??'');
   const time=Number.isFinite(at)?`<span class="send-to-t3-thought-time" data-t3-thought-at="${at}"></span>`:'';
-  // micromark escapes raw HTML and unsafe URLs by default. Keep the generated
-  // block on one line, just like exact tool output, including code line breaks.
+  const {label,expandable}=thoughtPresentation(thought.text);
+  const row=`<span data-t3-tool-icon="brain" aria-hidden="true"></span><span class="send-to-t3-thought-label" title="${html(label)}">${html(label)}</span>${time}`;
+  const attributes=`class="send-to-t3-thought" data-t3-tool-key="${html(thoughtKey(thought))}"`;
+  if(!expandable)return `<div ${attributes}>${row}</div>`;
+  // micromark escapes raw HTML and unsafe URLs by default. Preserve the full
+  // public Markdown while the one-line label identifies its topic.
   const body=micromark(thought.text).replace(/\r\n?|\n/g,'&#10;');
-  return `<details class="send-to-t3-thought" data-t3-tool-key="${html(thoughtKey(thought))}"><summary><span data-t3-tool-icon="brain" aria-hidden="true"></span><span>Thought</span>${time}</summary><div class="send-to-t3-thought-content">${body}</div></details>`;
+  return `<details ${attributes}><summary>${row}</summary><div class="send-to-t3-thought-content">${body}</div></details>`;
 }
 
 /** T3's first-seen action order, distinct changed-file count and sentence form. */

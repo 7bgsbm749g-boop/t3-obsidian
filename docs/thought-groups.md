@@ -47,7 +47,14 @@ content when its reference changes; unchanged references retain loaded details.
 A single thought uses `Thought`; multiple thoughts use `Thought (×N)`, where N
 is the total. Mixed groups continue to include thoughts and every action kind.
 The live row shows a heading or first sentence from public reasoning and opens
-its activity group. Individual thought previews remain a separate design proposal.
+its activity group. Individual rows use their public summary as the label.
+Short summaries have no expansion control. Longer traces show a one-line heading
+or first-sentence preview and expand to the full formatted public text. Each pane
+keeps its expansion choice as summaries stream. No hidden reasoning is used.
+
+Public plan-mode proposals retain their v2 Markdown in a separate Plan card.
+Short plans show in full; long plans offer a preview and expansion. Task lists
+remain separate timeline items, and final-only history preferences retain plans.
 
 The design-parity replay reads baseline comparison artifacts from its parent
 evidence directory: `t3-summary.json`, `t3-worklog.css`, and `baseline-group.html`.

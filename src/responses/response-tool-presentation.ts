@@ -49,7 +49,7 @@ function groupAt(text:string,from:number,placeholder=false){
     const thought=tag.attrs.class==='send-to-t3-thought';
     // Accept legacy tool disclosures for exact saved-note recovery as well as
     // current flat rows. Canonical history is never rewritten on read.
-    if(!(tool&&(tag.name==='div'||tag.name==='details')||thought&&tag.name==='details')||!tag.attrs['data-t3-tool-key'])return;tools++;
+    if(!((tool||thought)&&(tag.name==='div'||tag.name==='details'))||!tag.attrs['data-t3-tool-key'])return;tools++;
    }
    if(!voidTags.has(tag.name))stack.push(tag.name);
   }

@@ -65,7 +65,7 @@ test('canonical ordinals order same-time thoughts and tools inside one batch',()
     {id:'tool',type:'command_execution',input:'pwd',ordinal:2,startedAt:at(2)}]);
   const groups=responseToolGroups(state,['run']);
   assert.equal(groups.length,1);const body=renderResponseToolGroup(groups[0]);
-  assert.ok(body.indexOf('<p>First</p>')<body.indexOf('data-t3-tool-id=')&&body.indexOf('data-t3-tool-id=')<body.indexOf('<p>Second</p>'));
+  assert.ok(body.indexOf('title="First"')<body.indexOf('data-t3-tool-id=')&&body.indexOf('data-t3-tool-id=')<body.indexOf('title="Second"'));
 });
 
 test('compaction replaces its own display row and cannot complete an app run',()=>{

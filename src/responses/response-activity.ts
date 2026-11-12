@@ -1,5 +1,7 @@
 import type {InlineThreadState} from '../conversations/inline-thread';
 import {responseToolGroups,currentResponseToolGroup} from './response-tools';
+import {liveThoughtLine} from './response-thought';
+export {liveThoughtLine} from './response-thought';
 
 const text=(value:unknown)=>typeof value==='string'?value.replace(/\s+/g,' ').trim().slice(0,120):'';
 /** Canonical lifecycle records, never assistant prose or another turn's tools.
@@ -15,13 +17,6 @@ export function responseActivityLabel(state:InlineThreadState,turnId:string):str
 
 }
 
-/** Only the public reasoning field enters this preview. */
-export function liveThoughtLine(markdown:string):string {
- const heading=/^\s*\*\*([^*\r\n]+)\*\*[ \t]*\r?(?:\n|$)/.exec(markdown)?.[1];
- const value=(heading??markdown).replace(/!?\[([^\]]*)\]\([^)]*\)/g,'$1').replace(/^[ \t]*(?:#{1,6}|[-*+]|\d+\.)[ \t]+/gm,'').replace(/`+|\*\*|~~/g,'').replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?![\w*])/g,'$1$2').replace(/\s+/g,' ').trim();
- if(heading!==undefined)return value;
- const end=/[.?!]["'”’)]?(?=\s)/.exec(value);return end?value.slice(0,end.index+end[0].length):value;
-}
 export function responseActivityRow(label='Thinking',icon='brain',groupId?:string):string {
   const escaped=text(label).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   const glyph=/^[a-z0-9-]+$/.test(icon)?icon:'brain';

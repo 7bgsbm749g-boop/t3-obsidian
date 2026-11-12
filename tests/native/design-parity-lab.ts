@@ -51,7 +51,14 @@ export default class DesignParityLab extends Plugin {
   this.check('tools are flat and outputs absent',!target.querySelector('details.send-to-t3-tool')&&!target.textContent!.includes('OUTPUT MUST NOT APPEAR'));
   this.check('thread title is linked',!!target.querySelector('a[href="t3-thread://v2/synthetic/synthetic-thread"]'));
   await this.capture('03-live-thoughts-flat-tools.png');
-  target=await render('Thought-only count',renderResponseToolGroup({...responseToolGroups(state,['run'])[0],tools:[]}));await this.capture('04-thought-count.png');
+  target=await render('Thought labels and count',renderResponseToolGroup({...responseToolGroups(state,['run'])[0],tools:[]}));
+  const thoughtGroup=target.querySelector<HTMLDetailsElement>('details[data-t3-tool-group]');if(thoughtGroup)thoughtGroup.open=true;
+  this.check('long thought is identified by its public summary',target.querySelector('details.send-to-t3-thought > summary')?.textContent?.includes('Checking release commit structure')===true);
+  this.check('short thought is a labelled row without expansion',target.querySelector('div.send-to-t3-thought')?.textContent?.includes('Checking the visible activity rows.')===true);
+  await this.capture('04-thought-count.png');
+  const longThought=target.querySelector<HTMLDetailsElement>('details.send-to-t3-thought');if(longThought)longThought.querySelector<HTMLElement>('summary')?.click();
+  this.check('long thought expands to its full public trace',!!longThought?.open&&longThought.textContent!.includes('Public reasoning summary with a second sentence.'));
+  await this.capture('14-thought-expanded.png');
   const taskState:InlineThreadState={...state,messages:[{id:'before',turnId:'run',role:'assistant',streaming:false,text:'Before the task list.',createdAt:at(1)}],activities:[{id:'task1',turnId:'run',kind:'response.plan',summary:'Tasks',createdAt:at(2),payload:{steps:[{step:'Read request',status:'completed'},{step:'Verify active step',status:'running'},{step:'Finish review',status:'pending'}]}},{id:'compact',turnId:'run',kind:'context-compaction',summary:'Compaction',createdAt:at(3),payload:{status:'completed',beforeTokenCount:128000,afterTokenCount:32000}}]};
   target=await render('Timeline tasks and compaction token counts',renderInlineTurn(taskState,'run','synthetic','running','collapse','synthetic',undefined,undefined,undefined,{startedAt:at(0)}));const tasks=target.querySelector<HTMLDetailsElement>('.send-to-t3-tasks');if(tasks)tasks.open=true;
   this.check('v2 running is active',!!target.querySelector('[data-t3-task-state="in_progress"]'));
