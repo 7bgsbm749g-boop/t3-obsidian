@@ -14,7 +14,7 @@ export async function savedResponseProof(request:ResponseRequest,document:string
   const response=data.responses[`${request.id}:${receipt.outputHash}`];
   if(!response||response.body!==receipt.outputHash||data.notes[response.noteId]?.path!==request.notePath||data.notes[response.noteId]?.deleted)return false;
   const packed=data.bodies[receipt.outputHash];if(!packed||packed.hash!==receipt.outputHash)return false;
-  const body=await unpackText(packed);if(!body.trim())return false;
+  let body:string;try{body=await unpackText(packed);}catch{return false;}if(!body.trim())return false;
   const at=document.indexOf(body);
   return at>=0&&document.indexOf(body,at+1)<0;
 }

@@ -2,7 +2,8 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {contentHash} from '../src/responses/completion';
-import {updateResponseBindingData,responseBindingRequests,type ResponseBindingData} from '../src/responses/response-binding-data';
+import {completeResponseBinding,updateResponseBindingData,responseBindingRequests,type ResponseBindingData} from '../src/responses/response-binding-data';
+import {savedResponseProof} from '../src/responses/saved-response-proof';
 import {LocalResponseManager} from '../src/responses/local-response-manager';
 import {localResponseBindings,localResponseRange,withLocalResponseBinding} from '../src/responses/local-response-binding';
 import {localSyncReady} from '../src/storage/local-sync-state';
@@ -572,4 +573,27 @@ test('a peer receipt updates a stopped destination before automatic output verif
  const moved={...h.binding,notePath:'Moved.md'};h.receiveRecords(updateResponseBindingData(h.records(),moved,'peer'));
  h.io.knownCompleted=()=>true;h.io.savedResponse=async(request:ResponseRequest)=>request.notePath===moved.notePath;h.notes.read=async(path?:string)=>path===moved.notePath?'Peer output':undefined;
  h.ready(true);h.manager.resume();await drain();assert.equal(h.manager.status(h.binding.id)?.finalSaved,true);assert.equal(h.manager.request(h.binding.id)?.notePath,moved.notePath);assert.equal(h.writes(),0);h.manager.dispose();
+});
+
+test('a stopped unverified reply confirms a peer save without enabling any local write',async()=>{
+ const h=fixture();let proof=false,checks=0,interrupts=0;
+ h.io.savedResponse=async()=>{checks++;return proof;};h.io.knownCompleted=()=>true;
+ h.io.access=async()=>({origin:'https://synthetic.invalid',api:async(_path:string,payload:unknown)=>{if(payload){interrupts++;return {};}return {thread:{id:h.binding.threadId,projectId:h.binding.projectId,messages:[],activities:[],latestTurn:{turnId:'exact-turn',state:'running',requestedAt:h.binding.createdAt},session:{status:'running',activeTurnId:'exact-turn'}}};}});
+ await h.manager.register(h.binding);h.emit('Still running',false);h.notes.compareAndSet=async()=>false;
+ await assert.rejects(h.manager.stop(h.binding.id,'Frozen running reply'),/waiting for its local save/);assert.equal(interrupts,1);assert.equal(h.manager.status(h.binding.id)?.runTerminal,false);
+ h.write('Peer saved reply with user edits');h.manager.changed(h.binding.notePath);await drain();assert.equal(h.manager.status(h.binding.id)?.finalSaved,false);assert.ok(checks>0,'Unverified stopped reply never checked peer output');
+ const before=checks;for(let n=0;n<10;n++)h.manager.tick();await drain();assert.equal(checks,before,'Unchanged failed proof does not spin');
+ proof=true;h.notes.compareAndSet=async()=>{throw Error('Read-only reconciliation attempted a write');};h.manager.savedResponsesChanged();await drain();
+ assert.equal(h.manager.status(h.binding.id)?.finalSaved,true);assert.equal(h.manager.frozenBody(h.binding.id),'Frozen running reply');assert.deepEqual(h.manager.health().pending,[]);assert.equal(h.read(),'Peer saved reply with user edits');assert.equal(h.writes(),0);h.manager.dispose();
+});
+
+test('completion receipts use the exact rewritten or stopped body recorded for peer proof',async()=>{
+ for(const stopped of [false,true]){
+  const h=fixture(),data=loadSmartSend(undefined);let savedBody:string|undefined;
+  h.io.localFinalBody=async()=> 'Rewritten saved reference';
+  h.io.rememberResponse=(request:ResponseRequest,body:string,before:string,after:string,offset:number)=>rememberResponse(data,request.notePath,request.id,body,before,after,offset);
+  h.io.retainLocalCompletion=async(request:ResponseRequest,saved:boolean,update:DirectInlineUpdate|undefined,actual:string|undefined)=>{savedBody=actual;if(saved&&update)h.receiveRecords(completeResponseBinding(h.records(),request,update.turnId!,contentHash(actual??update.body),'peer'));};
+  await h.manager.register(h.binding);if(stopped)h.ready(false);h.emit('Original remote reference');await drain();if(stopped)await h.manager.stop(h.binding.id,'Frozen saved reference');
+  const expected=stopped?'Frozen saved reference':'Rewritten saved reference';assert.equal(savedBody,expected);assert.equal(h.records()[h.binding.id].completion?.outputHash,contentHash(expected));assert.equal(await savedResponseProof(h.binding,h.read(),h.records(),data),true);h.manager.dispose();
+ }
 });

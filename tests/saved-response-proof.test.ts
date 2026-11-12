@@ -36,3 +36,11 @@ test('identity, route, live anchor, duplicate output, and deleted note identitie
   assert.equal(await savedResponseProof(h.request,h.document,h.bindings,h.data),false,fault);
  }
 });
+
+test('corrupt text and gzip bodies refuse proof without throwing or accepting unverified bytes',async()=>{
+ for(const encoding of ['text','gzip'] as const){
+  const h=await fixture(),hash=contentHash('Uncached valid body '+randomUUID()),old=h.data.responses[`${h.request.id}:${contentHash(h.body)}`];
+  h.bindings[h.request.id].completion!.outputHash=hash;h.data.responses[`${h.request.id}:${hash}`]={...old,body:hash};h.data.bodies[hash]={hash,encoding,data:encoding==='text'?'Corrupt body':Buffer.from('Invalid gzip').toString('base64')};
+  assert.equal(await savedResponseProof(h.request,h.document,h.bindings,h.data),false);
+ }
+});

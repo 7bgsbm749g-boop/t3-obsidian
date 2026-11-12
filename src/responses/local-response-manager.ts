@@ -170,11 +170,11 @@ export class LocalResponseManager {
         else runtime.preview.suspend();
         // A final commit removes the anchor before its file IO resolves. Let
         // that pending commit report its own success or conflict.
-        if(!runtime.done&&runtime.update?.completionVerified)this.finish(runtime);
+        this.finish(runtime);
         continue;
       }
       if(this.io.syncReady?.(runtime.request.notePath)===false)runtime.attemptRevision=undefined;
-      if(loaded.length===1&&runtime.update?.completionVerified)this.finish(runtime);
+      if(loaded.length===1)this.finish(runtime);
     }
     this.blockedLocations=blocked;this.recoverClosed(stored);
   }
@@ -222,6 +222,10 @@ export class LocalResponseManager {
     }
   }
   changed(path:string){this.noteVersions.set(path,(this.noteVersions.get(path)??0)+1);const note=this.recoveryNotes.get(path);if(note){note.version++;note.pending=true;note.retryAt=0;}this.resume();}
+  savedResponsesChanged(){
+    for(const runtime of this.jobs.values())if(!runtime.done&&this.io.savedResponse&&this.io.knownCompleted?.(runtime.request)&&(runtime.stopped||runtime.detached||runtime.update?.completionVerified))runtime.attemptRevision=undefined;
+    this.resume();
+  }
   tick(){this.resume();}
   reconnect(){if(this.closed)return;for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.suspend();for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped){runtime.attemptRevision=undefined;if(!runtime.restoring&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.reconnect(this.io.isOpen(runtime.request.notePath));}this.resume();}
   private detach(runtime:Runtime){if(runtime.done||runtime.stopped)return;runtime.detached=true;runtime.pendingSave='note-changed';runtime.preview.suspend();this.reportState(runtime);}
@@ -255,7 +259,7 @@ export class LocalResponseManager {
   private finish(runtime:Runtime){
     this.reportState(runtime);
     if(this.closed||runtime.done||(runtime.stopped||runtime.detached)&&!this.io.savedResponse||runtime.restoring||runtime.work||this.now()<runtime.retryAt||this.io.syncReady?.(runtime.request.notePath)===false)return;
-    const update=runtime.update;if(!update?.completionVerified||update.questionsPending)return;
+    const update=runtime.update,proofOnly=!!this.io.savedResponse&&(runtime.stopped||runtime.detached);if((!update?.completionVerified||update.questionsPending)&&!proofOnly)return;
     const path=runtime.request.notePath,revision=this.noteVersions.get(path)??0;
     if(runtime.attemptRevision===revision)return;
     runtime.attemptRevision=revision;runtime.pendingSave='saving';
@@ -276,9 +280,9 @@ export class LocalResponseManager {
     const work=(this.noteWrites.get(path)??Promise.resolve()).catch(()=>{}).then(operation);
     this.noteWrites.set(path,work);void work.finally(()=>{if(this.noteWrites.get(path)===work)this.noteWrites.delete(path);}).catch(()=>{});return work;
   }
-  private async settle(runtime:Runtime,saved:boolean,localWrite=true){
+  private async settle(runtime:Runtime,saved:boolean,localWrite=true,savedBody?:string){
     runtime.done=true;runtime.saved=saved;runtime.preview.dispose();this.io.localCompleted?.(runtime.request.id,runtime.request.notePath);
-    try{await this.io.retainLocalCompletion?.(runtime.request,saved,localWrite?runtime.update:undefined);}catch(error){logFailure('response.lifecycle.receipt-failed',error,{bindingId:runtime.request.id,saved});}
+    try{await this.io.retainLocalCompletion?.(runtime.request,saved,localWrite?runtime.update:undefined,localWrite?savedBody:undefined);}catch(error){logFailure('response.lifecycle.receipt-failed',error,{bindingId:runtime.request.id,saved});}
     runtime.request=compactResponseBinding(runtime.request);
     const turn=runtime.update?.turnId?runtime.update.checkpoint?.turns?.[runtime.update.turnId]:undefined,checkpoint=turn?{turns:{[turn.turnId]:turn}}:undefined;
     if(runtime.update)runtime.update={...runtime.update,request:runtime.request,body:'',resume:undefined,questionActivities:undefined,checkpoint};
@@ -290,7 +294,7 @@ export class LocalResponseManager {
     const current=await this.notes.read(path);
     if(current===undefined){for(const runtime of batch)runtime.pendingSave='note-unavailable';return;}
     let document=current;
-    const changes:Array<{runtime:Runtime;update:DirectInlineUpdate;request:string}>=[];
+    const changes:Array<{runtime:Runtime;update:DirectInlineUpdate;request:string;body:string}>=[];
     for(const runtime of batch){
       const update=runtime.update;
       // A peer may have materialized this exact reply while our checked write
@@ -313,15 +317,15 @@ export class LocalResponseManager {
       if(!range){runtime.pendingSave='note-changed';return;}
       const body=await this.io.localFinalBody?.(update)??update.body;
       await this.io.rememberResponse?.(runtime.request,body,document.slice(0,range.from),document.slice(range.to),range.from);
-      document=document.slice(0,range.from)+body+document.slice(range.to);changes.push({runtime,update,request});
+      document=document.slice(0,range.from)+body+document.slice(range.to);changes.push({runtime,update,request,body});
     }
     if(!changes.length)return;
     const guard=()=>!this.closed&&changes.every(({runtime,update,request})=>!runtime.stopped&&!runtime.detached&&runtime.update===update&&runtime.request.notePath===path&&this.current(runtime)&&JSON.stringify(compactResponseBinding(runtime.request))===request)&&this.io.syncReady?.(path)!==false;
     if(diagnosticEnabled('response.save.prepared'))logEvent('response.save.prepared',{noteAlias:contentHash(path),bindingIds:changes.map(change=>change.runtime.request.id),attachments:changes.length,documentLength:current.length,proposedLength:document.length,elapsedMs:Date.now()-started});
     if(!guard()||!await this.notes.compareAndSet(path,current,document,guard)){for(const {runtime} of changes)runtime.pendingSave='note-changed';if(diagnosticEnabled('response.save.pending'))logEvent('response.save.pending',{noteAlias:contentHash(path),bindingIds:changes.map(change=>change.runtime.request.id),reason:'note-changed',attachments:changes.length});return;}
-    for(const {runtime} of changes){
+    for(const {runtime,body} of changes){
       if(runtime.request.localStage)await this.io.localEditSaved?.(runtime.request,document).catch(error=>logFailure('response.edit.receipt',error,{bindingId:runtime.request.id}));
-      await this.settle(runtime,true);
+      await this.settle(runtime,true,true,body);
     }
     streamMemory.sample('save',()=>({documentLength:document.length,attachmentCount:changes.length,elapsedMs:Date.now()-started,saveWorkerCount:this.finalWorkers.size,saveQueueCount:this.finalQueues.size}));
     if(diagnosticEnabled('response.save.verified'))logEvent('response.save.verified',{noteAlias:contentHash(path),bindingIds:changes.map(change=>change.runtime.request.id),attachments:changes.length,elapsedMs:Date.now()-started});
@@ -380,7 +384,7 @@ export class LocalResponseManager {
     const after=range?document.slice(0,range.from)+body+document.slice(range.to):document;
     if(range&&!await this.notes.compareAndSet(path,current,after))throw Error('The frozen response is waiting for its local save.');
     if(range?.request.localStage)await this.io.localEditSaved?.(range.request,after).catch(error=>logFailure('response.edit.receipt',error));
-    await this.settle(runtime,!!range);
+    await this.settle(runtime,!!range,true,body);
   }
   private async changeBinding(id:string,change:(request:ResponseRequest)=>ResponseRequest){
     const runtime=this.jobs.get(id);if(!runtime||runtime.done||runtime.stopped)throw Error('The response is no longer active.');
