@@ -190,7 +190,9 @@ class SendDestinationModal extends NoteTabPanel {
     const returnToDraft=()=>this.open();
     let finishPreview:(()=>void)|undefined;
     try{
-      if(target!=='existing')finishPreview=this.host.beginSend?.(resolve());
+      // New destinations can still need a machine or workspace choice.
+      // Their send path starts the preview once that choice is resolved.
+      if(target==='default'&&(this.host.getDefaultThread(this.projectKey)||this.host.steering))finishPreview=this.host.beginSend?.(resolve());
       const restriction=this.host.getThreadChoiceRestriction?.();
       if(target!=='default'&&restriction)throw new RequestDeliveryError(restriction,false);
       if(target!=='default'&&this.projectKey===undefined&&this.host.steering){
@@ -222,7 +224,7 @@ async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
     if(!(host.hasConfirmedNoteSend?.()??Boolean(host.getDefaultThread(key)||host.steering))){
       new SendDestinationModal(app,host,prompt).open();return;
     }
-    const finishPreview=host.beginSend?.(resolveJobOptions(host.getInlineDefaults?.()??{enabled:false}));
+    const finishPreview=host.getDefaultThread(key)||host.steering?host.beginSend?.(resolveJobOptions(host.getInlineDefaults?.()??{enabled:false})):undefined;
     try{
       const options=resolveJobOptions(host.getInlineDefaults?.()??{enabled:false});
       const resolve=()=>options;

@@ -1201,7 +1201,6 @@ export default class SendToT3 extends Plugin {
     return captureCursorInsertion(adapter.saved(),offset);
   }
   async openNoteSend(file:TFile,showSelector=false,insertion=this.noteSendInsertion(file)){
-    const finishPreview=!showSelector&&this.hasConfirmedNoteSend(file.path)?this.previewSend(file.path,undefined,insertion):()=>{};
     try{
     showSelector ||= await this.noteNeedsRelink(file.path);
     const host:ChatHost=this.withSendAvailability({...this.destinationContext(this.noteContext(file)),
@@ -1212,7 +1211,7 @@ export default class SendToT3 extends Plugin {
       sendToExisting:(_text,key,resolve,back)=>this.openNoteThreads(file,key,resolve,back,insertion),
     });
     return await openNoteSendFlow(this.app,host,showSelector);
-    }catch(error){new Notice(`T3 Code: ${message(error)}`,10000);}finally{finishPreview();}
+    }catch(error){new Notice(`T3 Code: ${message(error)}`,10000);}
   }
   async openNoteThreads(file:TFile,overrideKey?:string,resolve?:()=>ResolvedJobOptions,back?:()=>void,insertion=this.noteSendInsertion(file)){
     if(this.busy)return;
@@ -1398,7 +1397,7 @@ export default class SendToT3 extends Plugin {
   async sendNote(file:TFile,threadId?:string,expectedProjectKey?:string,newThread=false,overrideKey?:string,jobOptions?:ResolvedJobOptions,insertion=this.noteSendInsertion(file)){
     if(this.busy)return;
     jobOptions??=resolveJobOptions(this.settings.inlineStreaming);
-    const finishPreview=this.previewSend(file.path,undefined,insertion,jobOptions.inline.enabled);
+    let finishPreview:(()=>void)|undefined;
     try{
 
       const active=this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -1409,8 +1408,9 @@ export default class SendToT3 extends Plugin {
       const {project,link}=await this.chatTarget(file.path,chosen,Boolean(newThread||expectedProjectKey),overrideKey??expectedProjectKey);
       if(expectedProjectKey&&projectKey(project)!==expectedProjectKey)throw Error('The folder’s linked project changed. Choose a thread again.');
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
+      finishPreview=this.previewSend(file.path,undefined,insertion,jobOptions.inline.enabled);
       await this.send(file,project,{threadId,newThread,projectOverrideKey:overrideKey,folderPicker:Boolean(expectedProjectKey),folderLink:link,jobOptions,throwOnError:true,insertion});
-    }finally{finishPreview();}
+    }finally{finishPreview?.();}
   }
   openChat(prompt?:string,showSelector=false){
     const view=this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -1441,6 +1441,7 @@ export default class SendToT3 extends Plugin {
     const active=this.app.workspace.getActiveViewOfType(MarkdownView);
     const view=captured?.view??(active?.file?.path===file.path?active:undefined);
     const editor=captured?.editor??view?.editor;
+    if(captured&&view?.file?.path!==file.path)throw Error('The original note is no longer open. Reopen it before asking T3.');
     const selected=selection.trim();
     let context:EditorChatContext|undefined;
     if(view?.file?.path===file.path&&editor){
@@ -1453,29 +1454,28 @@ export default class SendToT3 extends Plugin {
     }
     if(context?.anchor)context=this.canonicalChatContext(context);
     const canonicalSelected=context?.canonicalAnchor?.text??selection;
-    const finishPreview=!showSelector&&this.hasConfirmedNoteSend(file.path)?this.previewSend(file.path,context):()=>{};
-    try{
-      if(view&&editor){
-        const document=this.notePromptDocument(view),anchor=context?.canonicalAnchor;
-        let scope:Span|undefined=anchor?[anchor.start,anchor.end]:undefined;
-        if(selected&&!scope){const from=document.indexOf(selection);if(from<0||document.lastIndexOf(selection)!==from)throw Error('The selected text changed. Select it again before sending.');scope=[from,from+selection.length];}
-        context={...context!,smartDocument:document,smartScope:scope,smartQuestion:prompt};
-        if(scope&&prompt.trim()&&!context.referenceSelection){
-          await this.recoverSmartReplies(file.path,document);
-          const data=this.smartData(),projection=await sourceProjection(data,smartNote(data,file.path),document);
-          const ordinary=projection.segments.reduce((sum,segment)=>sum+Math.max(0,Math.min(scope[1],segment.rawTo)-Math.max(scope[0],segment.rawFrom)),0);
-          if(ordinary<scope[1]-scope[0])context.referenceSelection=true;
-        }
-      }else if(selected)throw Error('Open the source note before sending its selection.');
-      const question=selected&&prompt.trim()?`Selected text:\n${canonicalSelected}\n\n**USER ASKS:**\n${prompt}`:selected?canonicalSelected:prompt;
-      return await this.openChatWithNote(this.noteContext(file),question,context,true,showSelector);
-    }finally{finishPreview();}
+    if(context){
+      const document=this.notePromptDocument(context.view),anchor=context.canonicalAnchor;
+      const range=anchor?selectionRange(document,anchor):undefined;
+      if(anchor&&!range)throw Error('The selected text changed. Select it again before sending.');
+      let scope:Span|undefined=range?[range.from,range.to]:undefined;
+      if(selected&&!scope){const from=document.indexOf(selection);if(from<0||document.lastIndexOf(selection)!==from)throw Error('The selected text changed. Select it again before sending.');scope=[from,from+selection.length];}
+      context={...context,smartDocument:document,smartScope:scope,smartQuestion:prompt};
+      if(scope&&prompt.trim()&&!context.referenceSelection){
+        await this.recoverSmartReplies(file.path,document);
+        const data=this.smartData(),projection=await sourceProjection(data,smartNote(data,file.path),document);
+        const ordinary=projection.segments.reduce((sum,segment)=>sum+Math.max(0,Math.min(scope[1],segment.rawTo)-Math.max(scope[0],segment.rawFrom)),0);
+        if(ordinary<scope[1]-scope[0])context.referenceSelection=true;
+      }
+    }else if(selected)throw Error('Open the source note before sending its selection.');
+    const question=selected&&prompt.trim()?`Selected text:\n${canonicalSelected}\n\n**USER ASKS:**\n${prompt}`:selected?canonicalSelected:prompt;
+    return await this.openChatWithNote(this.noteContext(file),question,context,true,showSelector);
   }
   private openEditorChat(selection:string,file:TFile,context:EditorChatContext,showSelector=false){
     return this.openAsk(file,selection,context,showSelector);
   }
-  private previewSend(path?:string,context?:EditorChatContext,insertion?:CursorInsertion|null,enabled=this.settings.inlineStreaming.enabled){
-    if(!path||!enabled||this.busy||this.stopped)return ()=>{};
+  private previewSend(path?:string,context?:EditorChatContext,insertion?:CursorInsertion|null,enabled=this.settings.inlineStreaming.enabled,ownsSend=false){
+    if(!path||!enabled||this.busy&&!ownsSend||this.stopped)return ()=>{};
     const view=context?.view??this.app.workspace?.getLeavesOfType?.('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.file?.path===path);
     if(!view?.editor||view.file?.path!==path)return ()=>{};
     const document=view.editor.getValue();
@@ -1628,9 +1628,11 @@ export default class SendToT3 extends Plugin {
     const jobOptions=options?.jobOptions??resolveJobOptions(this.settings.inlineStreaming);
     const requestId=randomId(),initialInput=context.initialQuestion?{messageId:commandId(requestId,'message'),text:context.initialQuestion}:undefined;
     let job:InlineJob|undefined,delivered=false;
-    const finishPreview=this.previewSend(note.path,context,undefined,jobOptions.inline.enabled);
+    let finishPreview:(()=>void)|undefined;
     try{
-      await this.sendChat(prompt,note,{...options,jobOptions,requestId,sourceContext:context,onPrepared:async request=>{
+      await this.sendChat(prompt,note,{...options,jobOptions,requestId,sourceContext:context,onTargetResolved:()=>{
+        finishPreview=this.previewSend(note.path,context,undefined,jobOptions.inline.enabled,true);
+      },onPrepared:async request=>{
         // The pending indicator never enters image or prompt snapshots.
         if(request.inlineSteering)return;
 
@@ -1638,7 +1640,7 @@ export default class SendToT3 extends Plugin {
         this.sendPreviews.hide(context.view as MarkdownView);
         await manager.prepare(job,request);
       }});delivered=true;if(job)manager.start(job);
-    }catch(error){if(job)await manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)));throw error;}finally{finishPreview();}
+    }catch(error){if(job)await manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)));throw error;}finally{finishPreview?.();}
   }
   private async steeringRecord(id:string):Promise<{record:ResponseRecord;host:ResponseStorageTarget}|undefined>{return this.deviceInline?.cachedResponse(id);}
   private async steeringDestination(id:string,signal?:AbortSignal){
@@ -2139,7 +2141,7 @@ export default class SendToT3 extends Plugin {
     const thread=await this.readChatThread(connection,project,threadId);
     return typeof thread.title==='string'&&thread.title.trim()?thread.title.slice(0,160):'T3 thread';
   }
-  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;jobOptions?:ResolvedJobOptions;barePrompt?:boolean;sourceContext?:EditorChatContext;onPrepared?:(request:Request,input:string)=>void|Promise<void>}):Promise<void> {
+  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;jobOptions?:ResolvedJobOptions;barePrompt?:boolean;sourceContext?:EditorChatContext;onTargetResolved?:()=>void;onPrepared?:(request:Request,input:string)=>void|Promise<void>}):Promise<void> {
     if(this.busy)throw Error('Another send is in progress. Wait for it to finish.');
     if(!prompt.trim())throw Error('Enter a message before sending.');
     if(this.stopped)throw Error('The plugin has been disabled. Re-enable it before sending.');
@@ -2157,12 +2159,13 @@ export default class SendToT3 extends Plugin {
       const active=this.noteThread(note?.path);
       const threadId=options?.threadId??(!options?.newThread&&active&&project.id===active.projectId&&((project.connectionId??'')===active.connectionId||!!connection.environmentId&&connection.environmentId===active.environmentId)?active.threadId:undefined);
       await this.assertNoteMode(note?.path,{...connection,projectId:project.id,threadId});
+      options?.onTargetResolved?.();
       if(note&&options?.sourceContext?.smartDocument!==undefined){
         const context=options.sourceContext;
         await this.recoverSmartReplies(note.path,context.smartDocument!);
         const plan=await prepareSmartSend(this.smartData(),note.path,await this.smartKey(project,connection,threadId??''),context.smartDocument!,context.smartScope);
         const question=context.smartQuestion??'';
-        const selected=context.smartScope?explicitSelectionText(context.snapshot??context.smartDocument!,context.smartScope):context.canonicalAnchor?.text??context.anchor?.text??'';
+        const selected=context.smartScope?explicitSelectionText(context.smartDocument!,context.smartScope):context.canonicalAnchor?.text??context.anchor?.text??'';
         // Explicit selections are deliberate input, including text delivered
         // before. Keep the normal capture/ranges for coverage and safe cleanup.
         const material=context.referenceSelection&&selected?`Selected text:\n${selected}`:context.smartScope?selected:plan.text;
@@ -3174,5 +3177,9 @@ class ConnectedMachineModal extends FuzzySuggestModal<VaultMachine>{
   getItems(){return this.machines;}
   getItemText(machine:VaultMachine){return machine.name;}
   onChooseItem(machine:VaultMachine){this.chosen=true;this.choose(machine.id);}
-  onClose(){super.onClose();if(!this.chosen)this.cancelled(Error('Machine selection was cancelled.'));}
+  onClose(){
+    super.onClose();
+    // SuggestModal closes before it calls onChooseItem for a selected row.
+    void Promise.resolve().then(()=>{if(!this.chosen)this.cancelled(Error('Machine selection was cancelled.'));});
+  }
 }
