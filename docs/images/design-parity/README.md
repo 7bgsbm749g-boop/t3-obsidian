@@ -4,7 +4,8 @@ These public images contain synthetic replay data only. The plugin screenshots
 were captured in native desktop Obsidian 1.15.0, in separate unsynced validation
 vaults. Before and after use the same fixtures and 1032 × 804 viewport, except
 the explicitly labelled 430 px desktop check. The before renderer is main
-`1085545` (0.0.435); the after renderer is the 0.0.436 candidate.
+`068f24c` (0.0.440); the after renderer is the PR candidate merged with that
+base. Its ordinary source version remains 0.0.440.
 
 The figures crop original PNG captures and add outlines, numbers and explanatory
 labels. They do not redraw application content. Original captures, source hashes,
