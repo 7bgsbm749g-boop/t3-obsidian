@@ -78,7 +78,10 @@ function presentation(info:ReturnType<typeof fields>){
     const icon=definition.icon==='pull-request'?'git-pull-request':definition.icon==='browser'?'globe':definition.icon==='device'?'smartphone':'messages-square';
     return {label:compact(`${verb} ${target}`),icon};
   }
-  if(info.sourceName)return {label:compact(`${done(status)?'Used':'Using'} ${info.sourceName} · ${name.split(/__|[.]/).at(-1)?.replace(/_/g,' ')??'tool'}`),icon:'plug'};
+  if(info.sourceName){
+    const verb=status==='failed'?'Failed to use':status==='declined'?'Declined to use':status==='stopped'?'Stopped using':done(status)?'Used':'Using';
+    return {label:compact(`${verb} ${info.sourceName} · ${name.split(/__|[.]/).at(-1)?.replace(/_/g,' ')??'tool'}`),icon:'plug'};
+  }
   const clean=name.replace(/^mcp__t3_code__|^mcp__[^_]+__|^functions[._]/,'').split('.').at(-1)??name;
   let target=command?commandProgram(command):compact(clean).replace(/_/g,' '),icon=command?'terminal':'wrench',action='run';
   if(info.itemType==='web_search'||/^(?:web[._]run|mcp__web__run)$/.test(name)){action='search';target=info.query?`“${compact(info.query)}”`:'web';icon='search';}

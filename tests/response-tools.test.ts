@@ -178,3 +178,16 @@ test('catalogue labels, source identity and linked thread titles survive normali
  assert.match(renderResponseTool(tools[1]),/Calendar/);assert.match(renderResponseTool(tools[1]),/src="https:\/\/example.com\/icon.png"/);
  assert.match(renderResponseTool(tools[2]),/href="t3-thread:\/\/v2\/env\/target"/);assert.match(tools[2].label,/Release checks/);
 });
+
+test('integration labels preserve unsuccessful outcomes and source identity',()=>{
+ const labels={inProgress:'Using',completed:'Used',failed:'Failed to use',declined:'Declined to use',stopped:'Stopped using'};
+ for(const [status,verb] of Object.entries(labels)){
+  const tool=responseTools({messages:[],activities:[a('source',1,'tool.updated',{toolCallId:'source',status,data:{toolName:'mcp__calendar__list_events',toolSource:{name:'Calendar'}}})]},['turn'])[0];
+  assert.equal(tool.label,`${verb} Calendar · list events`);
+  assert.equal(tool.icon,'plug');
+  const body=renderResponseTool(tool);
+  assert.match(body,new RegExp(`data-t3-tool-status="${status}"`));
+  assert.ok(body.includes(tool.label));assert.doesNotMatch(body,/<details|<summary/);
+  if(['failed','declined','stopped'].includes(status))assert.equal(tool.activeLabel,tool.label);
+ }
+});
