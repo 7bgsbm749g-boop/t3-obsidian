@@ -162,10 +162,16 @@ export class QuestionController {
   private async send(target:QuestionTarget,dismiss:boolean,notePath?:string){
     const key=questionKey(target);
     try{
-    await this.refresh([target]);if(this.stopped)return;
+    // A loaded question already supplies the exact immutable IDs and choices.
+    // T3 validates pending/resumable state atomically with the saved command;
+    // another full transcript read cannot close that race before dispatch.
+    const loaded=this.view(target);
+    if(this.stopped||loaded.status==='resolved')return;
+    if(!loaded.request)await this.refresh([target]);
+    if(this.stopped)return;
     const view=this.view(target),record=this.record(target);
     if(view.status==='resolved')return;
-    if(!view.request||!view.fresh||view.status==='unavailable')throw Error(view.detail??'Refresh this question before answering.');
+    if(!view.request||view.status==='unavailable')throw Error(view.detail??'Refresh this question before answering.');
     if(record.command?.type==='thread.user-input.dismiss'&&view.request.responseMode!=='message')throw Error('This blocking question cannot be dismissed.');
     // Transport retries reuse the exact accepted-or-not command, including timestamp.
     if(!record.command){
@@ -179,7 +185,7 @@ export class QuestionController {
       record.answerFollow={request:view.request,command:record.command,notePath};this.persist();
     }
     if(this.stopped)return;
-    this.views.set(questionKey(target),{request:view.request,status:'submitting'});this.notify();
+    this.views.set(questionKey(target),{...view,status:'submitting',detail:undefined});this.notify();
     let access:ThreadAccess|undefined;
     const command=record.command;
     try{
@@ -189,7 +195,7 @@ export class QuestionController {
     }
     catch(error){
       if(record.resolved)return;
-      logFailure('question.submit.failed',error,{...target,commandId:command?.commandId});record.uncertain=true;try{this.persist();}catch{/* Keep the original write-ahead command. */}this.views.set(questionKey(target),{request:view.request,status:'error',detail:`${error instanceof Error?error.message:'Submission failed.'} Your answer is saved; retry safely.`});this.notify();throw error;
+      logFailure('question.submit.failed',error,{...target,commandId:command?.commandId});record.uncertain=true;try{this.persist();}catch{/* Keep the original write-ahead command. */}this.views.set(questionKey(target),{...view,status:'error',accepted:false,detail:`${error instanceof Error?error.message:'Submission failed.'} Your answer is saved; retry safely.`});this.notify();throw error;
     }
     finally{try{await access?.close?.();}catch(error){logFailure('question.send.close',error);}}
     if(this.stopped)return;
@@ -197,8 +203,9 @@ export class QuestionController {
     delete record.uncertain;
     try{this.persist();}catch(error){logFailure('question.accepted.save',error,{...target});}
     if(record.command)this.views.set(key,{...this.view(target),accepted:true});this.notify();
-    await this.refresh([target]);
-    await this.recoverAnswerStreams();
+    // Acknowledgement is not provider completion. The live feed and existing
+    // refresh path confirm resolution; stream attachment cannot delay Submit.
+    void this.recoverAnswerStreams().catch(error=>logFailure('question.answer-stream',error,{...target}));
     }catch(error){if(!this.stopped&&this.view(target).status!=='resolved'){this.views.set(key,{...this.view(target),status:'error',detail:error instanceof Error?error.message:'Cannot submit the answer.'});this.notify();}throw error;}
   }
 }

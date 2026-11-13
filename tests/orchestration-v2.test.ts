@@ -312,24 +312,24 @@ test('send state uses exact family metadata without transcript, tool or history 
 });
 
 test('send state preserves active ownership independently of the latest run and keeps archive/deletion gates',async()=>{
- const row=threadState({activeRunId:'older-active',latestRunId:'newer-queued',archivedAt:at,deletedAt:at});
+ const row=threadState({activeRunId:'older-active',latestRunId:'newer-terminal',status:'completed',activityRunStatus:undefined,archivedAt:at,deletedAt:at});
  const Socket=settingsSocket(undefined,undefined,()=>({threads:[row]}));
  const api=t3Api(async()=>({ticket:'ticket'}),'https://fixture',url=>new Socket(url) as any);
  const result=expectSnapshot(await api('/api/orchestration/threads/thread?stateOnly=true'));
- assert.equal(result.thread.session.activeTurnId,'older-active');assert.equal(result.thread.latestTurn?.turnId,'newer-queued');assert.equal(result.thread.archivedAt,at);assert.equal(result.thread.deletedAt,at);
+ assert.equal(result.thread.session.activeTurnId,'older-active');assert.equal(result.thread.session.status,'running');assert.equal(result.thread.latestTurn?.turnId,'newer-terminal');assert.equal(result.thread.latestTurn?.state,'completed');assert.equal(result.thread.archivedAt,at);assert.equal(result.thread.deletedAt,at);
 });
 
-test('send state retains pending approval and question gates and ignores closed or non-resumable requests',async()=>{
- for(const kind of ['approval','user_input','user-input'])for(const status of ['pending','resolved'])for(const type of ['message','not_resumable']){
-  const Socket=settingsSocket(undefined,undefined,()=>({threads:[threadState({pendingRuntimeRequest:{id:'request',kind,status,responseCapability:{type}}})]}));
+test('send state retains approval and question gates from the actual pending-summary wire shape',async()=>{
+ for(const kind of ['approval','user_input','user-input'])for(const blocking of [true,false]){
+  const Socket=settingsSocket(undefined,undefined,()=>({threads:[threadState({pendingRuntimeRequest:{id:'request',kind,createdAt:at,blocking}})]}));
   const api=t3Api(async()=>({ticket:'ticket'}),'https://fixture',url=>new Socket(url) as any);
-  const result=expectSnapshot(await api('/api/orchestration/threads/thread?stateOnly=true')),pending=status==='pending'&&type!=='not_resumable';
-  assert.equal(result.thread.hasPendingApprovals,pending&&kind==='approval');assert.equal(result.thread.hasPendingUserInput,pending&&kind!=='approval');
+  const result=expectSnapshot(await api('/api/orchestration/threads/thread?stateOnly=true'));
+  assert.equal(result.thread.hasPendingApprovals,kind==='approval');assert.equal(result.thread.hasPendingUserInput,kind!=='approval');
  }
 });
 
 test('send state fails closed for missing thread identity, run state, permissions or pending-request metadata',async()=>{
- const invalid=[{id:'different'},{projectId:undefined},{activeRunId:undefined},{latestRunId:undefined},{pendingRuntimeRequest:undefined},{runtimeMode:undefined},{interactionMode:undefined},{status:undefined},{pendingRuntimeRequest:{id:'request',kind:'approval'}}];
+ const invalid=[{id:'different'},{projectId:undefined},{activeRunId:undefined},{latestRunId:undefined},{pendingRuntimeRequest:undefined},{runtimeMode:undefined},{interactionMode:undefined},{status:undefined},{pendingRuntimeRequest:{id:'request'}}];
  for(const overrides of invalid){
   let closes=0;const Base=settingsSocket(undefined,undefined,()=>({threads:[threadState(overrides)]}));
   const Socket=class extends Base {close(){closes++;super.close();}};

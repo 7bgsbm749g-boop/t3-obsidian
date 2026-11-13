@@ -26,7 +26,8 @@ export interface WireThread {
   id:string;projectId:string;title?:string;status?:string;deletedAt?:string|null;archivedAt?:string|null;
   runtimeMode?:string;interactionMode?:string;lastError?:string;historyOrigin?:string;protocolVersion?:2;
   activeRunId?:string|null;activityRunStatus?:string;latestRunId?:string|null;
-  latestRunRequestedAt?:string;latestRunCompletedAt?:string;pendingRuntimeRequest?:WireRuntimeRequest;
+  latestRunRequestedAt?:string;latestRunCompletedAt?:string;
+  pendingRuntimeRequest?:Pick<WireRuntimeRequest,'id'|'kind'>&{createdAt?:string;blocking?:boolean};
   pendingBackgroundTasks?:unknown[];session?:NormalizedThread['session'];latestTurn?:InlineTurn;hasPendingApprovals?:boolean;hasPendingUserInput?:boolean;backgroundLiveness?:boolean;settledOverride?:string;lastVisitedAt?:string;updatedAt?:string;worktreePath?:string|null;branch?:string|null;
 }
 export interface WireVisibleItem {sourceThreadId:string;visibility?:string;item:WireTurnItem}

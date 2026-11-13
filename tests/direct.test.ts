@@ -185,7 +185,7 @@ test('existing-thread sends preserve conversation settings and retry one immutab
 
 test('existing-thread validation rejects other projects, archived threads, and pending input before dispatch',async t=>{
  const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});
- for(const overrides of [{projectId:'other'},{archivedAt:'2026-09-19'},{pendingRuntimeRequest:{id:'approval',kind:'approval',status:'pending'}},{pendingRuntimeRequest:{id:'question',kind:'user_input',status:'pending'}}]){
+ for(const overrides of [{projectId:'other'},{archivedAt:'2026-09-19'},{pendingRuntimeRequest:{id:'approval',kind:'approval',createdAt:'2026-09-19'}},{pendingRuntimeRequest:{id:'question',kind:'user_input',createdAt:'2026-09-19'}}]){
   let dispatched=false;
   const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',threadId:'existing',project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',connectionId:'c',environmentId:eid,url,host:'direct',executable:''},title:'Note',prompt:'Content'};
   globalThis.WebSocket=settingsSocket(undefined,undefined,tag=>{if(tag==='orchestration.getThreadFamily')return family({id:'existing',projectId:'p',...overrides});dispatched=true;return {};}) as any;

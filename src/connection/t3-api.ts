@@ -53,15 +53,18 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
         !['approval-required','auto-accept-edits','auto','full-access'].includes(row.runtimeMode??'')||
         !['default','plan'].includes(row.interactionMode??'')||typeof row.status!=='string')throw Error('T3 did not return the requested thread control state.');
       const request=row.pendingRuntimeRequest;
-      if(request&&(typeof request.id!=='string'||!request.id||typeof request.kind!=='string'||typeof request.status!=='string'))throw Error('T3 returned an invalid pending thread request.');
-      const pending=request?.status==='pending'&&request.responseCapability?.type!=='not_resumable'?request:undefined;
-      const normalized=normalizeV2ShellThread({...row,pendingRuntimeRequest:pending});
+      // Shell summaries are already pending; they contain id/kind/createdAt,
+      // not the full runtime request's status or response capability.
+      if(request&&(typeof request.id!=='string'||!request.id||typeof request.kind!=='string'||!request.kind))throw Error('T3 returned an invalid pending thread request.');
+      const normalized=normalizeV2ShellThread(row);
       // Select control fields explicitly. Do not retain latest message bodies,
       // inherited history, tool output or other family members in send checks.
       return {snapshotSequence:isRecord(family)?family.snapshotSequence:undefined,page:{hasMore:true},thread:{
         id:row.id,projectId:row.projectId,title:row.title,updatedAt:row.updatedAt,archivedAt:row.archivedAt,deletedAt:row.deletedAt,
         runtimeMode:row.runtimeMode,interactionMode:row.interactionMode,protocolVersion:2,
-        session:normalized.session,latestTurn:normalized.latestTurn,
+        // The active pointer owns delivery even when a newer run is terminal
+        // and an older server omits activityRunStatus.
+        session:row.activeRunId?{...normalized.session,status:'running',activeTurnId:row.activeRunId}:normalized.session,latestTurn:normalized.latestTurn,
         hasPendingApprovals:normalized.hasPendingApprovals,hasPendingUserInput:normalized.hasPendingUserInput,
         messages:[],activities:[],turns:normalized.latestTurn?{[normalized.latestTurn.turnId]:normalized.latestTurn}:{},
       }};
