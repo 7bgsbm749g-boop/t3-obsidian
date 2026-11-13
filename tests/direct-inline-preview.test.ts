@@ -99,7 +99,7 @@ test('live thread renames survive completion and a later stream adopts the curre
   h.item({kind:'event',event:{sequence:3,type:'thread.metadata-updated',payload:{title:'Renamed in T3'}}});
   assert.match(h.updates.at(-1)!.body,/Renamed in T3 · Working/);
   const completed=completeV2(h,4);completed.snapshot!.thread.title='Renamed in T3';h.item(completed);await settle();
-  const saved=h.updates.at(-1)!;assert.equal(saved.completionVerified,true);assert.match(saved.body,/Renamed in T3 · Completed/);assert.doesNotMatch(saved.body,/Original title/);
+  const saved=h.updates.at(-1)!;assert.equal(saved.completionVerified,true);assert.match(saved.body,/Renamed in T3 · Worked for/);assert.doesNotMatch(saved.body,/Original title/);
   h.preview.dispose();
   const count=h.updates.length;
   h.item({kind:'event',event:{sequence:5,type:'thread.metadata-updated',payload:{title:'Later name'}}});assert.equal(h.updates.length,count);
@@ -108,8 +108,8 @@ test('live thread renames survive completion and a later stream adopts the curre
    next.preview.tick(true);const snapshot=next.snapshot();assert.ok(snapshot.kind==='snapshot');snapshot.snapshot!.thread.title='Later name';next.item(snapshot);
    assert.match(next.updates.at(-1)!.body,/Later name · Working/);
    const completed=completeV2(next,3);completed.snapshot!.thread.title='Later name';next.item(completed);await settle();
-   assert.match(next.updates.at(-1)!.body,/Later name · Completed/);assert.equal(next.updates.at(-1)!.completionVerified,true);
-   assert.match(saved.body,/Renamed in T3 · Completed/);
+   assert.match(next.updates.at(-1)!.body,/Later name · Worked for/);assert.equal(next.updates.at(-1)!.completionVerified,true);
+   assert.match(saved.body,/Renamed in T3 · Worked for/);
   }finally{next.preview.dispose();}
  }finally{h.preview.dispose();}
 });
