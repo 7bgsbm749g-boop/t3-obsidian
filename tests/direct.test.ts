@@ -5,6 +5,7 @@ import type {Request} from '../src/app/bridge';
 import {modelConfig,settingsSocket} from './rpc-fixture';
 import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE,AGENT_SETUP_PERMISSIONS} from '../src/connection/environment-permissions';
 import {noteThreadTitle} from '../src/conversations/thread-title';
+import {obsidianFooter} from '../src/notes/obsidian-prompt';
 const eid='environment';const url='https://t3.example';const now=Date.now();
 const session={url,environmentId:eid,token:'device-token',expiresAt:now+600000};
 const descriptor={environmentId:eid,label:'Computer',orchestrationProtocolVersion:2};
@@ -85,11 +86,11 @@ test('automatic titles launch with the exact first message and retry the saved l
   return {threadId:payload.threadId};
  }) as any;
  const fetcher:any=async(u:string)=>response(u.endsWith('/environment')?descriptor:u.endsWith('/shell')?{projects:[{id:'p'}]}:{ticket:'test'});
- const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',url,environmentId:eid,host:'direct',executable:''},title:noteThreadTitle('Named note.md','always'),prompt:'Plan a vegetable garden'};
+ const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',url,environmentId:eid,host:'direct',executable:''},title:noteThreadTitle('Named note.md','always'),prompt:'Plan a vegetable garden'+obsidianFooter('Synthetic','Named note.md')};
  const save=async()=>{saved.push(structuredClone(request));};
  await assert.rejects(sendDirect(request,session,save,fetcher),/Cannot reach/);
  assert.equal(saved[0].directPlan.launch,true);assert.equal(saved[0].directPlan.phase,'prepared');
- assert.equal(launches[0].title,'New thread');assert.equal(launches[0].generateTitle,true);assert.equal(launches[0].threadId,commandId(request.id,'thread'));
+ assert.equal(launches[0].title,'Plan a vegetable garden');assert.equal(launches[0].generateTitle,true);assert.equal(launches[0].threadId,commandId(request.id,'thread'));
  assert.deepEqual(launches[0].initialMessage,{messageId:commandId(request.id,'message'),text:request.prompt,attachments:[]});
  assert.deepEqual(launches[0].workspaceStrategy,{type:'root'});assert.deepEqual(launches[0].modelSelection,config.settings.defaultModelSelection);
  assert.equal(launches[0].runtimeMode,'full-access');assert.equal(launches[0].interactionMode,'default');
@@ -99,8 +100,12 @@ test('automatic titles launch with the exact first message and retry the saved l
  await sendDirect(restored,session,save,fetcher);assert.equal(launches.length,2);
  for(const note of ['Untitled.md','Folder/Untitled 12.md',undefined]){
   const next:Request={...request,id:crypto.randomUUID(),title:noteThreadTitle(note,'untitled-only'),directPlan:undefined};
-  await sendDirect(next,session,save,fetcher);assert.equal(next.directPlan?.launch,true);
+  await sendDirect(next,session,save,fetcher);assert.equal(next.directPlan?.launch,true);assert.equal(launches.at(-1).title,'Plan a vegetable garden');assert.equal(launches.at(-1).generateTitle,true);
  }
+ const legacy:Request={...request,id:crypto.randomUUID(),directPlan:undefined};
+ await assert.rejects(sendDirect(legacy,session,async()=>{throw Error('Saved before send');},fetcher),/Saved before send/);
+ legacy.directPlan!.create!.title='New thread';
+ await sendDirect(legacy,session,save,fetcher);assert.equal(launches.at(-1).title,'New thread','old saved launch plans retain their exact title');assert.equal(launches.at(-1).generateTitle,true);
 });
 
 test('saved pending creates retain their original route even when the title is automatic',async(t)=>{

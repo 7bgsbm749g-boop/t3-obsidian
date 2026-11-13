@@ -40,7 +40,7 @@ export function renderWorktreeSetup(activity:InlineActivity,snapshot:WorktreeSet
   const labelSpan=(text:string,live:boolean)=>`<span class="send-to-t3-setup-label">${escape(text)}</span>${live?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':''}`;
   const rows=setup?.stages.map(stage=>{
     const status=stage.status==='running'&&!running?'stopped':stage.status;
-    const icon=status==='done'?'check':status==='skipped'?'minus':status==='failed'||status==='stopped'?'x':status==='warning'?'triangle-alert':'circle';
+    const icon=status==='done'?'check':status==='skipped'?'minus':status==='failed'||status==='stopped'?'x':status==='warning'?'triangle-alert':'minus';
     const detail=stage.status==='pending'?'':stage.status==='skipped'?stage.detail??'skipped':stage.id==='checkout'&&stage.status==='running'&&stage.percent!==null?`${stage.percent}%`:stage.detail??'';
     const time=['skipped','pending'].includes(stage.status)?'':timer(stage.startedAt,stage.endedAt??(!running?setup.endedAt??optionalString(p.completedAt)??stage.startedAt:null));
     const tail=stage.id==='setup-script'&&(stage.status==='failed'||stage.status==='running'&&running)&&stage.tail.length?`<pre class="send-to-t3-setup-tail"><code>${escape(stage.tail.join('\n'))}</code></pre>`:'';

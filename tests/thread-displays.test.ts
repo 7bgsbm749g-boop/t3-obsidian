@@ -12,8 +12,19 @@ function fixture(){
  let state:InlineThreadState={...snapshot([first]),historyComplete:true};
  const host={load:async()=>persisted,save:async(value:unknown)=>{persisted=structuredClone(value);saved.push(persisted);},now:()=>now,displayHost:{readThread:async()=>state,validateDestination:async()=>{},responseBindings:async()=>[],prepareDisplay:async(display:any,destination:any,message:any)=>({version:4,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:target.environmentId,workspaceRoot:'/scratch',directory:'.obsidian/inline'},notePath:destination.path,threadId:target.threadId,projectId:target.projectId,threadEnvironmentId:target.environmentId,messageId:message.id,initialHash:initialRegion(randomUUID()).bodyHash,createdAt:'2026-10-16T00:00:00Z'}) as ResponseRequest,attachDisplay:async(request:ResponseRequest)=>{attached.push(request);}},watchThread:(_target:any,item:any)=>{watch=item;return {stop:()=>stops++};}};
  const create=()=>new ThreadDisplays(host);
- return {target,first,next,attached,saved,create,watch:(item:unknown)=>watch?.(item),advance:()=>now+=31_000,setHistory:(ids:string[],sequence=1)=>state={...snapshot(ids,sequence),historyComplete:true},get persisted(){return persisted;},setPersisted:(value:unknown)=>persisted=value,stops:()=>stops};
+ return {target,first,next,attached,saved,create,watch:(item:unknown)=>watch?.(item),advance:()=>now+=31_000,setHistory:(ids:string[],sequence=1)=>state={...snapshot(ids,sequence),historyComplete:true},updateState:(update:(value:InlineThreadState)=>InlineThreadState)=>state=update(state),get persisted(){return persisted;},setPersisted:(value:unknown)=>persisted=value,stops:()=>stops};
 }
+test('an automatic event continuation streams to the original destination after client restart',async()=>{
+ const f=fixture(),registration={version:1 as const,id:randomUUID(),kind:'stream-thread' as const,scope:'thread' as const,source:f.target,destinations:['Replies.md'],start:'future' as const};
+ let service=f.create();await service.initialize();await service.command(registration);await service.tick();assert.equal(f.attached.length,0);service.stop();
+ f.setHistory([f.first,f.next]);f.updateState(state=>({...state,messages:state.messages.map(message=>message.id===f.next?{...message,text:'Desktop control is available. Resume the remaining work.',createdBy:'agent',creationSource:'mcp'}:message)}));
+ service=f.create();await service.initialize();await service.tick();assert.equal(f.attached.length,1);assert.equal(f.attached[0].notePath,'Replies.md');assert.equal(f.attached[0].threadId,f.target.threadId);assert.equal(f.attached[0].messageId,f.next);
+ await service.tick();assert.equal(f.attached.length,1);service.stop();
+});
+test('registering after the original prompt catches an already started continuation without importing the original reply',async()=>{
+ const f=fixture(),service=f.create();f.setHistory([f.first,f.next]);await service.initialize();await service.command({version:1,id:randomUUID(),kind:'stream-thread',scope:'thread',source:f.target,destinations:['Replies.md'],start:'after',afterMessageId:f.first});
+ await service.tick();assert.deepEqual(f.attached.map(request=>[request.notePath,request.messageId]),[['Replies.md',f.next]]);await service.tick();assert.equal(f.attached.length,1);service.stop();
+});
 test('following imports only new prompt turns and survives restart without duplicate bindings',async()=>{
  const f=fixture();let service=f.create();await service.initialize();const command={version:1 as const,id:randomUUID(),kind:'stream-thread' as const,scope:'thread' as const,source:f.target,destinations:['Note.md'],start:'future' as const};await service.command(command);await service.tick();assert.equal(f.attached.length,0);
  f.setHistory([f.first,f.next]);f.advance();await service.tick();assert.equal(f.attached.length,1);assert.equal(f.attached[0].messageId,f.next);await service.tick();assert.equal(f.attached.length,1);service.stop();assert.equal(f.stops(),1);

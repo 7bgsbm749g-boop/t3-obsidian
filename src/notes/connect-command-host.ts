@@ -44,7 +44,7 @@ export class ConnectCommandHost {
   get active(){return !this.stopped;}
   get route(){return this.io.route;}
   private now(){return this.io.now?.()??Date.now();}
-  private ready(){return {version:1,...this.io.identity,token:this.token,environmentId:this.io.route.environmentId,workspaceRoot:this.io.route.workspaceRoot,base:this.io.route.base,expiresAt:this.now()+30_000,capabilities:['checked-note-edits','client-status','reload-client']};}
+  private ready(){return {version:1,...this.io.identity,token:this.token,environmentId:this.io.route.environmentId,workspaceRoot:this.io.route.workspaceRoot,base:this.io.route.base,expiresAt:this.now()+30_000,capabilities:['checked-note-edits','client-status']};}
   tick():Promise<void>{
     if(this.stopped)return Promise.resolve();if(this.work)return this.work;
     const work=this.poll();this.work=work;void work.finally(()=>{if(this.work===work)this.work=undefined;}).catch(()=>{});return work;

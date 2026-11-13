@@ -1,41 +1,61 @@
-# Stronger activity text shine
+# Activity text shine
 
-Active titles and response labels use the existing text-shine painting method.
-The moving gradient now has a white core from 40% to 60% of its width, instead
-of a single peak mixed with the text colour. This strengthens the highlight
-without replacing the ordinary text fill. The foreground transparency is
-50% in dark themes and 12% in light themes, or 50% and 26% for selected titles.
-Dark-theme activity labels and unselected titles now use the same 50% strength
-as selected titles, increased from 24%.
+Shine is the plugin's only loading decoration. Active navigation titles, response
+headers, activity labels, individual running tools, context compaction, worktree
+setup labels, file-opening notices and running entries in the run picker use the
+same moving highlight. No loading rings, segmented circles or circular status
+borders are drawn. Worktree stages retain non-circular terminal status icons.
 
-The highlight keeps the existing 4.5 rem width and 2.2 second duration. Fonts,
-text layout, circle timing, and the hidden/offscreen pause behaviour retain
-their existing rules. Circle highlights inherit 18% of the text-shine strength,
-so their default dark-theme white mix also increases from 4.32% to 9%; their
-overall opacity remains 72%. Reduced motion and forced colours use
-ordinary text. A CSS feature check leaves ordinary text visible when gradient
-text or colour mixing is unavailable.
+Saved loading markers remain hidden because Stop and recovery use their
+identities. Individual tools use their existing `inProgress` status to select
+their label; completion, failure and Stop remove the shine without adding new
+markers to saved responses. Native response reconciliation preserves the client
+animation phase and discards old circle decoration.
+
+## Paint and typography
+
+The highlight has a 4.5 rem width, a white core from 40% to 60%, and a 2.2 second
+cycle. `--send-to-t3-shine-highlight` controls only the moving layer's white mix.
+Its default is 100%, preserving the accepted white core. Changing that mix does
+not change ordinary glyph painting outside the highlight.
+
+`--send-to-t3-shine-text-opacity` is an independent foreground-paint setting:
+50% in both dark and light themes. Both themes use the accepted dark-mode shine
+settings, previously called 50% strength; there is no weaker light-theme override.
+Selected and unselected titles share the same paint rules. Native title fonts
+and foreground colours remain theme-owned.
+
+Thinking, tool, compaction and setup rows share the interface font, UI-small
+size, normal weight and muted colour. Absolute UI sizing prevents nested tool
+groups from shrinking their labels again. Error and warning colours remain
+available for terminal statuses.
+
+The shared observer pauses hidden and offscreen labels. Reduced motion,
+forced colours and unsupported gradient-text features keep ordinary text.
+Explorer decorations cover every existing and future workspace document and
+clear only the closed window's decorations when it leaves the workspace.
 
 ## Verification
 
-Run `npm run build` and `npm test`. Check real text painting in both themes,
-including selected and unselected titles, response headings and activity rows.
-Compare before-and-after screenshots in the same document and coordinates,
-including frames with the highlight outside the label. The strength parameter
-also controls foreground transparency, so record any glyph-edge differences
-between passes rather than assuming that ordinary dark text is pixel-identical.
-Check selected, unselected and custom-coloured labels in both themes. Compare
-highlight frames separately to verify increased brightness. Check that
-reduced motion shows ordinary text and that completion removes the effect.
+Use affected test selection with `npm run test:plan` and `npm test`; lint must
+have zero errors or warnings and the production build must pass. Regression
+coverage includes tool status changes, native reconciliation, legacy circle
+cleanup, pause/disposal behaviour and added/removed explorer roots.
 
-The release also requires a real QLO2 client reload and immutable smoke evidence.
-QLO2 checks use existing content only; synthetic display fixtures belong in a
-separate test vault and must be removed after use. Record test-vault checks
-separately. Browser and VPS desktop checks do not establish native iPhone
-rendering. The reported phone was running
-iOS 26.6.2 with Reduce Motion off and a moving circle; that report establishes
-that its animation was active, but does not establish the original drawing
-fault's exact cause.
+Check native Reading and Live Preview in both themes. Confirm that active tool
+entries, setup labels, notices and run-picker labels shine without rings; then
+confirm that Stop and completion clear their shine. Compare selected and
+unselected title contrast in the light theme. Check existing and newly opened
+pop-out explorers and their cleanup.
+
+Compare rendered pixels with the highlight outside the text in the same
+position, theme, selection state and custom colours. Also vary only the
+highlight control and confirm unchanged baseline glyph pixels. Record deliberate
+activity typography and light-theme contrast changes separately. Retain native
+screenshots outside vaults and source checkouts. Use synthetic fixtures only in
+a separate test vault; QLO2 must receive no test content. Desktop evidence does
+not establish native phone behaviour. Source-only work does not install or
+release the plugin.
 
 ## Regression cause
 

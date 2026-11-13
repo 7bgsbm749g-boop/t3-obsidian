@@ -67,7 +67,7 @@ test('run preview dwell, stale work, search names and modal cleanup share one li
   setText(text:string){this.text=text;}setAttribute(k:string,v:string){this.attrs[k]=v;}removeAttribute(k:string){delete this.attrs[k];}
   addClass(name:string){this.classes.add(name);}removeClass(name:string){this.classes.delete(name);}
   addEventListener(k:string,v:Function){this.events[k]=v;}removeEventListener(k:string){delete this.events[k];}
-  createDiv(options:any={}){const el=new Element();el.ownerDocument=this.ownerDocument;el.text=options.text??'';this.children.push(el);return el;}
+  createDiv(options:any={}){const el=new Element();el.ownerDocument=this.ownerDocument;el.text=options.text??'';el.attrs={...options.attr};if(options.cls)el.classes.add(options.cls);this.children.push(el);return el;}
   createSpan(options:any={}){return this.createDiv(options);}remove(){this.isConnected=false;}
   getBoundingClientRect(){return {top:0,bottom:440,height:44};}querySelector(){return undefined;}
  }
@@ -85,6 +85,17 @@ test('run preview dwell, stale work, search names and modal cleanup share one li
  picker.onOpen();assert.equal(picker.getItems().length,2);assert.equal(picker.getItemText(base),base.prompt.trimEnd());
  const first=new Element(),second=new Element();first.ownerDocument=second.ownerDocument=modal.ownerDocument;picker.renderSuggestion({item:base},first);picker.renderSuggestion({item:{...base,messageId:'second'}},second);
  assert.equal(first.children[0].children[1].text.length,360);assert.ok(first.children[0].children[1].text.endsWith('…'));
+ for(const status of ['Running','Completed','Failed']){
+  const row=new Element();row.ownerDocument=modal.ownerDocument;picker.renderSuggestion({item:{...base,status}},row);
+  assert.equal(row.children[0].attrs.title,status,'the visible heading exposes status without opening confirmation or hovering a hidden icon');
+  const [icon,label]=row.children[0].children;
+  assert.equal(label.attrs['aria-label'],undefined,'a generic title span must not rely on an unsupported accessible name');
+  assert.equal(icon.attrs['aria-hidden'],'true','the decorative icon must not repeat the status');
+  const statusText=label.children.find(child=>child.classes.has('send-to-t3-run-status-text'));
+  assert.equal(statusText?.text,` (${status})`,'status must remain actual accessible text outside the hidden icon');
+  assert.notEqual(statusText?.attrs['aria-hidden'],'true');
+  assert.ok(row.children.some(child=>child.classes.has('send-to-t3-import-meta')&&child.text.trim()),'creation date remains visible below the accessible run heading');
+ }
  assert.ok(picker.getItemText(base).endsWith('Unique search suffix'),'search retains text beyond the visible title');
  const changed={...base,prompt:'Old prompt'};assert.equal(picker.getItemText(changed),'Old prompt');changed.prompt='New\n prompt';assert.equal(picker.getItemText(changed),'New prompt');
  const emoji={...base,prompt:'a'.repeat(358)+'😀 tail'},emojiRow=new Element();emojiRow.ownerDocument=modal.ownerDocument;picker.renderSuggestion({item:emoji},emojiRow);assert.equal(emojiRow.children[0].children[1].text,'a'.repeat(358)+'…','short titles never split a surrogate pair');
