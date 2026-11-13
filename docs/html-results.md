@@ -91,8 +91,14 @@ load and two animation frames; authored page scripts remain inside the sandbox.
 
 T3's existing bootstrap receives the Obsidian theme before first paint through
 the `t3-theme` fragment, then follows CSS changes through its normal host-context
-messages. T3 role variables map to native Obsidian colors and fonts. Width and
-reported content height let the inline frame fit the complete page, with an
+messages. T3 role variables map to native Obsidian colors and fonts from the
+mounted host. The background follows the
+first nontransparent background on that host or its ancestors, with the local
+theme's `--background-primary` as a fallback. Each inline result follows its
+own note surface in Live Preview and Reading mode. Expanded results follow the
+modal surface. Local ancestor class/style changes and workspace CSS changes
+update the existing frame; observers are removed when the result is disposed.
+Width and reported content height let the inline frame fit the complete page, with an
 80-pixel minimum and no maximum height. Saved heights and width measurements
 are initial estimates, including older references with T3 scroll caps; a live
 content-height report replaces them without retaining those caps. The note
