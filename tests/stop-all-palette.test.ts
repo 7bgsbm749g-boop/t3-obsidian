@@ -8,7 +8,7 @@ import {initialRegion} from '../src/conversations/inline-thread';
 
 test('mobile palette stop all works without selection, while sending is busy, and reports an empty note',async()=>{
   const id=randomUUID(),failed=randomUUID(),commands=new Map<string,any>(),storage=new Map<string,any>(),notices:string[]=[];
-  let value='Before'+initialRegion(id).text+initialRegion(failed).text.replace('Working','Error')+'After';
+  let value='Before'+initialRegion(id).text+initialRegion(failed).text.replace('Working for','Error')+'After';
   const editor={getValue:()=>value,offsetToPos:(offset:number)=>offset,replaceRange:(text:string,from:number,to:number)=>{value=value.slice(0,from)+text+value.slice(to);}};
   const view={file:{path:'Mobile.md',extension:'md'},editor};
   class Base{}

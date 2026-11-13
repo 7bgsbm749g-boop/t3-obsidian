@@ -7,6 +7,7 @@ import {elapsedRun,intermediateMode,runTimer,completionTime} from '../src/respon
 import {stoppedResponseBody} from '../src/responses/response-stop';
 import {followInlineQuestions,questionConversationInputs} from '../src/interaction/inline-questions';
 import type {InlineSteering} from '../src/conversations/inline-steering';
+import {presentToolGroups} from '../src/responses/response-tool-presentation';
 
 const timing={startedAt:'2026-10-02T10:00:00Z',finishedAt:'2026-10-02T10:03:17Z'};
 const state:InlineThreadState={title:'Bounded history',messages:[
@@ -19,15 +20,15 @@ const render=(value=state,phase:'running'|'complete'|'error'='complete',conversa
 test('legacy settings migrate and run durations handle waits, hours, clock skew and frozen completion',()=>{
   assert.equal(intermediateMode(undefined,false),'remove');assert.equal(intermediateMode(undefined,true),'keep');
   assert.equal(intermediateMode('collapse',true),'collapse');assert.equal(intermediateMode('invalid',false),'remove');
-  assert.equal(elapsedRun(timing,0),'03:17');assert.equal(elapsedRun({startedAt:timing.startedAt},Date.parse(timing.startedAt)+3661000),'01:01:01');
-  assert.equal(elapsedRun({startedAt:timing.startedAt},0),'00:00');assert.equal(elapsedRun({startedAt:'bad'}),'00:00');
-  assert.match(runTimer(timing),/>03:17<\/span>/);assert.match(runTimer({startedAt:timing.startedAt}),/>00:00<\/span>/);
+  assert.equal(elapsedRun(timing,0),'3m 17s');assert.equal(elapsedRun({startedAt:timing.startedAt},Date.parse(timing.startedAt)+3661000),'1h 1m 1s');
+  assert.equal(elapsedRun({startedAt:timing.startedAt},0),'0s');assert.equal(elapsedRun({startedAt:'bad'}),'0s');
+  assert.match(runTimer(timing),/>3m 17s<\/span>/);assert.match(runTimer({startedAt:timing.startedAt}),/>0s<\/span>/);
   assert.equal(completionTime(state,'turn'),timing.finishedAt);
 });
 
 test('default-closed fold bounds nested headings, tables, fences and out-of-order progress; exact final stays outside',()=>{
   const text=render(),ast=unified().use(remarkParse).parse(text+'\nFollowing user paragraph.');
-  assert.match(text,/^> \[!t3-progress\]- \*\*Bounded history · Completed\*\*/);
+  assert.match(text,/^> \[!t3-progress\]- \*\*Bounded history · Worked for\*\*/);
   assert.doesNotMatch(text,/spinner/);
   const folds=ast.children.filter(node=>node.type==='blockquote'&&text.slice(node.position!.start.offset!,node.position!.end.offset!).startsWith('> [!t3-progress]-'));
   assert.equal(folds.length,1);
@@ -63,11 +64,11 @@ test('steering quotes share the history fold while the current final stays outsi
   }
   assert.equal(foldsOf(text).length,1);
   assert.match(text,/> > \[!t3-steering\] You\n> > Keep my question visible\./);
-  assert.equal(text.match(/Bounded history · Completed/g)?.length,1);
+  assert.equal(text.match(/Bounded history · Worked for/g)?.length,1);
   assert.equal(text.match(/class="send-to-t3-run-timer"/g)?.length,1);
 });
 
-function assertOneRun(text:string,phase='Working'){
+function assertOneRun(text:string,phase='Working for'){
   assert.equal(text.match(new RegExp(`Bounded history · ${phase}`,'g'))?.length,1);
   assert.equal(text.match(/class="send-to-t3-run-timer"/g)?.length,1);
   assert.equal(text.match(/^> \[!t3-progress\]\+ .*class="send-to-t3-inline-spinner"/gm)?.length,1);
@@ -170,7 +171,7 @@ for(const inputKind of ['question answer','steering','repeated mixed inputs'] as
   for(let index=1;index<ordered.length;index++)assert.ok(text.indexOf(ordered[index-1])<text.indexOf(ordered[index]),'transcript retains chronological order');
   const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',document=`<!-- t3-inline:start:${id} -->\n${text}<!-- t3-inline:end:${id} -->`;
   assert.deepEqual(activeInlineIds(document),[id]);
-  assert.deepEqual(failedInlineIds(document.replace(' · Working**',' · Error**')),[id]);
+  assert.deepEqual(failedInlineIds(document.replace(' · Working for**',' · Error**')),[id]);
   assert.doesNotMatch(stoppedResponseBody(document),/ · Working|class="send-to-t3-inline-spinner"/);
 });
 
@@ -221,7 +222,7 @@ test('Collapse status remains discoverable for steering and exact error recovery
   const id='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
   const initial=initialRegion(id,undefined,'Name','collapse',{startedAt:timing.startedAt});
   assert.deepEqual(activeInlineIds(initial.text),[id]);
-  const failed=initial.text.replace(' · Working**',' · Error**');assert.deepEqual(failedInlineIds(failed),[id]);
+  const failed=initial.text.replace(' · Working for**',' · Error**');assert.deepEqual(failedInlineIds(failed),[id]);
   const stopped=stoppedResponseBody(initial.text);
   assert.match(stopped,/Name · Interrupted/);assert.match(stopped,/data-t3-end=/);assert.doesNotMatch(stopped,/spinner|Working/);
 });
@@ -339,10 +340,36 @@ test('progress opens at submission and stays open until the final message finish
   assert.match(before,/^> \[!t3-progress\]\+ .*Working/);
   assert.ok(foldsOf(before)[0].includes('Final visible answer.'));
   const after=render();
-  assert.match(after,/^> \[!t3-progress\]- .*Completed/);
+  assert.match(after,/^> \[!t3-progress\]- .*Worked for/);
   assert.notDeepEqual(foldKeys(before),foldKeys(after),'completion resets live fold choices');
   for(const phase of ['error','interrupted','cancelled','reconnecting'] as const){
     const text=renderInlineTurn(state,'turn','thread',phase,'collapse');
     assert.match(text,/^> \[!t3-progress\]\+/);
   }
+});
+
+test('timestamped steering creates measured continuation folds with the final outside',()=>{
+ const messages=[{id:'p',role:'assistant' as const,turnId:'turn',text:'Before steering',createdAt:'2026-10-02T10:00:05Z',streaming:false},{id:'f',role:'assistant' as const,turnId:'turn',text:'Final outside',createdAt:'2026-10-02T10:00:30Z',streaming:false}];
+ const conversation={messages,steering:[{messageId:'s',text:'Steer',confirmed:true,createdAt:'2026-10-02T10:00:12Z',before:[messages[0]]}]};
+ const output=renderInlineTurn({...state,messages,latestTurn:{turnId:'turn',state:'completed',assistantMessageId:'f',completedAt:'2026-10-02T10:00:30Z'}},'turn','thread','complete','collapse','environment',conversation,undefined,undefined,{startedAt:timing.startedAt,finishedAt:'2026-10-02T10:00:30Z'});
+ const failed=renderInlineTurn({...state,messages},'turn','thread','error','collapse','environment',conversation,undefined,undefined,{startedAt:timing.startedAt,finishedAt:'2026-10-02T10:00:30Z'});assert.match(failed,/· Error/);assert.doesNotMatch(failed,/Working for|inline-spinner/);
+ const folds=foldsOf(output);assert.equal(folds.length,2);assert.match(folds[0],/Worked for/);assert.match(folds[0],/>12s<\/span>/);assert.match(folds[1],/Continued for/);assert.match(folds[1],/>18s<\/span>/);for(const fold of folds)assert.doesNotMatch(fold,/Final outside/);
+});
+
+test('steering does not offer an activity action into unloaded completed history',()=>{
+ const progress={id:'p',role:'assistant' as const,turnId:'turn',text:'Before steering',createdAt:'2026-10-02T10:00:05Z',streaming:false};
+ const live:InlineThreadState={messages:[progress],activities:[{id:'tool',kind:'tool.completed',turnId:'turn',summary:'Tool',createdAt:'2026-10-02T10:00:06Z',payload:{toolCallId:'tool',status:'completed',data:{toolName:'exec_command',command:'pwd'}}}],latestTurn:{turnId:'turn',state:'running'}};
+ const conversation={messages:live.messages,steering:[{messageId:'s',text:'Steer',confirmed:true,createdAt:'2026-10-02T10:00:12Z',before:[progress]}]};
+ const renderLive=(steering=conversation.steering)=>renderInlineTurn(live,'turn','thread','running','collapse','environment',{messages:live.messages,steering},undefined,undefined,{startedAt:timing.startedAt});
+ assert.match(renderLive([]),/data-t3-open-tool-group/);
+ const waiting=renderLive(),presented=presentToolGroups(waiting).display;
+ assert.equal(foldsOf(waiting).length,2);
+ assert.match(presented,/send-to-t3-response-history/);
+ assert.match(presented,/send-to-t3-response-activity" role="status"/);
+ assert.doesNotMatch(presented,/data-t3-open-tool-group/);
+ live.messages.push({...progress,id:'continued',text:'Continuing',createdAt:'2026-10-02T10:00:13Z'});
+ live.activities.push({...live.activities[0],id:'new-tool',createdAt:'2026-10-02T10:00:14Z',payload:{toolCallId:'new-tool',status:'inProgress',data:{toolName:'exec_command',command:'ls'}}});
+ const resumed=presentToolGroups(renderLive()).display;
+ assert.match(resumed,/data-t3-open-tool-group/);
+ assert.match(resumed,/data-t3-tool-group="[^"]*new-tool/);
 });

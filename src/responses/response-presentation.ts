@@ -17,9 +17,8 @@ export interface RunTiming {startedAt:string;finishedAt?:string}
 export function elapsedRun(timing:RunTiming,now=Date.now()):string {
   const start=Date.parse(timing.startedAt),end=timing.finishedAt?Date.parse(timing.finishedAt):now;
   const seconds=Number.isFinite(start)&&Number.isFinite(end)?Math.max(0,Math.floor((end-start)/1000)):0;
-  const parts=[Math.floor(seconds/60)%60,seconds%60].map(value=>String(value).padStart(2,'0'));
-  if(seconds>=3600)parts.unshift(String(Math.floor(seconds/3600)).padStart(2,'0'));
-  return parts.join(':');
+  if(seconds<60)return `${seconds}s`;
+  return [Math.floor(seconds/3600)?`${Math.floor(seconds/3600)}h`:'',Math.floor(seconds/60)%60?`${Math.floor(seconds/60)%60}m`:'',seconds%60?`${seconds%60}s`:''].filter(Boolean).join(' ');
 }
 export function runTimer(timing:RunTiming):string {
   const start=Date.parse(timing.startedAt),end=Date.parse(timing.finishedAt??'');
@@ -38,13 +37,27 @@ export function completionTime(state:InlineThreadState,turnId:string):string {
  * Retain explicit user choices when streaming replaces a callout's DOM. */
 export function installResponsePresentation(root:Document,icon?:(element:HTMLElement,name:string)=>void):()=>void {
   const {setInterval,clearInterval}=clockForDocument(root);
+  const openActivity=(event:Event)=>{
+    const button=(event.target as Element)?.closest?.<HTMLElement>('[data-t3-open-tool-group]');if(!button)return;
+    const id=decodeURIComponent(button.dataset.t3OpenToolGroup??'');
+    const container=button.closest('.workspace-leaf-content')??root;
+    const group=Array.from(container.querySelectorAll<HTMLDetailsElement>('details[data-t3-tool-group]')).find(group=>group.dataset.t3ToolGroup===id);
+    if(!group)return;
+    event.preventDefault();group.open=true;
+    for(let parent=group.parentElement;parent;parent=parent.parentElement){
+      if(parent.matches('details'))(parent as HTMLDetailsElement).open=true;
+      if(parent.matches('.callout.is-collapsed'))parent.querySelector<HTMLElement>(':scope > .callout-title')?.click();
+    }
+    group.scrollIntoView({block:'nearest'});
+  };
+  root.addEventListener('click',openActivity);
   const choices=new WeakMap<Element,Map<string,boolean>>();
   const retained=new WeakMap<Element,Map<string,HTMLElement>>();
   const retainedTools=new WeakMap<Element,Map<string,HTMLElement>>();
   const toolChoices=new WeakMap<Element,Map<string,boolean>>();
   const owner=(element:Element)=>element.closest('.workspace-leaf-content')??root.documentElement;
-  const detailSelector='details[data-t3-tool-group], details[data-t3-tool-key], details[data-t3-answer-id], details[data-t3-tasks-id]';
-  const detailId=(element:Element)=>element.getAttribute('data-t3-tool-group')??element.getAttribute('data-t3-tool-key')??(element.hasAttribute('data-t3-worktree-setup')?`setup:${element.getAttribute('data-t3-worktree-setup')}`:element.hasAttribute('data-t3-answer-id')?`answer:${element.getAttribute('data-t3-answer-id')}`:element.hasAttribute('data-t3-tasks-id')?`tasks:${element.getAttribute('data-t3-tasks-id')}`:undefined);
+  const detailSelector='details[data-t3-tool-group], details[data-t3-tool-key], details[data-t3-answer-id], details[data-t3-tasks-id], details[data-t3-plan-id]';
+  const detailId=(element:Element)=>element.getAttribute('data-t3-tool-group')??element.getAttribute('data-t3-tool-key')??(element.hasAttribute('data-t3-worktree-setup')?`setup:${element.getAttribute('data-t3-worktree-setup')}`:element.hasAttribute('data-t3-answer-id')?`answer:${element.getAttribute('data-t3-answer-id')}`:element.hasAttribute('data-t3-tasks-id')?`tasks:${element.getAttribute('data-t3-tasks-id')}`:element.hasAttribute('data-t3-plan-id')?`plan:${element.getAttribute('data-t3-plan-id')}`:undefined);
   const key=(element:Element)=>element.querySelector<HTMLElement>('.send-to-t3-fold-key')?.dataset.t3Fold;
   const title=(element:Element)=>element.querySelector<HTMLElement>(':scope > .callout-title');
   const seen=new WeakMap<Element,{heading:HTMLElement;key:string|undefined}>();
@@ -52,6 +65,15 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   let restoring=false,queued=false,disposed=false;
   const refresh=()=>{
     queued=false;if(disposed)return;
+    // Old notes keep their exact canonical bytes. Remove legacy tool detail
+    // controls only from the rendered view, including lazily mounted history.
+    for(const details of Array.from(root.querySelectorAll<HTMLDetailsElement>('details.send-to-t3-tool'))){
+      const row=root.win.createDiv();
+      for(const attribute of Array.from(details.attributes))row.setAttribute(attribute.name,attribute.value);
+      const summary=details.querySelector(':scope > summary');
+      if(summary)row.append(...Array.from(summary.childNodes));
+      details.replaceWith(row);
+    }
     const layout=new Set<Element>(),actionsInUse=new Set<HTMLElement>();
     for(const timer of Array.from(root.querySelectorAll<HTMLElement>('[data-t3-setup-start]'))){
       const start=Number(timer.dataset.t3SetupStart),end=timer.dataset.t3SetupEnd;
@@ -132,7 +154,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
       }
     }
     // Keep tool and submitted-answer disclosures through native renders.
-    for(let group of Array.from(root.querySelectorAll<HTMLElement>('details[data-t3-tool-group], details[data-t3-answer-id], details[data-t3-tasks-id], div[data-t3-worktree-setup]'))){
+    for(let group of Array.from(root.querySelectorAll<HTMLElement>('details[data-t3-tool-group], details[data-t3-answer-id], details[data-t3-tasks-id], details[data-t3-plan-id], div[data-t3-worktree-setup]'))){
       const id=detailId(group)!;
       const surface=group.closest('.cm-content, .markdown-preview-view')??owner(group);
       let cache=retainedTools.get(surface);if(!cache){cache=new Map();retainedTools.set(surface,cache);}
@@ -198,5 +220,5 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   observer.observe(root.body,{childList:true,subtree:true});
   root.addEventListener('click',click,true);root.addEventListener('keydown',keyboard);root.addEventListener('toggle',rememberTool,true);
   const timer=setInterval(refresh,1000);refresh();
-  return ()=>{disposed=true;observer.disconnect();resize?.disconnect();for(const actions of aligned){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');}clearInterval(timer);root.removeEventListener('click',click,true);root.removeEventListener('keydown',keyboard);root.removeEventListener('toggle',rememberTool,true);};
+  return ()=>{root.removeEventListener('click',openActivity);disposed=true;observer.disconnect();resize?.disconnect();for(const actions of aligned){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');}clearInterval(timer);root.removeEventListener('click',click,true);root.removeEventListener('keydown',keyboard);root.removeEventListener('toggle',rememberTool,true);};
 }

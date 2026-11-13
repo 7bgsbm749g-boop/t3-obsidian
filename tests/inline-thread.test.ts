@@ -147,7 +147,7 @@ test('streamed numbered Markdown is marker-safe across trailing newlines',()=>{
   const id='numbered',region=initialRegion(id),source='Question\n'+region.text+'Following paragraph';
   const state={messages:[{id:'answer',role:'assistant',turnId:'turn',text:'1. First line.\n2. Second line.\n',streaming:true}],activities:[]};
   const rendered=renderInlineTurn(state,'turn','thread');
-  assert.equal(rendered,'**T3 · Working** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>\n\n> <span class="send-to-t3-stream-tail">1. First line.&#10;2. Second line.&#10;</span>\n\n\n'+responseActivityRow()+'\n');
+  assert.equal(rendered,'**T3 · Working for** <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>\n\n> <span class="send-to-t3-stream-tail">1. First line.&#10;2. Second line.&#10;</span>\n\n\n'+responseActivityRow()+'\n');
   const change=replaceRegion(source,id,region.bodyHash,rendered);assert.ok(change);
   const updated=source.slice(0,change.from)+change.text+source.slice(change.to);
   assert.equal(regionBody(updated,id)?.body,rendered);

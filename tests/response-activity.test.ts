@@ -9,16 +9,16 @@ import {stoppedResponseBody} from '../src/responses/response-stop';
 const activity=(id:string,kind='tool.started',payload:Record<string,any>={},turnId='turn',sequence=1):InlineActivity=>({id,kind,turnId,sequence,summary:'Tool',payload:{toolCallId:id,...payload}});
 const state=(activities:InlineActivity[]=[]):InlineThreadState=>({messages:[],activities,session:{status:'running',activeTurnId:'turn'},latestTurn:{turnId:'turn',state:'running'}});
 
-test('canonical tool state gives useful labels; reasoning and unknown state show Thinking',()=>{
+test('canonical tool state gives useful labels; public reasoning gets a preview and unknown state shows Thinking',()=>{
   assert.equal(responseActivityLabel(state([activity('read','tool.started',{data:{toolName:'Read'}})]),'turn'),'Reading file');
   for(const data of [{item:{command:'npm test'}},{item:{input:{command:'npm test'}}},{item:{result:{command:'npm test'}}},{command:'npm test'},{input:{command:'npm test'}},{state:{input:{command:'npm test'}}}]){
     assert.equal(responseActivityLabel(state([activity('cmd','tool.started',{itemType:'command_execution',data})]),'turn'),'Running npm');
   }
-  assert.equal(responseActivityLabel(state([activity('mcp','tool.started',{data:{tool:'preview_snapshot'}})]),'turn'),'Viewing preview snapshot');
+  assert.equal(responseActivityLabel(state([activity('mcp','tool.started',{data:{tool:'preview_snapshot'}})]),'turn'),'Taking a snapshot of the preview page');
   assert.equal(responseActivityLabel(state([activity('read','tool.started',{title:'Reading file'})]),'turn'),'Reading file');
-  const thinking={...state(),messages:[{id:'reasoning',role:'reasoning',turnId:'turn',streaming:true,text:'private reasoning'}]};
-  assert.equal(responseActivityLabel(thinking,'turn'),'Thinking');
-  thinking.messages[0].streaming=false;assert.equal(responseActivityLabel(thinking,'turn'),'Thinking');
+  const thinking={...state(),messages:[{id:'reasoning',role:'reasoning',turnId:'turn',streaming:true,text:'Public reasoning summary'}]};
+  assert.equal(responseActivityLabel(thinking,'turn'),'Public reasoning summary');
+  thinking.messages[0].streaming=false;assert.equal(responseActivityLabel(thinking,'turn'),'Public reasoning summary');
   assert.equal(responseActivityLabel(state(),'turn'),'Thinking');
   assert.equal(responseActivityLabel(state([activity('x')]),''),'Thinking');
 });
@@ -59,7 +59,7 @@ test('one bottom row inside the collapse fold, outside prose and controls in oth
     const blocks=ast.children.filter(n=>n.type==='blockquote'||n.type==='code').map(node=>text.slice(node.position!.start.offset!,node.position!.end.offset!));
     if(mode==='collapse'){
       assert.equal(blocks.filter(block=>block.includes('send-to-t3-response-activity')).length,1);
-      assert.match(blocks[0],/^> \[!t3-progress\]\+ [\s\S]*> <span class="send-to-t3-response-activity" role="status"/);
+      assert.match(blocks[0],/^> \[!t3-progress\]\+ [\s\S]*> <button class="send-to-t3-response-activity" type="button"/);
       assert.match(blocks[0],/<details class="send-to-t3-tool-group"/);
       assert.doesNotMatch(blocks[0],/FOLLOWING USER CONTENT/);
     }else for(const block of blocks)assert.doesNotMatch(block,/send-to-t3-response-activity/);
@@ -69,12 +69,12 @@ test('one bottom row inside the collapse fold, outside prose and controls in oth
     assert.doesNotMatch(stoppedResponseBody(text),/response-activity|spinner|Reading file/);
     const initial=initialRegion('id',undefined,'Title',mode).text;
     assert.match(initial,/response-activity/);
-    assert.match(initial,/\*\*Title · Working\*\*/);
+    assert.match(initial,/\*\*Title · Working for\*\*/);
     assert.match(initial,/<span data-t3-tool-icon="brain" aria-hidden="true"><\/span><span>Thinking<\/span>/);
     assert.match(initial,mode==='collapse'?/^> <span class="send-to-t3-response-activity"/m:/^<span class="send-to-t3-response-activity"/m);
     assert.doesNotMatch(stoppedResponseBody(initial),/response-activity|spinner/);
     const fallback=renderInlineTurn(state(),'turn','thread','reconnecting',mode);
-    assert.match(fallback,/\*\*T3 · Working\*\*/);assert.doesNotMatch(fallback,/Reconnecting/);
+    assert.match(fallback,/\*\*T3 · Working for\*\*/);assert.doesNotMatch(fallback,/Reconnecting/);
     assert.match(fallback,/<span data-t3-tool-icon="brain" aria-hidden="true"><\/span><span>Thinking<\/span>/);
     assert.doesNotMatch(stoppedResponseBody(fallback),/response-activity|spinner/);
     assert.equal(renderInlineTurn(live,'turn','thread','reconnecting',mode),text);

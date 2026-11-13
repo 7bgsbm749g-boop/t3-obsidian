@@ -3,17 +3,17 @@ import {editorLivePreviewField} from 'obsidian';
 import {Notice} from 'obsidian';
 import type {Extension} from '@codemirror/state';
 import type {DecorationSet,EditorView,ViewUpdate} from '@codemirror/view';
-import {approvalKey,parseApprovalUrl,type ApprovalTarget,type ApprovalDecision} from './approvals';
+import {approvalOptions,approvalKey,parseApprovalUrl,type ApprovalTarget,type ApprovalDecision} from './approvals';
 import {ApprovalController} from './approval-controller';
 import {markdownCodeRanges} from '../responses/reply-html';
 
 export function approvalButton(controller:ApprovalController,target:ApprovalTarget,decision:ApprovalDecision,doc:Document=activeDocument){
   const button=doc.win.createEl('button');button.className=`send-to-t3-approval-button${decision==='accept'?' mod-cta':''}`;
   const update=()=>{
-    const view=controller.view(target),saved=controller.record(target).command,label=decision==='accept'?'Approve':'Deny';
+    const view=controller.view(target),saved=controller.record(target).command,option=(view.request?.options??approvalOptions(undefined)).find(option=>option.decision===decision),label=option?.label??(decision==='decline'?'Decline':decision);
     button.textContent=view.status==='resolved'?'Resolved':view.status==='submitting'&&saved?.decision===decision?'Sending…':saved&&view.status==='error'&&saved.decision===decision?`Retry ${label.toLowerCase()}`:label;
-    button.disabled=['loading','resolved','unavailable','submitting'].includes(view.status)||!!saved&&saved.decision!==decision||!!saved&&!controller.record(target).uncertain;
-    button.title=view.detail??(decision==='accept'?'Approve this command once':'Deny this command');
+    button.disabled=!option||['loading','resolved','unavailable','submitting'].includes(view.status)||!!saved&&saved.decision!==decision||!!saved&&!controller.record(target).uncertain;
+    button.title=view.detail??option?.warning??label;
     button.setAttribute('aria-label',button.textContent);
   };
   update();button.addEventListener('click',event=>{
@@ -39,7 +39,7 @@ export function approvalEditorExtension(controller:ApprovalController):Extension
     if(!view.contentDOM?.closest('.markdown-source-view')?.classList.contains('is-live-preview'))return Decoration.none;
     const doc=view.state.doc.toString();if(!doc.includes('t3-approval:'))return Decoration.none;
     const code=markdownCodeRanges(doc),ranges=[];
-    for(const match of doc.matchAll(/\[(?:Approve|Deny)\]\((t3-approval:[^\s)]+)\)/g)){
+    for(const match of doc.matchAll(/\[[^\]\n]+\]\((t3-approval:[^\s)]+)\)/g)){
       if(code.some(([from,to])=>match.index>=from&&match.index<to))continue;
       const parsed=parseApprovalUrl(match[1]);if(parsed)ranges.push(Decoration.replace({widget:new ApprovalWidget(parsed.target,parsed.decision)}).range(match.index,match.index+match[0].length));
     }

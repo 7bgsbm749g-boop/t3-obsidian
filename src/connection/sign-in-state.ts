@@ -12,7 +12,7 @@ export function responseConnectionBody(body:string,issue:ResponseConnectionIssue
   // Only replace the generated status line, never assistant prose or tool output.
   const status=issue.kind==='sign-in-required'?'Sign in required':'Reconnecting';
   const identified=id&&!/^> \[!t3-progress\][+-] [^\n]*data-t3-fold=/m.test(body)?body.replace(/^(> \[!t3-progress\][+-] [^\n]*)/m,`$1 <span class="send-to-t3-fold-key" data-t3-fold="${encodeURIComponent(id)}:connection:active"></span>`):body;
-  return identified.replace(/^((?:> \[!t3-progress\][+-] )?\*\*[^\n]* · )(?:Sending…?|Working|Reconnecting)(\*\*)/m,(_all,prefix,end)=>`${prefix}${status}${end}`)
+  return identified.replace(/^((?:> \[!t3-progress\][+-] )?\*\*[^\n]* · )(?:Sending…?|Working(?: for)?|Reconnecting)(\*\*)/m,(_all,prefix,end)=>`${prefix}${status}${end}`)
     .replace(/ <span class="send-to-t3-inline-spinner" aria-label="Loading"><\/span>/g,'')
     .replace(/data-t3-tool-icon="brain" aria-hidden="true"><\/span><span>(?:Thinking|Sending)<\/span>/g,`data-t3-tool-icon="${issue.kind==='sign-in-required'?'log-in':'refresh-cw'}" aria-hidden="true"></span><span>${issue.kind==='sign-in-required'?'Sign in to resume':'Waiting for connection'}</span>`);
 }
