@@ -130,56 +130,13 @@
   from { background-position: -4.5rem 0, 0 0; }
   to { background-position: calc(100% + 4.5rem) 0, 0 0; }
 }
-/* Eight stationary SVG arcs. Each step switches one whole segment off. */
-@keyframes send-to-t3-circle-gap {
-  0% { --send-to-t3-circle-angle: 0deg; }
-  12.5% { --send-to-t3-circle-angle: 45deg; }
-  25% { --send-to-t3-circle-angle: 90deg; }
-  37.5% { --send-to-t3-circle-angle: 135deg; }
-  50% { --send-to-t3-circle-angle: 180deg; }
-  62.5% { --send-to-t3-circle-angle: 225deg; }
-  75% { --send-to-t3-circle-angle: 270deg; }
-  87.5% { --send-to-t3-circle-angle: 315deg; }
-  100% { --send-to-t3-circle-angle: 360deg; }
+/* Both themes use the accepted dark shine paint and independent highlight control. */
+[data-t3-shine="true"] {
+  --send-to-t3-shine-text-opacity: 50%;
+  --send-to-t3-shine-highlight: 100%;
 }
-[data-t3-circle="true"]::before {
-  content: "";
-  display: inline-block;
-  width: 0.75em;
-  height: 0.75em;
-  max-width: 10px;
-  max-height: 10px;
-  margin-inline-end: 0.4em;
-  vertical-align: -0.05em;
-  background: currentColor;
-  opacity: 0.72;
-  --send-to-t3-circle-angle: 0deg;
-  --send-to-t3-circle-gap-mask: linear-gradient(#000, #000);
-  --send-to-t3-circle-mask:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7.15' pathLength='8' fill='none' stroke='white' stroke-width='1.4' stroke-linecap='round' stroke-dasharray='.42 .58' stroke-dashoffset='.21'/%3E%3C/svg%3E"),
-    var(--send-to-t3-circle-gap-mask);
-  -webkit-mask-image: var(--send-to-t3-circle-mask);
-  mask-image: var(--send-to-t3-circle-mask);
-  -webkit-mask-composite: source-in, source-over;
-  mask-composite: intersect, add;
-  mask-mode: alpha;
-  mask-size: 100% 100%;
-  mask-repeat: no-repeat;
-  forced-color-adjust: none;
-}
-/* Retain the pre-2.45.9 foreground paint; brighten only the moving highlight. */
-[data-t3-shine="true"] { --send-to-t3-shine-strength: 50%; }
-.theme-light [data-t3-shine="true"] { --send-to-t3-shine-strength: 12%; }
-:is(.nav-file-title, .nav-folder-title, .workspace-tab-header).is-active [data-t3-shine="true"],
-.mtb-title-current[data-t3-shine="true"],
-.mtb-tab-row.is-active [data-t3-shine="true"] { --send-to-t3-shine-strength: 50%; }
-.theme-light :is(.nav-file-title, .nav-folder-title, .workspace-tab-header).is-active [data-t3-shine="true"],
-.theme-light .mtb-title-current[data-t3-shine="true"],
-.theme-light .mtb-tab-row.is-active [data-t3-shine="true"] { --send-to-t3-shine-strength: 26%; }
 @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
-  [data-t3-shine="true"],
-  [data-t3-circle="true"]::before {
-    --send-to-t3-circle-gap-mask: conic-gradient(from calc(var(--send-to-t3-circle-angle) - 22.5deg), transparent 0deg 45deg, #000 45deg 360deg);
+  [data-t3-shine="true"] {
     background-size: 4.5rem 100%, 100% 100%;
     background-repeat: no-repeat;
     animation: send-to-t3-text-shine 2.2s steps(30) infinite;
@@ -187,23 +144,14 @@
   }
   @supports ((background-clip: text) or (-webkit-background-clip: text)) and (color: color-mix(in srgb, black, white)) {
     [data-t3-shine="true"] {
-      /* Keep the earlier foreground opacity and glyph painting. A wider white
-         core strengthens the pass without replacing the ordinary text fill. */
+      /* Highlight changes affect only the moving layer, not normal glyph fill. */
       background-image:
-        linear-gradient(to right, transparent, white 40%, white 60%, transparent),
+        linear-gradient(to right, transparent, color-mix(in srgb, currentColor, white var(--send-to-t3-shine-highlight)) 40%, color-mix(in srgb, currentColor, white var(--send-to-t3-shine-highlight)) 60%, transparent),
         linear-gradient(currentColor, currentColor);
-      -webkit-text-fill-color: color-mix(in srgb, currentColor calc(100% - var(--send-to-t3-shine-strength)), transparent);
+      -webkit-text-fill-color: color-mix(in srgb, currentColor var(--send-to-t3-shine-text-opacity), transparent);
       -webkit-background-clip: text;
       background-clip: text;
     }
-  }
-  [data-t3-circle="true"]::before {
-    background-image:
-      linear-gradient(to right, transparent, color-mix(in srgb, currentColor, white calc(var(--send-to-t3-shine-strength) * 0.18)), transparent),
-      linear-gradient(currentColor, currentColor);
-    animation-name: send-to-t3-text-shine, send-to-t3-circle-gap;
-    animation-duration: 2.2s, 1.2s;
-    animation-timing-function: steps(30), step-end;
   }
 }
 
@@ -452,28 +400,7 @@ body .send-to-t3-stream-stop[hidden] { display: none; }
   border-inline-start: 1px solid var(--background-modifier-border);
   pointer-events: none;
 }
-.send-to-t3-file-opening {
-  display: flex;
-  align-items: center;
-  gap: .65em;
-  overflow-wrap: anywhere;
-}
-.send-to-t3-file-opening::before {
-  content: "";
-  flex: 0 0 auto;
-  width: 1em;
-  height: 1em;
-  border: 2px solid currentColor;
-  border-inline-start-color: transparent;
-  border-radius: 50%;
-  animation: send-to-t3-file-opening-spin .8s linear infinite;
-}
-@keyframes send-to-t3-file-opening-spin {
-  to { transform: rotate(360deg); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .send-to-t3-file-opening::before { animation: none; }
-}
+.send-to-t3-file-opening { overflow-wrap: anywhere; }
 .send-to-t3-run-timer { font-variant-numeric: tabular-nums; color: var(--text-muted); font-weight: normal; }
 .send-to-t3-fold-key { display: none; }
 /* Container syntax has no visible paragraph in Reading view. */
@@ -484,7 +411,7 @@ body .send-to-t3-response-boundary { display: none; }
 }
 .send-to-t3-response-activity[role="status"] { display: inline-flex; align-items: center; gap: .5em; }
 .send-to-t3-response-activity > summary > strong { font-weight: inherit; }
-.send-to-t3-context { display: inline-flex; align-items: center; gap: .5em; color: var(--text-muted); font-size: var(--font-smaller); }
+.send-to-t3-context { display: inline-flex; align-items: center; gap: .5em; }
 .send-to-t3-provider-error {
   margin: .65em 0;
   padding: 0;
@@ -596,8 +523,17 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 .send-to-t3-task[data-t3-task-state="completed"] > .send-to-t3-task-mark::after { content: ''; position: absolute; width: 35%; height: 65%; border: solid var(--text-muted); border-width: 0 1.5px 1.5px 0; left: 28%; top: 0; transform: rotate(45deg); }
 .send-to-t3-task-text { min-width: 0; overflow-wrap: anywhere; }
 .send-to-t3-task-text > p { margin: 0; }
-.send-to-t3-tool, .send-to-t3-thought, .send-to-t3-tool-group, .send-to-t3-response-activity, .send-to-t3-answer { margin: .5em 0; font-size: var(--font-smaller); }
-.send-to-t3-thought > summary, details[data-t3-tool-group] > summary, .send-to-t3-answer > summary { display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); }
+.send-to-t3-tool, .send-to-t3-thought, .send-to-t3-tool-group, .send-to-t3-response-activity, .send-to-t3-answer { margin: .5em 0; }
+.send-to-t3-answer { font-size: var(--font-smaller); }
+/* Absolute UI sizing prevents nested tool groups from shrinking their labels. */
+.send-to-t3-tool, .send-to-t3-thought, .send-to-t3-tool-group,
+.send-to-t3-response-activity, .send-to-t3-context, .send-to-t3-worktree-setup {
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-normal);
+  color: var(--text-muted);
+}
+.send-to-t3-thought > summary, details[data-t3-tool-group] > summary, .send-to-t3-answer > summary { display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); font-weight: var(--font-normal); }
 .send-to-t3-thought > summary::before, details[data-t3-tool-group] > summary::before, .send-to-t3-answer > summary::before { content: '›'; width: .6em; flex: 0 0 .6em; }
 .send-to-t3-thought[open] > summary::before, details[data-t3-tool-group][open] > summary::before, .send-to-t3-answer[open] > summary::before { transform: rotate(90deg); }
 .send-to-t3-thought-content { padding-inline-start: 1.7em; }
@@ -623,7 +559,8 @@ div.send-to-t3-thought { display: flex; align-items: center; gap: .5em; padding-
 details.send-to-t3-tool > :not(summary) { display: none; }
 details.send-to-t3-tool > summary { display: flex; align-items: center; gap: .5em; list-style: none; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .send-to-t3-tool::after { animation: none; } }
-.send-to-t3-worktree-setup { margin: .5em 0; font-family: var(--font-interface); font-size: 14px; line-height: 1.5; color: var(--text-muted); }
+.send-to-t3-worktree-setup { margin: .5em 0; line-height: 1.5; }
+.send-to-t3-setup-stage[data-worktree-setup-status="running"] > .send-to-t3-setup-icon { display: none; }
 .send-to-t3-setup-header { display: flex; align-items: baseline; gap: 8px; min-height: 32px; padding: 4px 4px 8px; margin-bottom: 6px; border-bottom: 1px solid color-mix(in srgb, var(--background-modifier-border) 60%, transparent); }
 .send-to-t3-setup-header > .send-to-t3-setup-time { margin-left: auto; }
 .send-to-t3-setup-stage { display: flex; align-items: center; gap: 12px; min-height: 28px; padding: 2px 4px; }
@@ -634,8 +571,6 @@ details.send-to-t3-tool > summary { display: flex; align-items: center; gap: .5e
 .send-to-t3-setup-stage[data-worktree-setup-status="pending"] { opacity: .4; }
 .send-to-t3-setup-stage[data-worktree-setup-status="failed"], .send-to-t3-setup-error, .send-to-t3-worktree-setup[data-worktree-setup-phase="failed"] > .send-to-t3-setup-header { color: var(--text-error); }
 .send-to-t3-setup-stage[data-worktree-setup-status="warning"] { color: var(--text-warning); }
-.send-to-t3-setup-stage[data-worktree-setup-status="running"] > .send-to-t3-setup-icon { border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; width: 14px; height: 14px; flex-basis: 14px; margin: 1px; animation: send-to-t3-inline-spin .8s linear infinite; }
-.send-to-t3-setup-stage[data-worktree-setup-status="running"] > .send-to-t3-setup-icon svg { display: none; }
 .send-to-t3-setup-details { margin: 4px 0 0 28px; font-size: 12px; }
 .send-to-t3-setup-details > summary { display: flex; align-items: center; gap: 4px; width: fit-content; cursor: pointer; list-style: none; }
 .send-to-t3-setup-details > summary::-webkit-details-marker { display: none; }
@@ -644,14 +579,15 @@ details.send-to-t3-tool > summary { display: flex; align-items: center; gap: .5e
 .send-to-t3-setup-metadata { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; margin: 2px 0; }
 .send-to-t3-setup-metadata code { background: transparent; padding: 0; font-size: inherit; overflow-wrap: anywhere; white-space: pre-wrap; }
 .send-to-t3-setup-tail { margin: 2px 0 4px 28px; padding: 6px 10px; max-height: 7em; overflow: auto; font-size: 11px; white-space: pre; }
-@media (prefers-reduced-motion: reduce) { .send-to-t3-setup-stage[data-worktree-setup-status="running"] > .send-to-t3-setup-icon { animation: none; } }
 .send-to-t3-import-prompt { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .send-to-t3-run-picker { height: min(500px, calc(100dvh - 100px)); display: flex; flex-direction: column; }
 .send-to-t3-run-picker .prompt-results { flex: 1; min-height: 0; max-height: none; overflow-y: auto; overflow-anchor: none; }
 .send-to-t3-run-row { padding: 10px 12px; }
 .send-to-t3-import-status { padding: 6px 12px; color: var(--text-muted); font-size: var(--font-smaller); }
 .send-to-t3-run-heading { display: flex; align-items: center; gap: 10px; min-height: 24px; }
-.send-to-t3-run-status { display: inline-flex; flex: 0 0 17px; width: 17px; height: 17px; border: 1.5px dashed currentColor; border-radius: 50%; align-items: center; justify-content: center; color: var(--text-warning); }
+.send-to-t3-run-status { display: inline-flex; flex: 0 0 17px; width: 17px; height: 17px; align-items: center; justify-content: center; color: var(--text-warning); }
+.send-to-t3-run-status[data-status="Running"] { display: none; }
+.send-to-t3-run-status-text { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .send-to-t3-run-status[data-status="Completed"] { color: var(--color-green); }
 .send-to-t3-run-status[data-status="Running"] { color: var(--color-blue); }
 .send-to-t3-run-status[data-status="Failed"] { color: var(--color-red); }
@@ -711,3 +647,24 @@ details.send-to-t3-tool > summary { display: flex; align-items: center; gap: .5e
 button.send-to-t3-response-activity { display: inline-flex; align-items: center; gap: .5em; max-width: 100%; height: auto; text-align: start; white-space: normal; box-shadow: none; }
 .send-to-t3-question-navigation { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5em; margin: .5em 0; }
 .send-to-t3-question-dialog fieldset[hidden] { display: none; }
+
+/* Import starts with recent threads across every connected project. */
+.send-to-t3-thread-picker { height: min(580px, calc(100dvh - 80px)); display: flex; flex-direction: column; }
+.send-to-t3-thread-picker .prompt-results { flex: 1; min-height: 0; max-height: none; overflow-y: auto; }
+.send-to-t3-import-thread { padding: 12px 14px; }
+.send-to-t3-import-project { color: var(--text-muted); font-size: var(--font-ui-smaller); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.send-to-t3-import-title { color: var(--text-normal); font-size: var(--font-ui-medium); line-height: 1.5; font-weight: var(--font-medium); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.send-to-t3-import-meta { display: flex; flex-wrap: wrap; gap: 6px; color: var(--text-muted); font-size: var(--font-ui-smaller); line-height: 1.5; margin-top: 3px; overflow-wrap: anywhere; }
+.send-to-t3-import-thread-status { display: inline-flex; align-items: center; gap: 5px; }
+.send-to-t3-import-thread-status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }
+.send-to-t3-import-thread-status[data-status="Active"] { color: var(--color-blue); }
+.send-to-t3-import-thread-status[data-status="Active"]::before { background: currentColor; }
+.send-to-t3-import-context { padding: 12px 16px; border-bottom: 1px solid var(--background-modifier-border); }
+.send-to-t3-import-context .send-to-t3-import-back { margin-bottom: 10px; font-size: var(--font-ui-small); }
+.send-to-t3-import-icon { display: flex; color: var(--text-accent); }
+.send-to-t3-import-icon svg { width: 18px; height: 18px; }
+.send-to-t3-all-runs { padding: 12px; border-bottom: 1px solid var(--background-modifier-border); }
+.send-to-t3-all-runs .send-to-t3-run-name { font-weight: var(--font-semibold); }
+@media (max-width: 600px) {
+  .send-to-t3-thread-picker, .send-to-t3-run-picker { height: min(600px, calc(100dvh - 32px)); }
+}

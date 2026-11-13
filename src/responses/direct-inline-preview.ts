@@ -49,6 +49,7 @@ export class DirectInlinePreview {
   private closeVerification?:()=>void;
   private nextVerification=0;
   private terminal=false;
+  private questionsPending=false;
   private interruptedTurnId?:string;
   private verifiedInterruptions=new Set<string>();
   private interruptionVerification?:Promise<void>;
@@ -118,6 +119,10 @@ export class DirectInlinePreview {
             this.item({kind:'snapshot',snapshot:result.snapshot},true);
           }
         }finally{await access.close?.();}
+      }).then(()=>{
+        // The import reader is a one-shot placeholder, not a live monitor.
+        // Pending questions need the shared stream to observe their resolution.
+        if(!this.stopped&&generation===this.generation&&this.questionsPending){this.monitor=undefined;this.watchLive(generation);}
       }).catch(error=>{
         if(this.stopped||generation!==this.generation)return;
         logFailure('stream.direct.import-read',error,{bindingId:request.id});
@@ -127,7 +132,10 @@ export class DirectInlinePreview {
       });
       return;
     }
-    const generation=++this.generation;
+    this.watchLive();
+  }
+  private watchLive(generation=++this.generation){
+    const record=this.record;
     this.monitor=this.watch(record.request.threadId,this.access,{
       item:item=>{if(!this.stopped&&this.generation===generation)this.item(item);},
       reconnecting:error=>{if(!this.stopped&&this.generation===generation)this.connectionFailed(error,'stream-or-snapshot');},
@@ -166,6 +174,7 @@ export class DirectInlinePreview {
     for(const input of steering){const turn=turnForMessage(this.state,input.messageId);if(!turn)continue;input.confirmed=true;turnId=turn;if(!this.turnIds.includes(turn))this.turnIds.push(turn);}
     const recovery=failedContinuations(this.state,this.turnIds,this.prose);this.state=recovery.state;this.turnIds=recovery.turnIds;
     const questions=followInlineQuestions(this.state,this.turnIds,this.follows,this.prose);
+    this.questionsPending=questions.waiting;
     this.follows=questions.follows;this.turnIds=questions.turnIds;turnId=questions.turnId??turnId;
     this.incoming=observeIncoming(this.state,this.turnIds,this.incoming,steering,[request.messageId,request.initialInput?.messageId??'',...Object.values(this.state.turns??{}).filter(turn=>this.turnIds.includes(turn.turnId)&&!recovery.messageIds.has(turn.messageId??'')).map(turn=>turn.messageId??''),...this.follows.flatMap(follow=>follow.input?[follow.input.messageId]:[])]);
     this.prose=mergeProse(this.prose,this.state.messages,this.turnIds);
@@ -188,7 +197,7 @@ export class DirectInlinePreview {
     const resolvedQuestions=this.follows.flatMap(item=>{const remote=this.state.v2Requests?.[item.requestId];return remote&&typeof remote.status==='string'&&(remote.status!=='pending'||remote.responseCapability?.type==='not_resumable')&&!this.state.activities.some(activity=>activity.kind==='user-input.resolved'&&activity.payload?.requestId===item.requestId)?[{id:`resolved-question:${item.requestId}`,kind:'user-input.resolved',summary:'Question resolved',turnId:item.turnId,createdAt:remote.resolvedAt,payload:{requestId:item.requestId,answers:remote.answers}}]:[];});
     const current={...this.state,activities:[...this.state.activities,...restoredQuestions,...resolvedQuestions],messages:[...this.prose,...this.state.messages.filter(message=>message.role!=='assistant'&&this.turnIds.includes(message.turnId??''))],turns:{...this.record.state?.presentationTurns,...this.state.turns}};
     if(request.finalAnswerFormat==='raw-markdown')current.turns=rememberInlineTurns(current,this.turnIds,current.turns);
-    const title=request.localOnly&&(phase==='complete'||phase==='interrupted')?request.threadTitle:this.state.title??request.threadTitle;
+    const title=this.state.title??request.threadTitle;
     const body=renderInlineTurn(current,turnId,request.threadId,phase,intermediateMode(request.intermediateMode,request.keepIntermediate),request.threadEnvironmentId,conversation,request.initialInput,title,{startedAt:request.createdAt,finishedAt:phase==='complete'||phase==='interrupted'?completionTime(this.state,turnId):undefined},finalAnswerFormat(request.finalAnswerFormat));
     this.completionTurnId=turnId;
     const key=finalResponseKey(this.state,turnId,this.completionOptions());

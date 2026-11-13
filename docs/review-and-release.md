@@ -21,9 +21,9 @@ build refuses test adapters and retired filesystem dependencies in its inputs.
 `npm test` runs and caches these gates before the affected tests. Cache keys
 include installed dependency bytes, runtime, source and configuration. Passing
 bounded test batches retain their own logs; failed batches have no success
-receipt. GitHub checks PR versions before merge. Its release-tag workflow runs
-lint and build before attesting and publishing; feature-branch pushes do not
-publish releases.
+receipt. GitHub runs release-tool regression checks on PRs and main pushes
+without requiring a version bump. Its explicit release-tag workflow runs lint
+and build before attesting and publishing. Branch pushes do not publish releases.
 
 ## Necessary capabilities and overrides
 
@@ -69,8 +69,8 @@ validation is blocked or incomplete, report it in a draft PR. No later release
 worker will perform these checks.
 
 Documentation changes need a diff and link review without local installation.
-Tooling changes need their affected checks. All PRs need the aligned version
-required by the existing GitHub flow before merge, including docs and workflows.
+Tooling changes need their affected checks. Product, documentation and workflow
+PRs can retain the current version, including when merged to `main`.
 
 ## Commit, push and open a PR
 
@@ -89,24 +89,29 @@ refs or use `--tags`, `--follow-tags`, or `--mirror`.
 
 ## GitHub owns releases
 
-The local release process has been removed, including queue submission,
-canonical-checkout integration, version assignment, packaging, installation,
-Sync delivery, smoke receipts, and automatic client reloads. Developing agents
-finish with a commit and PR. There is no local release command to run after it.
-Historical tags, archives, receipts and private comparison records remain intact.
+The local release queue and workers remain removed. Developing agents finish
+with a commit and PR. Branch pushes, main merges and PR completion do not
+authorize publication, version assignment or installation. Historical tags,
+archives, receipts and private comparison records remain intact.
 
-Release work stays on GitHub after PR review. The existing
-[release workflow](../.github/workflows/release-provenance.yml) checks that every
-PR carries a strictly newer aligned `0.0.BUILD`, including docs and workflow
-changes. After merge, the main-push job reserves that commit's unused numeric
-tag and explicitly dispatches the tag build. GitHub installs dependencies,
-lints, builds, attests `main.js`, `manifest.json` and `styles.css`, then publishes
-a regular release titled `t3-obsidian VERSION`. Existing tags and assets cannot
-be overwritten. This change adds no GitHub release automation.
+When the user requests a GitHub release, prepare a new unused numeric
+`0.0.BUILD` aligned in `manifest.json`, `package.json`, both package-lock version
+fields and the `versions.json` compatibility entry. Validate and commit those
+release metadata changes, then tag that exact commit with its version. Push
+only that explicitly authorized tag. The
+[release workflow](../.github/workflows/release-provenance.yml) installs
+dependencies, lints, builds, attests `main.js`, `manifest.json` and `styles.css`,
+then publishes a regular release titled `t3-obsidian VERSION`. The tag must
+match the source version. Existing tags and assets cannot be overwritten.
 
-Feature-branch pushes do not publish. Every push to `main`, including a merged
-PR, authorizes this existing automatic GitHub publication. Prepare its newer
-aligned version before merge; the workflow does not choose or bump versions.
-Developing agents stop at the PR. Vault installation and Obsidian directory
-submission or review need separate instructions. Keep the
+To retry a tagged release, dispatch the workflow at that same numeric tag, for
+example `gh workflow run release-provenance.yml --ref 0.0.BUILD` with the actual
+version substituted. Dispatching at a branch fails the numeric-tag check.
+The workflow does not choose or bump versions. Keep the
 [alpha version policy](versioning.md).
+
+Personal-vault delivery runs only when the user explicitly asks to try changes.
+It is not a prerequisite or side effect of a PR, merge, GitHub release or agent
+test. Agents remain responsible for validation in isolated test vaults. Past
+verification notes describe historical delivery work and do not reinstate gates.
+Obsidian directory submission or review also needs separate instructions.

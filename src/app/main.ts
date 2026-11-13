@@ -1,5 +1,7 @@
+import {savedResponseProof} from '../responses/saved-response-proof';
 import {RouteStatus} from '../connection/route-status';
 import {readImportThreads,readImportRuns,readImportRun,readImportPreview,importHistoryState} from '../conversations/import-source';
+import {readImportAccess} from '../conversations/import-access';
 import {orderedRoutes,routeGroups,routePairing,routeMethod,localRoute,routeNames,type ConnectionMethod} from '../connection/routes';
 import {forEachBounded} from '../shared/bounded-work';
 import {AgentSetup,type AgentProvider} from '../agents/setup';
@@ -64,7 +66,7 @@ import {readInlineSnapshot,watchThread,type ThreadAccess} from '../conversations
 import {isRecoveryCommand} from '../responses/recovery-command';
 import {abortableRead,requestAborted} from '../connection/t3-api';
 import {mountToolGroups} from '../responses/response-tool-presentation';
-import {importRuns,importBindingId,importFollowId,runImportResultMessage,type RunImportResult,type ImportRun} from '../conversations/run-import';
+import {attachAllImportRuns,importRuns,importBindingId,importFollowId,runImportResultMessage,type RunImportResult,type ImportRun} from '../conversations/run-import';
 import {renderRunImportPreview} from '../conversations/run-import-preview';
 import {findRunImport,runImportReceipt} from '../conversations/run-import-receipt';
 import {openRunImport,ImportStreamsModal,openResponseCatchUp} from '../conversations/run-import-ui';
@@ -440,10 +442,11 @@ export default class SendToT3 extends Plugin {
       rememberNoteEdits:async(request,before,after)=>{if(await rememberNoteEdits(this.smartData(),request.notePath,request.id,before,after))await this.save(true);},
       loadLocalCompletion:async request=>{const receipt=await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`);return isRecord(receipt)&&receipt.identity===localFinalIdentity(request)&&typeof receipt.saved==='boolean'?{saved:receipt.saved,...(receipt.removed===true?{removed:true}:{})}:undefined;},
       isVisible:path=>this.app.workspace.getActiveViewOfType(MarkdownView)?.file?.path===path,
+      savedResponse:(request,document)=>savedResponseProof(request,document,this.settings.responseBindings??{},this.smartData()),
       knownCompleted:request=>this.settings.responseBindings?.[request.id]?.completion?.identity===localFinalIdentity(request),
-      retainLocalCompletion:async(request,saved,update)=>{
+      retainLocalCompletion:async(request,saved,update,savedBody)=>{
         await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`,{version:1,identity:localFinalIdentity(request),saved,...(!saved?{removed:true}:{})});
-        if(saved&&update?.turnId){this.responseBindingReplica=completeResponseBinding(this.responseBindingReplica,request,update.turnId,contentHash(update.body),this.deviceId);this.settings.responseBindings=this.responseBindingReplica;await this.save(true);}
+        if(saved&&update?.turnId){this.responseBindingReplica=completeResponseBinding(this.responseBindingReplica,request,update.turnId,contentHash(savedBody??update.body),this.deviceId);this.settings.responseBindings=this.responseBindingReplica;await this.save(true);}
       },
       localBindings:()=>responseBindingRequests(this.settings.responseBindings??this.responseBindingReplica),
       saveLocalBinding:request=>this.saveResponseBinding(request),
@@ -496,8 +499,8 @@ export default class SendToT3 extends Plugin {
       const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file;if(this.stopped||this.busy||!file||file.extension.toLowerCase()!=='md')return false;
       if(!checking)void this.openImportStreams(file).catch(error=>new Notice(`T3 streams: ${message(error)}`,10000));return true;
     }});
-    const shineDocuments=new Map<Document,()=>void>();
-    const watchShine=(root:Document)=>{if(root.body&&!shineDocuments.has(root))shineDocuments.set(root,installActivityShine(root));};
+    const shineDocuments=new Map<Document,()=>void>(),indicatorRoots=new Set<HTMLElement>(document.body?[document.body]:[]);
+    const watchShine=(root:Document)=>{if(root.body&&!shineDocuments.has(root)){indicatorRoots.add(root.body);shineDocuments.set(root,installActivityShine(root));}};
     if(typeof Reflect.get(document,'querySelectorAll')==='function')this.register(watchWorkspaceDocuments(this.app,root=>{
       const presentation=installResponsePresentation(root,setIcon);watchShine(root);
       const controls=installStreamBlockControls(this.app,root,setIcon,error=>new Notice(`T3: ${message(error)}`,10000),()=>this.openSettings(),async(id,view)=>{
@@ -505,7 +508,8 @@ export default class SendToT3 extends Plugin {
         const hosted=this.deviceInline?.stoppableResponses(view.file.path).find(response=>response.id===id);
         await this.inlineChat!.stopAt(id,view.editor,view,hosted?.hostTarget);
       });
-      return ()=>{controls();presentation();shineDocuments.get(root)?.();shineDocuments.delete(root);};
+      this.folderIndicators?.refresh();
+      return ()=>{controls();presentation();shineDocuments.get(root)?.();shineDocuments.delete(root);indicatorRoots.delete(root.body);this.folderIndicators?.refresh();};
     }));
     this.register(()=>{for(const dispose of shineDocuments.values())dispose();shineDocuments.clear();});
     const questionStorage=`${this.localKey}-questions-${this.settings.vaultId}`;
@@ -587,7 +591,7 @@ export default class SendToT3 extends Plugin {
       this.paletteChat=installPaletteChat(this.app,(prompt,selection,showSelector,source)=>this.openPaletteAction(prompt,selection,showSelector,source),{pluginId:this.manifest.id,onError:error=>new Notice(`T3 Code: ${message(error)}`,10000),getDraft:()=>this.localDraft(),saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft),captureSource:()=>this.capturePaletteSource()});
       this.registerInterval(window.setInterval(()=>this.paletteChat?.reconcile(),2000));
       if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined'){
-        this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks,()=>{
+        this.folderIndicators=installFolderIndicators(()=>indicatorRoots,()=>this.settings.folderLinks,()=>{
           const responses=this.deviceInline?.explorerResponses()??[],known=new Set(responses.map(r=>r.id));
           const all=[...responses,...(this.inlineChat?.explorerResponses()??[]).filter(r=>!known.has(r.id))];
           const exists=(path:string)=>this.app.vault.getAbstractFileByPath(path) instanceof TFile;
@@ -614,7 +618,7 @@ export default class SendToT3 extends Plugin {
             settings?:{wrap?:boolean};
           }>}}).plugins?.plugins?.['mobile-tab-bar'];
           const mobileTabs=mobile?.tabs?.()??[];
-          decorateMobileActivityTabs(document,mobileTabs.map(activityLeafPath),mobileTabs.indexOf(mobile?.activeTab?.(mobileTabs) as typeof mobileTabs[number]),!!mobile?.settings?.wrap,notes);
+          for(const root of indicatorRoots)decorateMobileActivityTabs(root,mobileTabs.map(activityLeafPath),mobileTabs.indexOf(mobile?.activeTab?.(mobileTabs) as typeof mobileTabs[number]),!!mobile?.settings?.wrap,notes);
         });
         this.registerInterval(window.setInterval(()=>this.folderIndicators?.refresh(),1000));
         this.registerEvent(this.app.workspace.on('layout-change',()=>this.folderIndicators?.refresh()));
@@ -959,7 +963,7 @@ export default class SendToT3 extends Plugin {
     const adopted=mergeSharedSettings(baseline,remote,this.sharedSnapshot());
     adopted.vaultHost=mergeVaultHost(baseline.vaultHost,remote.vaultHost,this.settings.vaultHost);
     const incomingBindings=loadResponseBindingData(data.responseBindings);
-    const previousBindings=JSON.stringify(this.responseBindingReplica);
+    const previousBindings=JSON.stringify(this.responseBindingReplica),previousSmartSend=JSON.stringify(this.smartReplica);
     Object.assign(this.smartReplica,mergeSmartSend(this.smartReplica,data.smartSend,this.settings.smartSend));this.settings.smartSend=this.smartReplica;await deviceState(`smart-send:${this.deviceId}:${this.settings.vaultId}`,this.smartReplica);
     this.responseBindingReplica=mergeResponseBindingData(this.responseBindingReplica,incomingBindings);
     this.settings.responseBindings=this.responseBindingReplica;
@@ -995,6 +999,7 @@ export default class SendToT3 extends Plugin {
     this.settings.noteThreads=mergedThreads;
     if(JSON.stringify(data.smartSend)!==JSON.stringify(this.smartReplica)||restoreFolderLinks||restoreResponseBindings||restoreNoteContexts||JSON.stringify(mergedThreads)!==JSON.stringify(remoteThreads))await this.save(restoreFolderLinks||restoreResponseBindings||restoreNoteContexts);
     if(previousBindings!==JSON.stringify(this.responseBindingReplica))this.deviceInline?.localBindingsChanged();
+    if(previousSmartSend!==JSON.stringify(this.smartReplica))this.deviceInline?.savedResponsesChanged();
     this.refreshFolderIndicators();
   }
   private async publishVaultIdentity():Promise<void>{
@@ -1238,26 +1243,32 @@ export default class SendToT3 extends Plugin {
     const insertion=this.noteSendInsertion(file);
     const catalogs=new WeakMap<ImportRun,ImportRun[]>();
     const threadSources=new Map<string,ThreadAccess['api']>();
-    const read=async<T>(project:Project,operation:(access:ThreadAccess,environmentId:string)=>Promise<T>)=>{
-      const environmentId=this.connection(project).environmentId??await this.localInlineEnvironment(),access=await this.inlineThreadAccess(environmentId);
-      try{return await operation(access,environmentId);}finally{await access.close?.();}
+    const read=async<T>(project:Project,operation:(access:ThreadAccess,environmentId:string)=>Promise<T>,signal?:AbortSignal)=>{
+      let environmentId:string;
+      return readImportAccess(async()=>{environmentId=this.connection(project).environmentId??await abortableRead(this.localInlineEnvironment(),signal);requestAborted(signal);return this.inlineThreadAccess(environmentId);},access=>operation(access,environmentId),signal);
     };
     this.prepareImportAccess();
     openRunImport(this.app,file.path,{
       projects:()=>this.projects(),projectLabel:project=>this.projectChoiceLabel(project),
-      threads:(project,signal)=>read(project,async access=>{threadSources.set(projectKey(project),access.api);return this.availableModeThreads(file.path,project,await readImportThreads(access,project.id,signal));}),
+      machineKey:project=>this.connection(project).environmentId??project.connectionId??'local',
+      threads:(project,signal)=>read(project,async access=>{threadSources.set(projectKey(project),access.api);return this.availableModeThreads(file.path,project,await readImportThreads(access,project.id,signal));},signal),
       watchThreads:(project,changed)=>{const api=threadSources.get(projectKey(project));return api?.watchImportThreads?.(project.id,()=>{const threads=api.cachedImportThreads?.(project.id);if(threads)void this.availableModeThreads(file.path,project,threads).then(changed).catch(()=>{});})??(()=>{});},
-      runs:async(project,thread,signal,progress)=>{const remember=(runs:ImportRun[])=>{for(const run of runs)catalogs.set(run,runs);return runs;};return remember(await read(project,access=>readImportRuns(access,thread.id,project.id,signal,runs=>progress?.(remember(runs)))));},
+      runs:async(project,thread,signal,progress)=>{const remember=(runs:ImportRun[])=>{for(const run of runs)catalogs.set(run,runs);return runs;};return remember(await read(project,access=>readImportRuns(access,thread.id,project.id,signal,runs=>progress?.(remember(runs))),signal));},
       prepareSelection:async(project,thread,run)=>{
         if(!this.htmlResults||!run.turnId)return;
         run.preview??=await read(project,(access,environmentId)=>readImportPreview(access,thread.id,project.id,run,environmentId));
         const first=run.preview.html[0];if(first)await this.htmlResults.prefetch(first,activeDocument);
       },
       preview:async(project,thread,run,el,child,signal)=>{
-        if(!run.preview&&run.turnId)run.preview=await read(project,(access,environmentId)=>readImportPreview(access,thread.id,project.id,run,environmentId,signal));
+        if(!run.preview&&run.turnId)run.preview=await read(project,(access,environmentId)=>readImportPreview(access,thread.id,project.id,run,environmentId,signal),signal);
         if(!signal.aborted)await renderRunImportPreview(this.app,run,el,child,signal,this.htmlResults);
       },
       attach:(project,thread,run,follow)=>this.importRun(file.path,project,thread.id,run.messageId,follow,insertion,catalogs.get(run)),
+      attachAll:async(project,thread,runs,follow)=>{
+        if(this.stopped||this.busy||!this.deviceInline)throw Error('Obsidian is unavailable or sending another request.');
+        this.busy=true;
+        try{return await attachAllImportRuns(runs,follow,(run,follow)=>this.attachImportRun(file.path,project,thread.id,run.messageId,follow,undefined,catalogs.get(run)));}finally{this.busy=false;}
+      },
     });
   }
   private noteCatchUpThreads(notePath:string,document=''){
@@ -2599,6 +2610,7 @@ export default class SendToT3 extends Plugin {
     const state=jsonClone({pending,completionJobs,settlementJobs});
     this.app.saveLocalStorage(this.localKey,jsonClone({deviceId:this.deviceId,mode:this.mode,connectionMethod:this.connectionMethod,routeOrder:this.routeOrder,connection,pairedSessions:this.pairedSessions,cloudAccount:this.cloudAccount,nativeAccount:this.nativeAccount,signInEmail:this.signInEmail,signInExpired:this.signInExpired,vaultRegistrations:this.vaultRegistrations}));
     this.saving=this.saving.catch(()=>{}).then(async()=>{
+      if(!this.settings.autoSettleThreads){this.settings.settlementJobs=[];state.settlementJobs=[];}
       await deviceState(this.deviceId,state);
       if(!writeShared)return;
       const current=await this.loadSettings();
@@ -2626,6 +2638,7 @@ export default class SendToT3 extends Plugin {
       if(JSON.stringify(this.settings.noteThreads)===intendedThreads)this.settings.noteThreads=snapshot.noteThreads;
       const adopt=<K extends keyof SharedSettings>(key:K)=>{if(JSON.stringify(this.settings[key])===JSON.stringify(intended[key])){const target:SharedSettings=this.settings;target[key]=snapshot[key];}};
       for(const key of ['inlineStreaming','vaultHost','completion','threadTitleGeneration','autoSettleThreads','hideObsidianThreads','paired','vaultLocations','codebase','projectCreationLocations'] as const)adopt(key);
+      if(!this.settings.autoSettleThreads&&this.settings.settlementJobs.length){this.settings.settlementJobs=[];await this.saveDeviceState();}
       this.codebase?.adopt(this.settings.codebase);
       this.sharedBaseline=JSON.stringify(snapshot);
     });

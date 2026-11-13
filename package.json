@@ -1,6 +1,6 @@
 {
   "name": "t3-obsidian",
-  "version": "0.0.436",
+  "version": "0.0.440",
   "private": true,
   "description": "Bring T3 Code into your vault. Send notes as prompts, stream replies into the editor, and more.",
   "license": "MIT",
@@ -30,7 +30,8 @@
     "typescript-eslint": "8.72.1",
     "eslint-plugin-obsidianmd": "file:scripts/vendor/eslint-plugin-obsidianmd-2c05f10a347f.tgz",
     "proper-lockfile": "4.1.2",
-    "@types/proper-lockfile": "4.1.4"
+    "@types/proper-lockfile": "4.1.4",
+    "linkedom": "0.18.15"
   },
   "dependencies": {
     "@codemirror/commands": "6.10.0",

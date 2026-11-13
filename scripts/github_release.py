@@ -1,4 +1,4 @@
-"""Validate, tag and publish the exact source selected by GitHub Actions."""
+"""Validate and publish an explicitly tagged GitHub release."""
 from __future__ import annotations
 
 import argparse
@@ -39,16 +39,9 @@ def version() -> str:
     package = json.loads((ROOT / 'package.json').read_text())
     lock = json.loads((ROOT / 'package-lock.json').read_text())
     if not selected == package['version'] == lock['version'] == lock['packages']['']['version']:
-        raise ValueError('Align manifest.json, package.json and package-lock.json before pushing.')
+        raise ValueError('Align manifest.json, package.json and package-lock.json before releasing.')
     if json.loads((ROOT / 'versions.json').read_text()).get(selected) != manifest['minAppVersion']:
         raise ValueError('versions.json must include the exact release and minimum Obsidian version.')
-    previous = os.environ.get('T3_PREVIOUS_SHA', '')
-    if previous and previous != '0' * 40:
-        if not re.fullmatch(r'[a-f0-9]{40}', previous):
-            raise ValueError('Invalid previous source commit.')
-        before = json.loads(command('git', 'show', previous + ':manifest.json'))['version']
-        if tuple(map(int, selected.split('.'))) <= tuple(map(int, before.split('.'))):
-            raise ValueError('Every main push, including documentation changes, requires a newer 0.0.BUILD.')
     return selected
 
 
@@ -62,18 +55,6 @@ def tag_commit(repo: str, selected: str) -> str | None:
     if obj['type'] != 'commit':
         raise ValueError('Release tag does not identify a commit.')
     return obj['sha']
-
-
-def prepare(repo: str, selected: str, source: str) -> None:
-    existing = tag_commit(repo, selected)
-    if existing is not None and existing != source:
-        raise ValueError('This version already belongs to another commit. Bump the version before pushing.')
-    if existing is None:
-        api(f'repos/{repo}/git/refs', payload={'ref': 'refs/tags/' + selected, 'sha': source})
-    # GITHUB_TOKEN tag pushes do not trigger another workflow. Dispatch explicitly
-    # at the tag so provenance still names the immutable numeric tag and commit.
-    api(f'repos/{repo}/actions/workflows/release-provenance.yml/dispatches', payload={'ref': selected})
-    print(f'Dispatched release {selected} at {source}.')
 
 
 def find_release(repo: str, selected: str):
@@ -130,7 +111,7 @@ def publish(repo: str, selected: str, source: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['validate', 'prepare', 'publish'])
+    parser.add_argument('action', choices=['validate', 'publish'])
     args = parser.parse_args()
     selected = version()
     if args.action == 'validate':
@@ -141,10 +122,10 @@ def main() -> None:
         raise ValueError('Invalid GitHub source identity.')
     if command('git', 'rev-parse', 'HEAD') != source:
         raise ValueError('Checkout does not match the event source commit.')
-    expected = 'refs/heads/main' if args.action == 'prepare' else 'refs/tags/' + selected
+    expected = 'refs/tags/' + selected
     if os.environ['GITHUB_REF'] != expected:
         raise ValueError('Release action does not match the event ref.')
-    (prepare if args.action == 'prepare' else publish)(repo, selected, source)
+    publish(repo, selected, source)
 
 
 if __name__ == '__main__':

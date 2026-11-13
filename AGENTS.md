@@ -69,9 +69,9 @@ notes, threads, apps, and helpers after retaining evidence.
 ## Documentation and skills
 
 Documentation and skill-instruction changes use the same commit-and-PR flow,
-without local installation. Review the diff and relevant links. All PRs need
-the aligned version required by the existing GitHub flow before merge; this
-includes documentation and workflow-only changes.
+without local installation. Review the diff and relevant links. PRs and merges
+to `main` do not require a version bump, including product, documentation and
+workflow changes. Keep existing version fields until preparing a GitHub release.
 
 The MCP editing skill and server are bundled product assets. Changes to
 `skills/obsidian-t3/SKILL.md`, `agent/mcp_server.py`, or its transport that change
@@ -87,12 +87,13 @@ remaining limits in the PR. Use a draft PR if required validation is incomplete.
 Do not merge the PR unless the user requests it.
 
 `push`, `push to GitHub`, and `push to main` authorize source uploads only.
-Feature-branch pushes do not publish. Every main push, including a merged PR,
-authorizes the existing automatic GitHub release and needs a strictly newer,
-unused numeric `0.0.BUILD` aligned across all version files. This includes
-documentation and workflow changes. The workflow validates versions; it does
-not assign them. Vault installation and Obsidian directory submission or review
-remain separate. Developing agents finish at the PR unless directed otherwise.
+Feature-branch and main pushes do not publish, assign versions or create tags.
+GitHub releases are separate, explicitly requested work. Only a GitHub release
+needs a new unused numeric `0.0.BUILD`, aligned across all version files and its
+immutable tag. A deliberate numeric tag push starts the release build;
+workflow dispatch at that tag can retry it. Vault installation and Obsidian
+directory submission or review remain separate. Developing agents finish at
+the PR unless directed otherwise.
 
 Before a push, read any shared private instructions with
 `python3 scripts/maintainer_config.py --instructions`. Use an explicit refspec
@@ -103,8 +104,13 @@ work. See [Review and release checks](docs/review-and-release.md).
 The project remains Alpha. Published versions use numeric `0.0.BUILD`; Alpha is
 the development stage, not a release-title label. Titles use
 `t3-obsidian VERSION`. Keep all version files aligned and preserve published
-history. Feature-branch work can defer its version until PR preparation; every
-main push requires a new version. Only explicit user direction can end Alpha.
+history. Ordinary PRs and main merges retain the existing version; assign a new
+one only when preparing a GitHub release. Only explicit user direction can end Alpha.
+
+Personal-vault delivery is separate from development validation, PRs, merges
+and GitHub releases. Deliver only when the user explicitly asks to try a build.
+It is for the user's personal testing, never a substitute for agent validation
+in isolated test vaults. Historical verification notes do not add delivery gates.
 
 ## Issue diagnostics
 
