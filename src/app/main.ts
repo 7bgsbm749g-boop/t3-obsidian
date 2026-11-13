@@ -1,6 +1,7 @@
 import {savedResponseProof} from '../responses/saved-response-proof';
 import {RouteStatus} from '../connection/route-status';
 import {readImportThreads,readImportRuns,readImportRun,readImportPreview,importHistoryState} from '../conversations/import-source';
+import {readImportAccess} from '../conversations/import-access';
 import {orderedRoutes,routeGroups,routePairing,routeMethod,localRoute,routeNames,type ConnectionMethod} from '../connection/routes';
 import {forEachBounded} from '../shared/bounded-work';
 import {AgentSetup,type AgentProvider} from '../agents/setup';
@@ -65,7 +66,7 @@ import {readInlineSnapshot,watchThread,type ThreadAccess} from '../conversations
 import {isRecoveryCommand} from '../responses/recovery-command';
 import {abortableRead,requestAborted} from '../connection/t3-api';
 import {mountToolGroups} from '../responses/response-tool-presentation';
-import {importRuns,importBindingId,importFollowId,runImportResultMessage,type RunImportResult,type ImportRun} from '../conversations/run-import';
+import {attachAllImportRuns,importRuns,importBindingId,importFollowId,runImportResultMessage,type RunImportResult,type ImportRun} from '../conversations/run-import';
 import {renderRunImportPreview} from '../conversations/run-import-preview';
 import {findRunImport,runImportReceipt} from '../conversations/run-import-receipt';
 import {openRunImport,ImportStreamsModal,openResponseCatchUp} from '../conversations/run-import-ui';
@@ -1242,26 +1243,32 @@ export default class SendToT3 extends Plugin {
     const insertion=this.noteSendInsertion(file);
     const catalogs=new WeakMap<ImportRun,ImportRun[]>();
     const threadSources=new Map<string,ThreadAccess['api']>();
-    const read=async<T>(project:Project,operation:(access:ThreadAccess,environmentId:string)=>Promise<T>)=>{
-      const environmentId=this.connection(project).environmentId??await this.localInlineEnvironment(),access=await this.inlineThreadAccess(environmentId);
-      try{return await operation(access,environmentId);}finally{await access.close?.();}
+    const read=async<T>(project:Project,operation:(access:ThreadAccess,environmentId:string)=>Promise<T>,signal?:AbortSignal)=>{
+      let environmentId:string;
+      return readImportAccess(async()=>{environmentId=this.connection(project).environmentId??await abortableRead(this.localInlineEnvironment(),signal);requestAborted(signal);return this.inlineThreadAccess(environmentId);},access=>operation(access,environmentId),signal);
     };
     this.prepareImportAccess();
     openRunImport(this.app,file.path,{
       projects:()=>this.projects(),projectLabel:project=>this.projectChoiceLabel(project),
-      threads:(project,signal)=>read(project,async access=>{threadSources.set(projectKey(project),access.api);return this.availableModeThreads(file.path,project,await readImportThreads(access,project.id,signal));}),
+      machineKey:project=>this.connection(project).environmentId??project.connectionId??'local',
+      threads:(project,signal)=>read(project,async access=>{threadSources.set(projectKey(project),access.api);return this.availableModeThreads(file.path,project,await readImportThreads(access,project.id,signal));},signal),
       watchThreads:(project,changed)=>{const api=threadSources.get(projectKey(project));return api?.watchImportThreads?.(project.id,()=>{const threads=api.cachedImportThreads?.(project.id);if(threads)void this.availableModeThreads(file.path,project,threads).then(changed).catch(()=>{});})??(()=>{});},
-      runs:async(project,thread,signal,progress)=>{const remember=(runs:ImportRun[])=>{for(const run of runs)catalogs.set(run,runs);return runs;};return remember(await read(project,access=>readImportRuns(access,thread.id,project.id,signal,runs=>progress?.(remember(runs)))));},
+      runs:async(project,thread,signal,progress)=>{const remember=(runs:ImportRun[])=>{for(const run of runs)catalogs.set(run,runs);return runs;};return remember(await read(project,access=>readImportRuns(access,thread.id,project.id,signal,runs=>progress?.(remember(runs))),signal));},
       prepareSelection:async(project,thread,run)=>{
         if(!this.htmlResults||!run.turnId)return;
         run.preview??=await read(project,(access,environmentId)=>readImportPreview(access,thread.id,project.id,run,environmentId));
         const first=run.preview.html[0];if(first)await this.htmlResults.prefetch(first,activeDocument);
       },
       preview:async(project,thread,run,el,child,signal)=>{
-        if(!run.preview&&run.turnId)run.preview=await read(project,(access,environmentId)=>readImportPreview(access,thread.id,project.id,run,environmentId,signal));
+        if(!run.preview&&run.turnId)run.preview=await read(project,(access,environmentId)=>readImportPreview(access,thread.id,project.id,run,environmentId,signal),signal);
         if(!signal.aborted)await renderRunImportPreview(this.app,run,el,child,signal,this.htmlResults);
       },
       attach:(project,thread,run,follow)=>this.importRun(file.path,project,thread.id,run.messageId,follow,insertion,catalogs.get(run)),
+      attachAll:async(project,thread,runs,follow)=>{
+        if(this.stopped||this.busy||!this.deviceInline)throw Error('Obsidian is unavailable or sending another request.');
+        this.busy=true;
+        try{return await attachAllImportRuns(runs,follow,(run,follow)=>this.attachImportRun(file.path,project,thread.id,run.messageId,follow,undefined,catalogs.get(run)));}finally{this.busy=false;}
+      },
     });
   }
   private noteCatchUpThreads(notePath:string,document=''){

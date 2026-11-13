@@ -18,7 +18,7 @@ export class ThreadCatalogCache {
   const threads=readThreadList(shell),projects=new Map<string,ThreadChoice[]>();
   for(const projectId of new Set(threads.map(thread=>thread.projectId))){
    if(typeof projectId!=='string')continue;
-   projects.set(projectId,projectThreads({threads},projectId).map(({id,projectId,title,updatedAt,status})=>({id,projectId,title,updatedAt,status})));
+   projects.set(projectId,projectThreads({threads},projectId).map(({id,projectId,title,updatedAt,status,branch})=>({id,projectId,title,updatedAt,status,...(typeof branch==='string'&&branch?{branch}: {})})));
   }
   this.entries.delete(identity);this.entries.set(identity,{until:expiresAt-5000,refreshAt:this.now()+300_000,projects});
   while(this.entries.size>16)this.entries.delete(this.entries.keys().next().value!);

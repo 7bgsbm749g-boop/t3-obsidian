@@ -80,3 +80,16 @@ test('huge final prose is bounded only in its preview, with a paragraph boundary
  assert.ok(preview.body.length<=IMPORT_PREVIEW_TEXT_LIMIT);assert.ok(body.startsWith(preview.body));assert.equal(state.messages.at(-1)!.text,body);
  assert.equal(importPreviewText('short'),'short');assert.equal(importPreviewText('x'.repeat(1_000_000)).length,IMPORT_PREVIEW_TEXT_LIMIT);
 });
+
+test('all runs is a finite oldest-first snapshot and follows only after the last run',async()=>{
+ const {attachAllImportRuns}=await import('../src/conversations/run-import');
+ const state=restoreInlineBindings(history(),{bindings:{old:{turnId:'old-turn',kind:'explicit'}},turns:{'old-turn':{turnId:'old-turn',messageId:'old',requestedAt:old,state:'completed'}}});
+ const runs=importRuns(state),calls:Array<[string,boolean]>=[];
+ const result=await attachAllImportRuns(runs,true,async(run,follow)=>{calls.push([run.messageId,follow]);return {duplicate:false,following:follow,saveState:run.status==='Running'?'streaming':'saved'};});
+ assert.deepEqual(calls,[['old',false],['new',true]]);assert.equal(result.saveState,'streaming');assert.equal(result.following,true);
+ calls.length=0;await attachAllImportRuns(runs,false,async(run,follow)=>{calls.push([run.messageId,follow]);return {duplicate:true,following:follow,saveState:'saved'};});assert.deepEqual(calls,[['old',false],['new',false]]);
+ let attempts=0;
+ await assert.rejects(attachAllImportRuns(runs,true,async()=>{attempts++;return {duplicate:false,following:false,saveState:'pending',pendingReason:'sync'};}),/1 of 2 runs processed.*not saved yet/);assert.equal(attempts,1);
+ await assert.rejects(attachAllImportRuns(runs,false,async()=>{throw Error('Disconnected');}),/0 of 2.*Disconnected.*without duplicates/);
+ await assert.rejects(attachAllImportRuns([],false,async()=>{throw Error('Must not attach');}),/No available runs/);
+});

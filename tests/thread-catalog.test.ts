@@ -67,3 +67,8 @@ test('application cancellation aborts a background catalog fetch',async()=>{
  const api=await environmentApi({transport:'direct',host:'direct',executable:'',url,environmentId:'machine'},session,fetcher),controller=new AbortController(),work=api.prepareImportCatalog!(controller.signal);
  await Promise.resolve();await Promise.resolve();controller.abort(Error('Plugin stopped'));await assert.rejects(work,/Plugin stopped/);assert.equal(requestSignal?.aborted,true);
 });
+
+test('a real branch label survives the metadata-only catalog without retaining workspace payloads',()=>{
+ const cache=new ThreadCatalogCache(()=>0);cache.remember('credential',{threads:[{...shell.threads[0],branch:'feature/import',privateBody:'Do not retain'}]},1_000_000);
+ assert.equal(cache.read('credential','project')![0].branch,'feature/import');assert.equal('privateBody' in cache.read('credential','project')![0],false);
+});

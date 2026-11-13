@@ -74,3 +74,20 @@ export function importBindingId(source:{environmentId:string;projectId:string;th
 export function importFollowId(source:{environmentId:string;projectId:string;threadId:string},notePath:string){
   return commandId(IMPORT_NAMESPACE,JSON.stringify(['follow',source.environmentId,source.projectId,source.threadId,notePath]));
 }
+
+/** A finite snapshot in conversation order. Follow starts only after the final
+ * selected run. Stop at a pending save or error; earlier imports can be retried
+ * safely through their ordinary duplicate receipts. */
+export async function attachAllImportRuns(runs:ImportRun[],follow:boolean,attach:(run:ImportRun,follow:boolean)=>Promise<RunImportResult>):Promise<RunImportResult>{
+  const ordered=runs.filter(availableImportRun).slice().reverse();
+  if(!ordered.length)throw Error('No available runs to import.');
+  let duplicate=true,streaming=false,following=false,processed=0;
+  for(const run of ordered){
+    let result:RunImportResult;
+    try{result=await attach(run,follow&&processed===ordered.length-1);}
+    catch(error){throw Error(`${processed} of ${ordered.length} runs processed. ${error instanceof Error?error.message:String(error)} Retry All runs to resume without duplicates.`);}
+    processed++;duplicate&&=result.duplicate;streaming||=result.saveState==='streaming';following||=result.following;
+    if(result.saveState==='pending')throw Error(`${processed} of ${ordered.length} runs processed. ${runImportResultMessage(result)} Retry All runs after the save issue is resolved.`);
+  }
+  return {duplicate,following,saveState:streaming?'streaming':'saved'};
+}
