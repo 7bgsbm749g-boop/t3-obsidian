@@ -57,13 +57,22 @@ export function decorateNoteIndicators(root:ParentNode,notes:Map<string,NoteIndi
   }
 }
 export interface FolderIndicatorController {refresh():void;dispose():void}
-export function installFolderIndicators(root:HTMLElement,getLinks:()=>FolderLink[],getNotes:()=>Map<string,NoteIndicator>=()=>new Map(),folderNote:(title:HTMLElement)=>string|undefined=()=>undefined,decorateTabs:(notes:Map<string,NoteIndicator>)=>void=()=>{}):FolderIndicatorController{
+export function installFolderIndicators(root:HTMLElement|(()=>Iterable<HTMLElement>),getLinks:()=>FolderLink[],getNotes:()=>Map<string,NoteIndicator>=()=>new Map(),folderNote:(title:HTMLElement)=>string|undefined=()=>undefined,decorateTabs:(notes:Map<string,NoteIndicator>)=>void=()=>{}):FolderIndicatorController{
   let stopped=false,scheduled=false;
-  const observers=new Map<HTMLElement,MutationObserver>();
+  const observers=new Map<HTMLElement,MutationObserver>(),ownedRoots=new Set<HTMLElement>();
+  const roots=()=>typeof root==='function'?Array.from(root()):[root];
+  const clearRoot=(element:HTMLElement)=>{
+    for(const title of Array.from(element.querySelectorAll<HTMLElement>('[data-t3-completion-glow]')))title.removeAttribute('data-t3-completion-glow');
+    for(const title of Array.from(element.querySelectorAll<HTMLElement>('.nav-file-title-content[data-t3-active-title], .nav-folder-title-content[data-t3-active-title]')))setActiveTitle(title,false);
+    for(const badge of Array.from(element.querySelectorAll('.'+LINKED_FOLDER_BADGE_CLASS+', .'+NOTE_INDICATOR_CLASS)))badge.remove();
+  };
   const schedule=()=>{if(stopped||scheduled)return;scheduled=true;void Promise.resolve().then(()=>{scheduled=false;refresh();}).catch(error=>{scheduled=false;logFailure('folder.indicators.refresh.failed',error);});};
   const refresh=()=>{
     if(stopped)return;
-    const explorers=new Set(Array.from(root.querySelectorAll<HTMLElement>('.nav-files-container'))),notes=getNotes();
+    const currentRoots=new Set(roots()),notes=getNotes();
+    for(const previous of ownedRoots)if(!currentRoots.has(previous)){clearRoot(previous);ownedRoots.delete(previous);}
+    for(const current of currentRoots)ownedRoots.add(current);
+    const explorers=new Set(Array.from(currentRoots).flatMap(current=>Array.from(current.querySelectorAll<HTMLElement>('.nav-files-container'))));
     decorateTabs(notes);
     for(const [explorer,observer] of observers)if(!explorers.has(explorer)){observer.disconnect();observers.delete(explorer);}
     for(const explorer of explorers){
@@ -74,5 +83,5 @@ export function installFolderIndicators(root:HTMLElement,getLinks:()=>FolderLink
     }
   };
   refresh();
-  return {refresh,dispose(){stopped=true;decorateTabs(new Map());for(const observer of observers.values())observer.disconnect();observers.clear();for(const title of Array.from(root.querySelectorAll<HTMLElement>('[data-t3-completion-glow]')))title.removeAttribute('data-t3-completion-glow');for(const title of Array.from(root.querySelectorAll<HTMLElement>('.nav-file-title-content[data-t3-active-title], .nav-folder-title-content[data-t3-active-title]')))setActiveTitle(title,false);for(const badge of Array.from(root.querySelectorAll('.'+LINKED_FOLDER_BADGE_CLASS+', .'+NOTE_INDICATOR_CLASS)))badge.remove();}};
+  return {refresh,dispose(){stopped=true;decorateTabs(new Map());for(const observer of observers.values())observer.disconnect();observers.clear();for(const current of ownedRoots)clearRoot(current);ownedRoots.clear();}};
 }

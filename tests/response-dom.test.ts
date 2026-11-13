@@ -17,7 +17,7 @@ test('token reconciliation preserves client animation phase and removes obsolete
   for(const [name,value] of [['data-t3-shine','true'],['data-t3-circle','true'],['style','--send-to-t3-shine-state: running;'],['title','old'],['data-old','old']])current.setAttribute(name,value);
   incoming.setAttribute('title','new');
   reconcileResponseDOM(current as any,incoming as any);
-  assert.equal(current.getAttribute('data-t3-shine'),'true');assert.equal(current.getAttribute('data-t3-circle'),'true');
+  assert.equal(current.getAttribute('data-t3-shine'),'true');assert.equal(current.hasAttribute('data-t3-circle'),false,'Legacy ring decoration is discarded');
   assert.equal(current.getAttribute('style'),'--send-to-t3-shine-state: running;');assert.equal(current.getAttribute('title'),'new');assert.equal(current.hasAttribute('data-old'),false);
   current.setAttribute('style','color: red; --send-to-t3-shine-state: running;');
   reconcileResponseDOM(current as any,incoming as any);assert.equal(current.hasAttribute('style'),false,'Unrelated rendered styles still reconcile');

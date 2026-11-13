@@ -498,8 +498,8 @@ export default class SendToT3 extends Plugin {
       const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file;if(this.stopped||this.busy||!file||file.extension.toLowerCase()!=='md')return false;
       if(!checking)void this.openImportStreams(file).catch(error=>new Notice(`T3 streams: ${message(error)}`,10000));return true;
     }});
-    const shineDocuments=new Map<Document,()=>void>();
-    const watchShine=(root:Document)=>{if(root.body&&!shineDocuments.has(root))shineDocuments.set(root,installActivityShine(root));};
+    const shineDocuments=new Map<Document,()=>void>(),indicatorRoots=new Set<HTMLElement>(document.body?[document.body]:[]);
+    const watchShine=(root:Document)=>{if(root.body&&!shineDocuments.has(root)){indicatorRoots.add(root.body);shineDocuments.set(root,installActivityShine(root));}};
     if(typeof Reflect.get(document,'querySelectorAll')==='function')this.register(watchWorkspaceDocuments(this.app,root=>{
       const presentation=installResponsePresentation(root,setIcon);watchShine(root);
       const controls=installStreamBlockControls(this.app,root,setIcon,error=>new Notice(`T3: ${message(error)}`,10000),()=>this.openSettings(),async(id,view)=>{
@@ -507,7 +507,8 @@ export default class SendToT3 extends Plugin {
         const hosted=this.deviceInline?.stoppableResponses(view.file.path).find(response=>response.id===id);
         await this.inlineChat!.stopAt(id,view.editor,view,hosted?.hostTarget);
       });
-      return ()=>{controls();presentation();shineDocuments.get(root)?.();shineDocuments.delete(root);};
+      this.folderIndicators?.refresh();
+      return ()=>{controls();presentation();shineDocuments.get(root)?.();shineDocuments.delete(root);indicatorRoots.delete(root.body);this.folderIndicators?.refresh();};
     }));
     this.register(()=>{for(const dispose of shineDocuments.values())dispose();shineDocuments.clear();});
     const questionStorage=`${this.localKey}-questions-${this.settings.vaultId}`;
@@ -589,7 +590,7 @@ export default class SendToT3 extends Plugin {
       this.paletteChat=installPaletteChat(this.app,(prompt,selection,showSelector,source)=>this.openPaletteAction(prompt,selection,showSelector,source),{pluginId:this.manifest.id,onError:error=>new Notice(`T3 Code: ${message(error)}`,10000),getDraft:()=>this.localDraft(),saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft),captureSource:()=>this.capturePaletteSource()});
       this.registerInterval(window.setInterval(()=>this.paletteChat?.reconcile(),2000));
       if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined'){
-        this.folderIndicators=installFolderIndicators(document.body,()=>this.settings.folderLinks,()=>{
+        this.folderIndicators=installFolderIndicators(()=>indicatorRoots,()=>this.settings.folderLinks,()=>{
           const responses=this.deviceInline?.explorerResponses()??[],known=new Set(responses.map(r=>r.id));
           const all=[...responses,...(this.inlineChat?.explorerResponses()??[]).filter(r=>!known.has(r.id))];
           const exists=(path:string)=>this.app.vault.getAbstractFileByPath(path) instanceof TFile;
@@ -616,7 +617,7 @@ export default class SendToT3 extends Plugin {
             settings?:{wrap?:boolean};
           }>}}).plugins?.plugins?.['mobile-tab-bar'];
           const mobileTabs=mobile?.tabs?.()??[];
-          decorateMobileActivityTabs(document,mobileTabs.map(activityLeafPath),mobileTabs.indexOf(mobile?.activeTab?.(mobileTabs) as typeof mobileTabs[number]),!!mobile?.settings?.wrap,notes);
+          for(const root of indicatorRoots)decorateMobileActivityTabs(root,mobileTabs.map(activityLeafPath),mobileTabs.indexOf(mobile?.activeTab?.(mobileTabs) as typeof mobileTabs[number]),!!mobile?.settings?.wrap,notes);
         });
         this.registerInterval(window.setInterval(()=>this.folderIndicators?.refresh(),1000));
         this.registerEvent(this.app.workspace.on('layout-change',()=>this.folderIndicators?.refresh()));
@@ -2602,6 +2603,7 @@ export default class SendToT3 extends Plugin {
     const state=jsonClone({pending,completionJobs,settlementJobs});
     this.app.saveLocalStorage(this.localKey,jsonClone({deviceId:this.deviceId,mode:this.mode,connectionMethod:this.connectionMethod,routeOrder:this.routeOrder,connection,pairedSessions:this.pairedSessions,cloudAccount:this.cloudAccount,nativeAccount:this.nativeAccount,signInEmail:this.signInEmail,signInExpired:this.signInExpired,vaultRegistrations:this.vaultRegistrations}));
     this.saving=this.saving.catch(()=>{}).then(async()=>{
+      if(!this.settings.autoSettleThreads){this.settings.settlementJobs=[];state.settlementJobs=[];}
       await deviceState(this.deviceId,state);
       if(!writeShared)return;
       const current=await this.loadSettings();
@@ -2629,6 +2631,7 @@ export default class SendToT3 extends Plugin {
       if(JSON.stringify(this.settings.noteThreads)===intendedThreads)this.settings.noteThreads=snapshot.noteThreads;
       const adopt=<K extends keyof SharedSettings>(key:K)=>{if(JSON.stringify(this.settings[key])===JSON.stringify(intended[key])){const target:SharedSettings=this.settings;target[key]=snapshot[key];}};
       for(const key of ['inlineStreaming','vaultHost','completion','threadTitleGeneration','autoSettleThreads','hideObsidianThreads','paired','vaultLocations','codebase','projectCreationLocations'] as const)adopt(key);
+      if(!this.settings.autoSettleThreads&&this.settings.settlementJobs.length){this.settings.settlementJobs=[];await this.saveDeviceState();}
       this.codebase?.adopt(this.settings.codebase);
       this.sharedBaseline=JSON.stringify(snapshot);
     });
