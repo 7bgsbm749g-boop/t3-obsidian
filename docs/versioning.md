@@ -12,23 +12,24 @@ files aligned for a release and preserve every published version.
 
 ## PRs and releases
 
-Ordinary development work ends in a reviewed commit and PR. Every PR needs a
-strictly newer unused `0.0.BUILD` aligned across all version files before merge,
-including documentation and workflow-only changes. Release work stays on GitHub
-after PR review. The local version allocator, queue, packaging, deployment and
-publication tools have been removed. This
-change adds no replacement release automation. See
-[Review and release checks](review-and-release.md).
+Ordinary development work ends in a reviewed commit and PR. PRs and merges to
+`main` do not require a new version, including product, documentation and
+workflow changes. Retain the existing manifest and package versions during
+ordinary work. No branch push assigns a version, creates a tag or publishes.
 
-The existing GitHub workflow validates PR versions. Every main push, including
-a merged PR, authorizes automatic publication: reserve the numeric tag for the
-exact source commit, dispatch its build, attest the assets, then publish. The
-workflow does not assign versions. It verifies the numeric tag against
-`manifest.json`, `package.json`, both package-lock version fields, and the
-`versions.json` compatibility entry before building and attesting assets.
-Feature-branch pushes do not publish. Developing agents stop at the PR; GitHub
-owns publication after merge. [release-policy.json](../release-policy.json) and
-`scripts/release_policy.py` remain inputs to this GitHub workflow.
+Only a GitHub release requires a new unused `0.0.BUILD`. When a release is
+explicitly requested, align `manifest.json`, `package.json`, both package-lock
+version fields and the `versions.json` compatibility entry, then tag the exact
+release commit with that version. Pushing that numeric tag starts GitHub's
+build, attestation and publication. The workflow checks that source and tag
+versions agree; it does not choose or bump versions. Dispatch at the same tag
+can retry a failed release without changing its source or assets.
+
+The local release queue and version allocator remain removed. Personal-vault
+delivery is separate and requires an explicit user request; no PR, main merge
+or GitHub release requires it. See [Review and release checks](review-and-release.md).
+[release-policy.json](../release-policy.json) and `scripts/release_policy.py`
+remain inputs to the GitHub release workflow.
 
 ## Historical records
 
