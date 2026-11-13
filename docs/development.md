@@ -68,12 +68,15 @@ an explicit refspec and tag following disabled, then open a PR against `main`
 Do not cherry-pick into a shared integration checkout or install into a real
 vault as a completion step. See [Review and release checks](review-and-release.md).
 
-The local release commands, queue, deployment workers and automatic reloads have
-been removed. Release work stays on GitHub after PR review. The existing GitHub
-PR check requires a newer aligned version before merge, including for docs and
-tooling. Main pushes reserve that version's numeric tag and dispatch the existing
-GitHub build, attestation, and publication workflow. Follow the
-[alpha policy](versioning.md). This change adds no GitHub release automation.
+PRs and main merges require validation, not a version bump. Keep the existing
+version until the user requests a GitHub release. Branch pushes do not create
+tags or publish. An explicitly pushed numeric release tag starts GitHub's build,
+attestation and publication workflow; dispatch at that same tag can retry it.
+Follow the [alpha policy](versioning.md).
+
+Personal-vault delivery runs only when the user explicitly asks to try changes.
+It is separate from PRs, merges, releases and agent validation. Use isolated
+test vaults for agent tests. The retired release queue and workers stay removed.
 
 ## References
 

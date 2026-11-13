@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import github_release as release
 
 
-class AutomaticPublicationTests(unittest.TestCase):
+class TaggedPublicationTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -35,33 +35,38 @@ class AutomaticPublicationTests(unittest.TestCase):
             {'name': name, 'digest': 'sha256:' + hashlib.sha256((self.root / path).read_bytes()).hexdigest()}
             for name, path in release.ASSETS.items()]}
 
-    def test_version_requires_alignment_and_an_increase_over_the_push_base(self):
+    def test_release_alignment_does_not_require_a_bump_over_the_push_base(self):
         with patch.dict(os.environ, {'T3_PREVIOUS_SHA': 'a' * 40}), patch.object(release, 'command') as command:
-            command.return_value = json.dumps({'version': '0.0.998'})
             self.assertEqual(release.version(), '0.0.999')
-            for previous in ['0.0.999', '0.0.1000']:
-                command.return_value = json.dumps({'version': previous})
-                with self.assertRaisesRegex(ValueError, 'requires a newer'):
-                    release.version()
+            command.assert_not_called()
             self.root.joinpath('package.json').write_text(json.dumps({'version': '0.0.998'}))
             with self.assertRaisesRegex(ValueError, 'Align'):
                 release.version()
 
-    def test_tag_collision_cannot_overwrite_or_dispatch_another_source(self):
-        with patch.object(release, 'tag_commit', return_value='b' * 40), patch.object(release, 'api') as api:
-            with self.assertRaisesRegex(ValueError, 'another commit'):
-                release.prepare('owner/repo', '0.0.999', 'a' * 40)
-            api.assert_not_called()
+    def test_publish_rejects_main_and_mismatched_tags_without_api_calls(self):
+        for ref in ['refs/heads/main', 'refs/tags/0.0.998']:
+            with self.subTest(ref=ref), patch.dict(os.environ, {
+                'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_SHA': 'a' * 40, 'GITHUB_REF': ref,
+            }), patch.object(sys, 'argv', ['github_release.py', 'publish']), patch.object(release, 'command', return_value='a' * 40), patch.object(release, 'api') as api:
+                with self.assertRaisesRegex(ValueError, 'event ref'):
+                    release.main()
+                api.assert_not_called()
 
-    def test_retry_after_failed_dispatch_reuses_only_its_exact_tag(self):
-        with patch.object(release, 'tag_commit', side_effect=[None, 'a' * 40]), patch.object(release, 'api') as api:
-            api.side_effect = [None, RuntimeError('dispatch interrupted'), None]
-            with self.assertRaisesRegex(RuntimeError, 'interrupted'):
-                release.prepare('owner/repo', '0.0.999', 'a' * 40)
-            release.prepare('owner/repo', '0.0.999', 'a' * 40)
-            calls = api.call_args_list
-            self.assertEqual(sum(call.args[0].endswith('/git/refs') for call in calls), 1)
-            self.assertEqual(calls[-1].kwargs['payload'], {'ref': '0.0.999'})
+    def test_publish_accepts_only_the_exact_tagged_checkout(self):
+        with patch.dict(os.environ, {
+            'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_SHA': 'a' * 40, 'GITHUB_REF': 'refs/tags/0.0.999',
+        }), patch.object(sys, 'argv', ['github_release.py', 'publish']), patch.object(release, 'command', return_value='a' * 40), patch.object(release, 'publish') as publish:
+            release.main()
+            publish.assert_called_once_with('owner/repo', '0.0.999', 'a' * 40)
+
+    def test_release_rejects_invalid_versions_and_missing_compatibility_entries(self):
+        self.root.joinpath('manifest.json').write_text(json.dumps({'version': 'unversioned', 'minAppVersion': '1.13.0'}))
+        with self.assertRaises(ValueError):
+            release.version()
+        self.root.joinpath('manifest.json').write_text(json.dumps({'version': '0.0.999', 'minAppVersion': '1.13.0'}))
+        self.root.joinpath('versions.json').write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'versions.json'):
+            release.version()
 
     def test_missing_resource_is_distinct_from_denied_access(self):
         with patch.object(release.subprocess, 'run') as run:
