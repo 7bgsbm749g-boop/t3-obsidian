@@ -30,3 +30,17 @@ T3 run. Its T3 renderer and summary algorithm come from upstream `t3code`
 `fdcf27211e5d8d42568b92a55024e7111b6620fe`; its plugin comparison uses the
 original 0.0.425 audit renderer, whose mixed-summary policy remains unchanged.
 The native replay uses these source-produced artifacts without redrawing them.
+
+## Review follow-up
+
+[Source outcomes and steering history](10-review-fixes.png) compares the reviewed
+`0abf2527830a32076ff0caaced87e8f8db2e5560` source with `ac04fd4e694f2b077b637a339efad2c06daf68d6`.
+Both use the same synthetic `tests/native/thought-stream-lab.ts` replay in
+Obsidian 1.15.0 at 1032 × 800. The cropped Live Preview pane shows unsuccessful
+source labels and the waiting status after steering. Both Live Preview and
+Reading were checked: the baseline reproduced the two display regressions, and
+the candidate passed all 18 checks, including opening retained History and
+keeping generated activity out of saved note text. Both fixture cleanups left
+no notes or temporary threads. Original captures and source identities remain
+in the external evidence store. The desktop-only fixture import guard has no
+visual change.
