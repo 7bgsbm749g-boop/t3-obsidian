@@ -1,6 +1,6 @@
 ---
 name: obsidian-t3
-description: "Edit Obsidian notes through the t3-obsidian MCP tools when a message sent from Obsidian asks for note changes. Use for creating, editing, moving, renaming or settling notes. A source footer alone does not request a note edit; normal conversation replies stream into Obsidian automatically."
+description: "Use for requested Obsidian note edits and for keeping Obsidian replies attached across automatic continuation turns. Register future streaming before an event-driven pause. A source footer alone does not request a note edit; the current conversation reply streams automatically."
 ---
 
 # Checked Obsidian note edits
@@ -8,7 +8,8 @@ description: "Edit Obsidian notes through the t3-obsidian MCP tools when a messa
 Use the `t3-obsidian` MCP tools for a requested note change. `Sent from Obsidian.`,
 `Vault:` and `Note:` identify the source. A source footer alone grants no editing
 permission. For an ordinary answer, reply in the current conversation: the plugin
-streams and saves it. Do not append another copy to the note.
+streams and saves the registered reply. Do not append another copy to the note.
+Do not assume that this registration covers a later turn.
 
 The MCP server runs on the T3 machine. The running Obsidian plugin receives its
 requests through authenticated T3 Connect and uses native editing APIs. Keep
@@ -26,6 +27,47 @@ For a request about a sent note or its reply, call `note_context` with `notePath
 or exact `threadId`, `messageId` and `environmentId`. The source note and reply
 destination can differ. Use the returned destination path and binding UUID; a
 thread ID is not a response binding.
+
+## Required streaming across continuation turns
+
+When work sent from Obsidian will resume in a later turn, you MUST ensure that
+the later replies stream into the same destination note(s) before yielding.
+This includes waiting for desktop control, a webhook or notification, checks,
+review, or another event that will resume work automatically. Setting the event
+notification alone does not register the reply stream. This is part of the
+existing work; do not ask the user to send the note again.
+
+1. Call `note_context` for the exact original send. Use `context.send.threadId`,
+   `projectId` and `environmentId`, and `context.destinations[].notePath`.
+   The source note can differ from the reply destination. Do not guess a path.
+2. Call `thread_streams` on the selected client. Reuse enabled, uncancelled
+   registrations for the exact source IDs that cover these destination paths
+   without removed destinations or unresolved errors. Do not create duplicates
+   or replace a registration that the user deliberately paused or cancelled.
+   Honor that choice and report it instead of enabling another follow.
+3. For destination paths not already covered, call `stream_thread` with those
+   IDs, `scope: "thread"`, the uncovered paths, `start: "future"`, and a stable
+   `requestId`. Confirm success and retain its `subscriptionId` with the
+   continuation context before ending the turn. It follows later replies
+   without sending another prompt or importing the old conversation.
+4. On the resumed turn, check that the registration still covers the intended
+   note(s). If it was never created and the continuation has already started,
+   use `start: "after"` with `afterMessageId: context.send.messageId` to catch
+   up after the original prompt. Existing response bindings are deduplicated.
+   Do not use `resume_thread_stream` for catch-up: it skips already started runs.
+
+Use the existing `destinationSection` heading when known. Otherwise, append to
+the same note through the normal stream insertion; exact placement directly
+below the previous reply is not required. Do not move saved replies or edit
+response boundaries to achieve adjacency.
+
+Keep the registration across waits and client restarts; do not add an expiry.
+If registration fails or the intended client is offline, retain the request ID,
+report that future streaming is unconfirmed, and recheck on continuation. Never
+claim the next reply is registered without a successful result. Do not change
+another thread's or device's registrations. Preserve user-owned follows; use
+`pause_thread_stream`, `cancel_thread_stream` or `remove_stream_destination`
+only for the intended registration when that change is authorized.
 
 ## Prepare and submit
 
