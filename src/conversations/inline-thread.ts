@@ -583,10 +583,12 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   // Keep command history in place as the live label changes. Moving the same
   // batch into and out of the activity row removes a row on every new call.
   const historyGroups=toolGroups;
-  const workRows=historyGroups.map(group=>({createdAt:group.createdAt,sequence:group.sequence??0,body:renderResponseToolGroup(group),hasThoughts:!!group.thoughts?.length}));
+  const workRows=historyGroups.map(group=>({groupId:group.id,createdAt:group.createdAt,sequence:group.sequence??0,body:renderResponseToolGroup(group),hasThoughts:!!group.thoughts?.length}));
   const historyRows=[...workRows,
     ...timelineEmissions.filter(item=>item!==currentEmission&&(mode==='collapse'||!['response.plan','response.proposed-plan'].includes(item.kind)))].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
-  const bottom=spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Sending',currentTool?.tool.icon,toolGroups.filter(group=>group.turnId===turnId).at(-1)?.id)}`:'';
+  const activityGroup=toolGroups.filter(group=>group.turnId===turnId).at(-1);
+  const renderBottom=(groupId?:string)=>spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Sending',currentTool?.tool.icon,groupId)}`:'';
+  const bottom=renderBottom(activityGroup?.id);
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
   const followupIndex=phase!=='complete'&&transcript?.preserveHistory?segments.reduce((last,segment,index)=>segment.role==='user'?index:last,-1):-1;
@@ -644,7 +646,11 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
       else if(piece.text.trim())history.push(growing(piece.messageId)?quoteStreamingResponse(piece.text):quoteResponse(closeOpenFence(piece.text.trim())));
     }
     toolsBefore();
-    if(bottom)history.push(bottom.trim());
+    // Completed folds become lazy history in native views. Only offer a group
+    // action when its target remains in this active segment's rendered body.
+    const currentHistoryGroup=workRows.find(row=>row.groupId===activityGroup?.id);
+    const activity=renderBottom(currentHistoryGroup&&history.includes(currentHistoryGroup.body)?activityGroup?.id:undefined);
+    if(activity)history.push(activity.trim());
     // A steering input starts its own measured continuation segment. Final
     // answer selection above keeps the existing exact response boundary.
     const fold=completedSegments.length?[...completedSegments,segmentFold(history,phase==='running'||phase==='sending'?undefined:timing?.finishedAt,true)].join('\n\n'):

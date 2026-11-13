@@ -7,6 +7,7 @@ import {elapsedRun,intermediateMode,runTimer,completionTime} from '../src/respon
 import {stoppedResponseBody} from '../src/responses/response-stop';
 import {followInlineQuestions,questionConversationInputs} from '../src/interaction/inline-questions';
 import type {InlineSteering} from '../src/conversations/inline-steering';
+import {presentToolGroups} from '../src/responses/response-tool-presentation';
 
 const timing={startedAt:'2026-10-02T10:00:00Z',finishedAt:'2026-10-02T10:03:17Z'};
 const state:InlineThreadState={title:'Bounded history',messages:[
@@ -353,4 +354,22 @@ test('timestamped steering creates measured continuation folds with the final ou
  const output=renderInlineTurn({...state,messages,latestTurn:{turnId:'turn',state:'completed',assistantMessageId:'f',completedAt:'2026-10-02T10:00:30Z'}},'turn','thread','complete','collapse','environment',conversation,undefined,undefined,{startedAt:timing.startedAt,finishedAt:'2026-10-02T10:00:30Z'});
  const failed=renderInlineTurn({...state,messages},'turn','thread','error','collapse','environment',conversation,undefined,undefined,{startedAt:timing.startedAt,finishedAt:'2026-10-02T10:00:30Z'});assert.match(failed,/· Error/);assert.doesNotMatch(failed,/Working for|inline-spinner/);
  const folds=foldsOf(output);assert.equal(folds.length,2);assert.match(folds[0],/Worked for/);assert.match(folds[0],/>12s<\/span>/);assert.match(folds[1],/Continued for/);assert.match(folds[1],/>18s<\/span>/);for(const fold of folds)assert.doesNotMatch(fold,/Final outside/);
+});
+
+test('steering does not offer an activity action into unloaded completed history',()=>{
+ const progress={id:'p',role:'assistant' as const,turnId:'turn',text:'Before steering',createdAt:'2026-10-02T10:00:05Z',streaming:false};
+ const live:InlineThreadState={messages:[progress],activities:[{id:'tool',kind:'tool.completed',turnId:'turn',summary:'Tool',createdAt:'2026-10-02T10:00:06Z',payload:{toolCallId:'tool',status:'completed',data:{toolName:'exec_command',command:'pwd'}}}],latestTurn:{turnId:'turn',state:'running'}};
+ const conversation={messages:live.messages,steering:[{messageId:'s',text:'Steer',confirmed:true,createdAt:'2026-10-02T10:00:12Z',before:[progress]}]};
+ const renderLive=(steering=conversation.steering)=>renderInlineTurn(live,'turn','thread','running','collapse','environment',{messages:live.messages,steering},undefined,undefined,{startedAt:timing.startedAt});
+ assert.match(renderLive([]),/data-t3-open-tool-group/);
+ const waiting=renderLive(),presented=presentToolGroups(waiting).display;
+ assert.equal(foldsOf(waiting).length,2);
+ assert.match(presented,/send-to-t3-response-history/);
+ assert.match(presented,/send-to-t3-response-activity" role="status"/);
+ assert.doesNotMatch(presented,/data-t3-open-tool-group/);
+ live.messages.push({...progress,id:'continued',text:'Continuing',createdAt:'2026-10-02T10:00:13Z'});
+ live.activities.push({...live.activities[0],id:'new-tool',createdAt:'2026-10-02T10:00:14Z',payload:{toolCallId:'new-tool',status:'inProgress',data:{toolName:'exec_command',command:'ls'}}});
+ const resumed=presentToolGroups(renderLive()).display;
+ assert.match(resumed,/data-t3-open-tool-group/);
+ assert.match(resumed,/data-t3-tool-group="[^"]*new-tool/);
 });
