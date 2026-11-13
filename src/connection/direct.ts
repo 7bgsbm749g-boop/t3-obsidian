@@ -136,7 +136,7 @@ export async function readDirect(c:Connection,args:string[],s?:PairedSession,fet
  if(args[0]==='no-project'&&args.length===1)return await ensureNoProject(access.api);
  if(args[0]==='projects'&&args.length===1)return {projects:readWireProjects(await api('shell'))};
  if(args[0]==='threads'&&args[1]==='--project'&&args.length===3)return {threads:readThreadList(await api('shell')).filter(t=>t.projectId===args[2])};
- if(args[0]==='read'&&args.length===2)return readMetadataSnapshot(await api('threads/'+encodeURIComponent(args[1])+(options.control?'?controlOnly=true':'?turnLimit=10'))).thread;
+ if(args[0]==='read'&&args.length===2)return readMetadataSnapshot(await api('threads/'+encodeURIComponent(args[1])+(options.control?'?stateOnly=true':'?turnLimit=10'))).thread;
  throw Error('Unsupported direct T3 operation.');
  }catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403))access.invalidate();throw error;}
 }
@@ -152,7 +152,7 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
  if(r.directPlan&&(r.directPlan.hash!==hash||r.directPlan.environmentId!==r.connection.environmentId))throw Error('Saved request no longer matches its original content or environment.');
  if(!r.directPlan){
   if(r.threadId){
-   const thread=readMetadataSnapshot(await api('threads/'+encodeURIComponent(r.threadId)+'?controlOnly=true')).thread;
+   const thread=readMetadataSnapshot(await api('threads/'+encodeURIComponent(r.threadId)+'?stateOnly=true')).thread;
    const turn=existingThreadTurn(thread,{threadId:r.threadId,projectId:r.project.id},commandId(r.id,'turn'),{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})});
    r.directPlan={protocolVersion:2,hash,environmentId:r.connection.environmentId!,phase:'created',create:null,turn,...(thread.session?.status==='running'&&thread.session.activeTurnId?{observedActiveTurnId:thread.session.activeTurnId}:{})};
   }else{
