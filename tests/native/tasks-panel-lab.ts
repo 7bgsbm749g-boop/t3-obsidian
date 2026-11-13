@@ -1,10 +1,11 @@
 import {readThreadEvent} from '../../src/connection/thread-events';
-import {Plugin,MarkdownView,setIcon} from 'obsidian';
+import {Plugin,MarkdownView,MarkdownRenderer,MarkdownRenderChild,setIcon} from 'obsidian';
 import {DirectInlinePreview} from '../../src/responses/direct-inline-preview';
 import {nativeResponses} from '../../src/responses/native-response-manager';
 import {responseAnchor} from '../../src/responses/native-response-projection';
 import {hiddenInlineMarkerExtension} from '../../src/conversations/inline-markers';
 import {installResponsePresentation} from '../../src/responses/response-presentation';
+import {mountToolGroups} from '../../src/responses/response-tool-presentation';
 import {contentHash} from '../../src/responses/completion';
 import type {ResponseRecord} from '../../src/responses/response-record';
 import type {ThreadStreamCallbacks,watchThread} from '../../src/conversations/thread-stream';
@@ -20,6 +21,21 @@ export default class TasksPanelLab extends Plugin {
     if(!fs.existsSync(path.join(this.root,'ISOLATED-NATIVE-LAB')))throw Error('An isolated fixture vault is required.');
     this.registerEditorExtension(hiddenInlineMarkerExtension());this.register(installResponsePresentation(document,setIcon));
     require('@electron/remote').getCurrentWebContents().setBackgroundThrottling(false);
+    const mounted=new WeakMap<HTMLDetailsElement,string>();
+    this.registerDomEvent(document,'toggle' as any,(event:Event)=>{
+      const details=event.target as HTMLDetailsElement;
+      if(!details?.matches?.('details[data-t3-tool-ref]')||!details.open)return;
+      const ref=details.getAttribute('data-t3-tool-ref')!;if(mounted.get(details)===ref)return;mounted.set(details,ref);
+      const child=new MarkdownRenderChild(details);this.addChild(child);
+      child.register(mountToolGroups(details,value=>nativeResponses(this.app).toolGroup(details,value),(html,target)=>MarkdownRenderer.render(this.app,details.classList.contains('send-to-t3-response-history')?nativeResponses(this.app).renderToolBody(details,html):html,target,this.app.workspace.getActiveFile()?.path??'',child),error=>this.write('lazy-error.json',{message:String(error)})));
+    },true);
+    // The product opens the retained History shell when its native callout opens.
+    const openHistories=()=>{
+      for(const details of Array.from(document.querySelectorAll<HTMLDetailsElement>('details.send-to-t3-response-history[data-t3-tool-ref]:not([open])'))){
+        const fold=details.closest('.callout[data-callout="t3-progress"]');if(fold&&!fold.classList.contains('is-collapsed'))details.open=true;
+      }
+    };
+    const historyObserver=new MutationObserver(openHistories);historyObserver.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});this.register(()=>historyObserver.disconnect());
     const {EditorState}=require('@codemirror/state');this.registerEditorExtension(EditorState.transactionFilter.of((tr:any)=>nativeResponses(this.app).filter(tr)));
     this.app.workspace.onLayoutReady(()=>void this.run().catch(error=>this.write('error.json',{message:String(error),stack:error.stack})).finally(()=>this.cleanup()));
   }
@@ -46,16 +62,16 @@ export default class TasksPanelLab extends Plugin {
     const event=(type:string,payload:any)=>callbacks.item({kind:'event',event:readThreadEvent({sequence:++sequence,aggregateId:'fixture-thread',type,payload})});
     const plan=(id:string,steps:any[],text?:string)=>event('v2.turn-item.updated',{id,runId:'turn',type:'todo_list',ordinal:1,steps,text,startedAt:at(sequence),updatedAt:at(sequence)});
     const fold=(leaf:any)=>leaf.view.containerEl.querySelector('.callout[data-callout="t3-progress"]') as HTMLElement|null;
-    const panel=(leaf:any)=>fold(leaf)?.querySelector<HTMLDetailsElement>('.send-to-t3-tasks');
+    const panel=(leaf:any)=>Array.from(fold(leaf)?.querySelectorAll<HTMLDetailsElement>('.send-to-t3-tasks')??[]).at(-1);
     const rows:Array<{name:string;pass:boolean}>=[],check=(name:string,pass:boolean)=>rows.push({name,pass});
-    plan('plan',[{step:'Read the request',status:'completed'},{step:'Check Tasks display',status:'in_progress'},{step:'Publish the change',status:'pending'}]);
+    plan('plan',[{step:'Read the request',status:'completed'},{step:'Check Tasks display',status:'running'},{step:'Publish the change',status:'pending'}]);
     await until(()=>leaves.every(leaf=>!!panel(leaf)?.querySelector('.lucide-list-checks')));
     check('Tasks has a visible gray list icon in both native views',leaves.every(leaf=>{
       const summary=panel(leaf)?.querySelector('summary'),icon=summary?.querySelector('svg');if(!summary||!icon)return false;
       const color=getComputedStyle(summary).color,parts=color.match(/\d+/g);
       return !!parts&&parts[0]===parts[1]&&parts[1]===parts[2]&&getComputedStyle(icon).color===color&&icon.getBoundingClientRect().width>0;
     }));
-    check('Tasks is the first history item at its original depth',leaves.every(leaf=>fold(leaf)?.querySelector(':scope > .callout-content')?.firstElementChild===panel(leaf)));
+    check('Tasks follows its initial input at timeline depth',leaves.every(leaf=>{const text=fold(leaf)?.textContent??'';return text.indexOf('Synthetic task input')<text.indexOf('Read the request');}));
     check('the label is Tasks and starts closed',leaves.every(leaf=>panel(leaf)?.querySelector('summary')?.textContent?.trim()==='Tasks'&&!panel(leaf)?.open));
     await this.capture('tasks-closed.png');
     for(const leaf of leaves)panel(leaf)?.querySelector<HTMLElement>('summary')?.click();
@@ -74,20 +90,22 @@ export default class TasksPanelLab extends Plugin {
     event('v2.turn-item.updated',{id:'tool',runId:'turn',type:'command_execution',ordinal:2,status:'completed',command:'pwd',input:'pwd',output:'Synthetic result',startedAt:at(11),updatedAt:at(11)});
     await until(()=>leaves.every(leaf=>fold(leaf)?.textContent?.includes('Checking task behavior.')));
     check('unrelated commentary and tool updates preserve task expansion and icon',leaves.every(leaf=>panel(leaf)?.open&&!!panel(leaf)?.querySelector('.lucide-list-checks')));
-    plan('plan',[{step:'Read the request',status:'completed'},{step:'Check Tasks display',status:'completed'},{step:'Publish the change',status:'in_progress'}]);
+    plan('plan',[{step:'Read the request',status:'completed'},{step:'Check Tasks display',status:'completed'},{step:'Publish the change',status:'running'}]);
     await until(()=>leaves.every(leaf=>panel(leaf)?.querySelectorAll('[data-t3-task-state="completed"]').length===2));
     check('task status updates retain expansion and icon',leaves.every(leaf=>panel(leaf)?.open&&!!panel(leaf)?.querySelector('.lucide-list-checks')&&panel(leaf)?.querySelectorAll('[data-t3-task-state="completed"]').length===2));
     panel(first)?.querySelector<HTMLElement>('summary')?.click();
     plan('replacement',[], '- [x] Read the request\n- [/] Verify Markdown slash\n- [ ] Publish the change');
     await until(()=>leaves.every(leaf=>panel(leaf)?.textContent?.includes('Verify Markdown slash')));
-    check('new plan IDs and Markdown slash preserve each pane choice with one latest list',!panel(first)?.open&&!!panel(second)?.open&&leaves.every(leaf=>fold(leaf)?.querySelectorAll('.send-to-t3-tasks').length===1&&panel(leaf)?.querySelectorAll('[data-t3-task-state="in_progress"]').length===1));
-    panel(first)?.querySelector<HTMLElement>('summary')?.click();
+    check('distinct task IDs keep two timeline lists and a new closed choice',leaves.every(leaf=>!panel(leaf)?.open&&fold(leaf)?.querySelectorAll('.send-to-t3-tasks').length===2&&panel(leaf)?.querySelectorAll('[data-t3-task-state="in_progress"]').length===1));
+    for(const leaf of leaves)panel(leaf)?.querySelector<HTMLElement>('summary')?.click();
+    await until(()=>leaves.every(leaf=>!!panel(leaf)?.open));await pause(150);
     await this.capture('tasks-updated.png');
     check('generated Tasks never changes saved note text',leaves.every(leaf=>(leaf.view as MarkdownView).getViewData()===saved)&&await app.vault.read(file)===saved);
     event('thread.message-sent',{messageId:'final',role:'assistant',text:'Task display verified.',turnId:'turn',createdAt:at(20),streaming:false});event('thread.session-set',{session:{status:'ready',activeTurnId:null}});
     await until(()=>leaves.every(leaf=>fold(leaf)?.classList.contains('is-collapsed')));
     for(const leaf of leaves)fold(leaf)?.querySelector<HTMLElement>(':scope > .callout-title')?.click();
     await until(()=>leaves.every(leaf=>!fold(leaf)?.classList.contains('is-collapsed')));
+    await until(()=>leaves.every(leaf=>!!panel(leaf)?.open&&!!panel(leaf)?.querySelector('.lucide-list-checks')));
     check('task expansion survives completion and reopening history',leaves.every(leaf=>panel(leaf)?.open&&!!panel(leaf)?.querySelector('.lucide-list-checks')));
     this.write('TASKS-DOM.json',{body:lastBody,modes:leaves.map(leaf=>(leaf.view as MarkdownView).getMode()),folds:leaves.map(leaf=>fold(leaf)?.outerHTML)});
     await this.capture('tasks-complete.png');

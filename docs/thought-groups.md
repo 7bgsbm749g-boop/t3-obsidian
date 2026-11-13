@@ -2,8 +2,8 @@
 
 Public reasoning summaries and tool calls now share one default-closed activity
 batch. Expanding it shows each Thought and each tool call at the same depth,
-in chronological order. A summary such as `Ran 2 commands · 3 thoughts` replaces
-the alternating top-level Thought and tool dropdowns.
+in chronological order. A summary such as `Ran 2 commands · Thought (×3)` replaces
+the alternating top-level Thought and tool groups. Tool calls are flat rows with no output or detail dropdown; thought content can still expand.
 
 Assistant commentary, user input, plans, notices, context compaction, HTML
 results and run changes end a batch. Canonical ordinals resolve tied timestamps.
@@ -26,11 +26,10 @@ Regression tests cover alternating entries, stable identity, streamed summary
 replacement, tied timestamps, public-content boundaries, final-answer placement,
 Stop and exact restoration of formatted thought and tool content.
 
-Run the native replay in a new directory under this project's ignored
-`evidence/` directory:
+Run the native replay in a new directory under the external project evidence root:
 
 ```sh
-node scripts/build-native-response-lab.mjs evidence/NEW-TASK/native-1 --thoughts
+node scripts/build-native-response-lab.mjs /ABS/EXTERNAL-EVIDENCE/native-1 --design-parity
 ```
 
 The isolated replay checks Live Preview and Reading view in a real VPS desktop
@@ -44,3 +43,20 @@ Native replay `evidence/thought-tool-batches/native-4` passed all ten checks.
 Its `BUILD-SOURCE.json` matches the checked runtime inputs, and `CLEANUP.json`
 records no remaining notes or temporary threads. Open batches refresh their lazy
 content when its reference changes; unchanged references retain loaded details.
+
+A single thought uses `Thought`; multiple thoughts use `Thought (×N)`, where N
+is the total. Mixed groups continue to include thoughts and every action kind.
+The live row shows a heading or first sentence from public reasoning and opens
+its activity group. Individual rows use their public summary as the label.
+Short summaries have no expansion control. Longer traces show a one-line heading
+or first-sentence preview and expand to the full formatted public text. Each pane
+keeps its expansion choice as summaries stream. No hidden reasoning is used.
+
+Public plan-mode proposals retain their v2 Markdown in a separate Plan card.
+Short plans show in full; long plans offer a preview and expansion. Task lists
+remain separate timeline items, and final-only history preferences retain plans.
+
+The design-parity replay reads baseline comparison artifacts from its parent
+evidence directory: `t3-summary.json`, `t3-worklog.css`, and `baseline-group.html`.
+These are source replay inputs, not fabricated screenshots. It also checks task
+order, compaction, continuation folds, approvals and question navigation.

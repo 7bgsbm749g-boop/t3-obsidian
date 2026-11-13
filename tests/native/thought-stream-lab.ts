@@ -15,7 +15,7 @@ const until=async(check:()=>boolean)=>{const end=Date.now()+5000;while(!check()&
 
 /** Public-summary replay in a real, unsynced editor. No T3 work is dispatched. */
 export default class ThoughtStreamLab extends Plugin {
-  private root='';private preview?:DirectInlinePreview;
+  private root='';private preview?:DirectInlinePreview;private scenes:Record<string,unknown>={};
   async onload(){
     this.root=path.dirname((this.app.vault.adapter as any).getFullPath(''));
     if(!fs.existsSync(path.join(this.root,'ISOLATED-NATIVE-LAB')))throw Error('An isolated fixture vault is required.');
@@ -33,7 +33,12 @@ export default class ThoughtStreamLab extends Plugin {
     this.app.workspace.onLayoutReady(()=>void this.run().catch(error=>this.write('error.json',{message:String(error),stack:error.stack})).finally(()=>this.cleanup()));
   }
   private write(name:string,data:any){fs.writeFileSync(path.join(this.root,name),JSON.stringify(data,null,2));}
-  private async capture(name:string){const image=await require('@electron/remote').getCurrentWebContents().capturePage();fs.writeFileSync(path.join(this.root,name),image.toPNG());}
+  private async capture(name:string){
+    const regions:Record<string,unknown>={};
+    for(const [key,selector] of Object.entries({source:'.send-to-t3-tool[data-t3-tool-id^="source-"]',activity:'.send-to-t3-response-activity',work:'.callout[data-callout="t3-progress"]',history:'.send-to-t3-response-history'}))regions[key]=Array.from(document.querySelectorAll(selector)).map(element=>{const r=element.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};}).filter(r=>r.width>0&&r.height>0);
+    this.scenes[name]={viewport:{width:innerWidth,height:innerHeight},regions};this.write('SCENES.json',this.scenes);
+    const image=await require('@electron/remote').getCurrentWebContents().capturePage();fs.writeFileSync(path.join(this.root,name),image.toPNG());
+  }
   private async cleanup(){
     this.preview?.dispose();nativeResponses(this.app).dispose();
     for(const name of ['Thoughts.md','Reference.md','Virtual.md']){const file=this.app.vault.getAbstractFileByPath(name);if(file)await this.app.vault.delete(file);}
@@ -60,15 +65,18 @@ export default class ThoughtStreamLab extends Plugin {
     const thoughts=(leaf:any)=>Array.from(batch(leaf)?.querySelectorAll<HTMLDetailsElement>('.send-to-t3-thought')??[]);
     const rows:Array<{name:string;pass:boolean}>=[],check=(name:string,pass:boolean)=>rows.push({name,pass});
     const command=(id:string,ordinal:number,status='completed')=>event('v2.turn-item.updated',{id,runId:'turn',type:'command_execution',ordinal,status,input:'pwd',command:'pwd',output:'Synthetic exact result',startedAt:at(ordinal),updatedAt:at(ordinal)});
-    thinking('one',1,'**Check the request**');command('command-one',2);thinking('two',3,'**Check the result**',true);
-    await until(()=>leaves.every(leaf=>batch(leaf)?.querySelector(':scope > summary')?.textContent?.includes('Ran 1 command · 2 thoughts')));
-    check('alternating thoughts and tools share one closed batch in both views',leaves.every(leaf=>groups(leaf).length===1&&!batch(leaf)?.open&&batch(leaf)?.querySelector(':scope > summary')?.textContent?.includes('Ran 1 command · 2 thoughts')===true));
+    thinking('one',1,'**Check the request**\n\nRead the public request before proceeding.');command('command-one',2);thinking('two',3,'**Check the result**',true);
+    await until(()=>leaves.every(leaf=>batch(leaf)?.querySelector(':scope > summary')?.textContent?.includes('Ran 1 command · Thought (×2)')));
+    check('alternating thoughts and tools share one closed batch in both views',leaves.every(leaf=>groups(leaf).length===1&&!batch(leaf)?.open&&batch(leaf)?.querySelector(':scope > summary')?.textContent?.includes('Ran 1 command · Thought (×2)')===true));
     check('standalone thought callouts are absent',leaves.every(leaf=>!fold(leaf)?.querySelector('.callout[data-callout="t3-thought"]')));
     for(const leaf of leaves)batch(leaf)?.scrollIntoView({block:'center'});await this.capture('batch-closed.png');
-    for(const leaf of leaves)batch(leaf)?.querySelector<HTMLElement>(':scope > summary')?.click();
+    for(const leaf of leaves)fold(leaf)?.querySelector<HTMLButtonElement>('button[data-t3-open-tool-group]')?.click();
     await until(()=>leaves.every(leaf=>thoughts(leaf).length===2));
+    check('live public preview opens its batch in Live Preview and Reading',leaves.every(leaf=>!!batch(leaf)?.open&&fold(leaf)?.querySelector('button[data-t3-open-tool-group]')?.textContent?.includes('Check the result')===true));
     check('thoughts and tools are direct peers in chronological order',leaves.every(leaf=>Array.from(batch(leaf)?.querySelector('.send-to-t3-tool-group-content')?.children??[]).map(el=>el.className).join(',')==='send-to-t3-thought,send-to-t3-tool,send-to-t3-thought'));
     await until(()=>leaves.every(leaf=>thoughts(leaf).length===2&&thoughts(leaf).every(thought=>!!thought.querySelector('.send-to-t3-thought-time')?.textContent?.trim()&&!!thought.querySelector('.lucide-brain'))));
+    check('short summaries are labelled rows without expansion',leaves.every(leaf=>thoughts(leaf)[1]?.tagName==='DIV'&&thoughts(leaf)[1]?.textContent?.includes('Check the result')===true&&!thoughts(leaf)[1]?.querySelector('summary')));
+    check('long public traces expose their summary before expansion',leaves.every(leaf=>thoughts(leaf)[0]?.tagName==='DETAILS'&&thoughts(leaf)[0]?.querySelector('summary')?.textContent?.includes('Check the request')===true));
     check('thought timestamps and brain icons render',leaves.every(leaf=>thoughts(leaf).length===2&&thoughts(leaf).every(thought=>!!thought.querySelector('.send-to-t3-thought-time')?.textContent?.trim()&&!!thought.querySelector('.lucide-brain'))));
     for(const leaf of leaves)thoughts(leaf)[0]?.querySelector<HTMLElement>(':scope > summary')?.click();
     await until(()=>leaves.every(leaf=>thoughts(leaf)[0]?.open));
@@ -80,23 +88,35 @@ export default class ThoughtStreamLab extends Plugin {
     check('batch and nested thought choices survive streamed replacement',leaves.every(leaf=>batch(leaf)?.open&&thoughts(leaf)[0]?.open&&batch(leaf)?.getAttribute('data-t3-tool-group')===identity&&batch(leaf)?.textContent?.includes('Updated public summary.')));
     batch(first)?.querySelector<HTMLElement>(':scope > summary')?.click();
     command('command-two',4);thinking('three',5,'A third public summary.');
-    await until(()=>leaves.every(leaf=>batch(leaf)?.querySelector(':scope > summary')?.textContent?.includes('Ran 2 commands · 3 thoughts')));
+    await until(()=>leaves.every(leaf=>batch(leaf)?.querySelector(':scope > summary')?.textContent?.includes('Ran 2 commands · Thought (×3)')));
     check('each pane keeps its own fold choice as the mixed batch grows',!batch(first)?.open&&!!batch(second)?.open&&leaves.every(leaf=>groups(leaf).length===1&&batch(leaf)?.getAttribute('data-t3-tool-group')===identity));
     command('command-two',4,'failed');
     for(const leaf of leaves)if(!batch(leaf)?.open)batch(leaf)?.querySelector<HTMLElement>(':scope > summary')?.click();
-    const failedCommand=(leaf:any)=>batch(leaf)?.querySelector<HTMLDetailsElement>('[data-t3-tool-status="failed"]');
+    const failedCommand=(leaf:any)=>batch(leaf)?.querySelector<HTMLElement>('[data-t3-tool-status="failed"]');
     await until(()=>leaves.every(leaf=>failedCommand(leaf)));
-    check('failed commands keep counts and thoughts without a failure count in the batch summary',leaves.every(leaf=>batch(leaf)?.querySelector(':scope > summary')?.textContent?.trim()==='Ran 2 commands · 3 thoughts'));
-    for(const leaf of leaves)failedCommand(leaf)?.querySelector<HTMLElement>(':scope > summary')?.click();
-    await until(()=>leaves.every(leaf=>failedCommand(leaf)?.open));
-    check('expanded batches retain individual command failures and output',leaves.every(leaf=>failedCommand(leaf)?.open&&failedCommand(leaf)?.textContent?.includes('Failed pwd')&&failedCommand(leaf)?.textContent?.includes('Synthetic exact result')));
+    check('failed commands keep counts and thoughts without a failure count in the batch summary',leaves.every(leaf=>batch(leaf)?.querySelector(':scope > summary')?.textContent?.trim()==='Ran 2 commands · Thought (×3)'));
+    check('command failures are flat labels without output',leaves.every(leaf=>failedCommand(leaf)?.tagName==='DIV'&&!failedCommand(leaf)?.querySelector('summary,pre')&&failedCommand(leaf)?.textContent?.includes('Failed pwd')&&!failedCommand(leaf)?.textContent?.includes('Synthetic exact result')));
     await this.capture('batch-failed-command.png');
+    for(const [index,status] of ['failed','declined','stopped'].entries())event('thread.activity-appended',{activity:{id:'source-'+status,kind:'tool.completed',turnId:'turn',summary:'Tool',createdAt:at(5+index/10),payload:{toolCallId:'source-'+status,status,data:{toolName:'mcp__calendar__list_events',toolSource:{name:'Calendar'}}}}});
+    await until(()=>leaves.every(leaf=>batch(leaf)?.querySelectorAll('.send-to-t3-tool').length===5));
+    check('source tools preserve failed, declined and stopped labels in both native views',leaves.every(leaf=>['Failed to use','Declined to use','Stopped using'].every(verb=>batch(leaf)?.textContent?.includes(verb+' Calendar · list events'))));
+    await this.capture('source-outcomes.png');
     check('generated activity does not enter saved note text',leaves.every(leaf=>(leaf.view as MarkdownView).getViewData()===saved)&&await app.vault.read(file)===saved);
     event('thread.message-sent',{messageId:'commentary',role:'assistant',text:'A commentary boundary.',turnId:'turn',createdAt:at(6),streaming:false});
     thinking('four',7,'A separate public thought.');await until(()=>leaves.every(leaf=>groups(leaf).length===2));
     check('commentary starts a new activity batch',leaves.every(leaf=>groups(leaf).length===2));
     this.write('THOUGHT-DOM.json',{body:lastBody,modes:leaves.map(leaf=>(leaf.view as MarkdownView).getMode()),folds:leaves.map(leaf=>fold(leaf)?.outerHTML)});
-    event('thread.message-sent',{messageId:'final',role:'assistant',text:'Final answer outside thoughts.',turnId:'turn',createdAt:at(8),streaming:false});event('thread.session-set',{session:{status:'ready',activeTurnId:null}});await until(()=>leaves.every(leaf=>fold(leaf)?.classList.contains('is-collapsed')));
+    record.state={requestHash:contentHash('synthetic'),accepted:true,notePath:file.path,status:'running',hashes:[],updatedAt:at(8),...record.state,steering:[{messageId:'steer',text:'Continue the synthetic check.',before:this.preview.steeringProse(),confirmed:true,createdAt:at(8)}]};
+    event('thread.message-sent',{messageId:'steer',role:'user',text:'Continue the synthetic check.',turnId:'turn',createdAt:at(8),streaming:false});
+    const workFolds=(leaf:any)=>Array.from(leaf.view.containerEl.querySelectorAll('.callout[data-callout="t3-progress"]')) as HTMLElement[];
+    await until(()=>leaves.every(leaf=>workFolds(leaf).length===2));
+    check('steering waits with a status rather than an action into unloaded history',leaves.every(leaf=>workFolds(leaf).length===2&&!!workFolds(leaf)[0].querySelector('details.send-to-t3-response-history')&&!workFolds(leaf)[1].querySelector('button[data-t3-open-tool-group]')&&!!workFolds(leaf)[1].querySelector('.send-to-t3-response-activity[role="status"]')));
+    await this.capture('steering-waiting.png');
+    for(const leaf of leaves){const previous=workFolds(leaf)[0];if(previous.classList.contains('is-collapsed'))previous.querySelector<HTMLElement>(':scope > .callout-title')?.click();const history=previous.querySelector<HTMLDetailsElement>('details.send-to-t3-response-history');if(history)history.open=true;}
+    await until(()=>leaves.every(leaf=>workFolds(leaf)[0].querySelector('details.send-to-t3-response-history .send-to-t3-tool-group')));
+    check('the previous segment still opens its retained history',leaves.every(leaf=>!!workFolds(leaf)[0].querySelector('details.send-to-t3-response-history .send-to-t3-tool-group')));
+    for(const leaf of leaves){const previous=workFolds(leaf)[0];if(!previous.classList.contains('is-collapsed'))previous.querySelector<HTMLElement>(':scope > .callout-title')?.click();}
+    event('thread.message-sent',{messageId:'final',role:'assistant',text:'Final answer outside thoughts.',turnId:'turn',createdAt:at(9),streaming:false});event('thread.session-set',{session:{status:'ready',activeTurnId:null}});await until(()=>leaves.every(leaf=>workFolds(leaf).every(item=>item.classList.contains('is-collapsed'))));
     check('completion leaves the final answer outside closed history',leaves.every(leaf=>fold(leaf)?.classList.contains('is-collapsed')&&!fold(leaf)?.textContent?.includes('Final answer outside thoughts.'))&&lastBody.includes('\n\n> Final answer outside thoughts.'));
     this.write('RESULT.json',{pass:rows.every(row=>row.pass),rows,temporaryThreads:[],coverage:['VPS desktop Live Preview','VPS desktop Reading'],nativeMobileTested:false});
   }

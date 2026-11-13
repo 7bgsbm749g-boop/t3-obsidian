@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {commandProgram,responseTools,renderResponseTool,responseToolGroups,currentResponseToolGroup,summarizeResponseTools} from '../src/responses/response-tools';
-import {responseActivityLabel} from '../src/responses/response-activity';
+import {renderResponseToolGroup,commandProgram,responseTools,renderResponseTool,responseToolGroups,currentResponseToolGroup,summarizeResponseTools} from '../src/responses/response-tools';
+import {liveThoughtLine,responseActivityRow,responseActivityLabel} from '../src/responses/response-activity';
 import {stoppedResponseBody} from '../src/responses/response-stop';
 import {renderInlineTurn,type InlineThreadState,type InlineActivity} from '../src/conversations/inline-thread';
 const a=(id:string,sequence:number,kind:string,payload:any):InlineActivity=>({id,turnId:'turn',sequence,kind,summary:'Tool',createdAt:new Date(sequence*1000).toISOString(),payload});
@@ -9,28 +9,28 @@ test('Windows tool output stays inside one HTML line without losing visible line
  const state={messages:[],activities:[a('windows',1,'tool.completed',{toolCallId:'windows',status:'completed',data:{toolName:'exec_command',command:'ssh laptop',output:'first\r\n** second\rthird <script>'}})]};
  const tool=responseTools(state,['turn'])[0],body=renderResponseTool(tool);
  assert.equal(tool.output,'first\r\n** second\rthird <script>');
- assert.doesNotMatch(body,/[\r\n]/);assert.match(body,/first&#10;\*\* second&#10;third &lt;script&gt;/);
+ assert.doesNotMatch(body,/[\r\n]/);assert.doesNotMatch(body,/<details|<summary|first|script|tool-output/);
 });
 test('v2 web search and T3 thread reads use specific labels with neutral live text',()=>{
   const state={messages:[],activities:[a('search',1,'tool.updated',{toolCallId:'search',itemType:'web_search',data:{toolName:'web_search',input:'{"query":"Obsidian docs"}'}}),
     a('read',2,'tool.updated',{toolCallId:'read',itemType:'dynamic_tool',data:{toolName:'t3-code.t3_thread_read',input:"{'threadId': 'bc4a870c-6287-59c1-8d17-861e7a9cb050'}"}})]};
-  const tools=responseTools(state,['turn']);assert.equal(tools[0].label,'Searching “Obsidian docs”');assert.equal(tools[0].action,'search');assert.equal(tools[1].label,'Reading thread bc4a870c');assert.equal(tools[1].icon,'messages-square');
+  const tools=responseTools(state,['turn']);assert.equal(tools[0].label,'Searching “Obsidian docs”');assert.equal(tools[0].action,'search');assert.equal(tools[1].label,'Reading a T3 thread');assert.equal(tools[1].icon,'messages-square');
   const data=state.activities[0].payload!.data;assert.ok(data&&typeof data==='object'&&'input' in data);data.input='';assert.equal(responseTools(state,['turn'])[0].label,'Searching web');
   const live=renderInlineTurn(state,'turn','thread','running','collapse');assert.doesNotMatch(live,/<strong>Reading thread/);
 });
 test('shell labels match the program while details retain the exact command',()=>{
   const command="/bin/bash -lc 'npm test > /tmp/test.log 2>&1'";assert.equal(commandProgram(command),'npm');assert.equal(commandProgram('cd /tmp && python3 check.py'),'python3');
   const [tool]=responseTools({messages:[],activities:[a('start',1,'tool.started',{toolCallId:'cmd',data:{item:{command,cwd:'/tmp/work'},files:[{path:'/tmp/test.txt'}]}})]},['turn']);
-  assert.equal(tool.label,'Running npm');assert.equal(tool.command,command);assert.match(renderResponseTool(tool),/Directory: <code>\/tmp\/work<\/code>/);assert.match(renderResponseTool(tool),/Files: <code>\/tmp\/test.txt<\/code>/);assert.match(renderResponseTool(tool),/2&gt;&amp;1/);
+  assert.equal(tool.label,'Running npm');assert.equal(tool.command,command);assert.doesNotMatch(renderResponseTool(tool),/<details|<summary|Directory:|Files:|2&gt;&amp;1/);
 });
 test('sparse terminal results retain command data, concurrent identity and terminal status even with a later start',()=>{
   const activities=[a('end',1,'tool.completed',{toolCallId:'one',status:'completed',data:{item:{aggregatedOutput:'<script>bad</script>',exitCode:7,durationMs:1200}}}),a('two',2,'tool.started',{toolCallId:'two',data:{toolName:'Read',input:{path:'/tmp/file.md'}}}),a('late-start',3,'tool.started',{toolCallId:'one',data:{item:{command:'npm test'}}}),a('sparse',4,'tool.updated',{toolCallId:'two',status:'inProgress'})];
-  const tools=responseTools({messages:[],activities},['turn']);assert.equal(tools.length,2);assert.equal(tools[0].label,'Failed npm');assert.equal(tools[1].label,'Reading file.md');assert.equal(tools[0].durationMs,1200);assert.match(renderResponseTool(tools[0]),/Exit code: 7/);assert.doesNotMatch(renderResponseTool(tools[0]),/<script>/);assert.match(renderResponseTool(tools[0]),/&lt;script&gt;/);assert.ok(!renderResponseTool({...tools[0],output:'first\nsecond'}).includes('\n'));assert.match(renderResponseTool({...tools[0],output:'first\nsecond'}),/first&#10;second/);
+  const tools=responseTools({messages:[],activities},['turn']);assert.equal(tools.length,2);assert.equal(tools[0].label,'Failed npm');assert.equal(tools[1].label,'Reading file.md');assert.equal(tools[0].durationMs,1200);assert.doesNotMatch(renderResponseTool(tools[0]),/Exit code: 7/);assert.doesNotMatch(renderResponseTool(tools[0]),/<script>/);assert.doesNotMatch(renderResponseTool(tools[0]),/&lt;script&gt;/);assert.ok(!renderResponseTool({...tools[0],output:'first\nsecond'}).includes('\n'));assert.doesNotMatch(renderResponseTool({...tools[0],output:'first\nsecond'}),/first&#10;second/);
   assert.deepEqual(responseTools({messages:[],activities},['other']),[]);
 });
 test('history keeps completed tool results while the final prose remains outside the fold',()=>{
   const state:InlineThreadState={messages:[{id:'final',role:'assistant',turnId:'turn',text:'Final answer.',streaming:false}],activities:[a('tool',1,'tool.completed',{toolCallId:'cmd',status:'completed',data:{item:{command:'npm test',exitCode:0,aggregatedOutput:'passed'}}})],latestTurn:{turnId:'turn',state:'completed',assistantMessageId:'final'}};
-  const body=renderInlineTurn(state,'turn','thread','complete','collapse');assert.match(body,/> <details[^\n]+Ran npm/);assert.match(body,/\n\n> Final answer\./);assert.match(body,/passed/);
+  const body=renderInlineTurn(state,'turn','thread','complete','collapse');assert.match(body,/> <details[^\n]+Ran npm/);assert.match(body,/\n\n> Final answer\./);assert.doesNotMatch(body,/passed/);
 });
 test('unfinished Markdown stays literal until a complete block boundary and is formatted when sealed',()=>{
   const message={id:'text',role:'assistant',turnId:'turn',text:'Done.\n\n| A | B |\n| --',streaming:true};
@@ -52,16 +52,16 @@ test('command history stays separate from the live label across calls and thinki
   for(const mode of ['keep','collapse','remove'] as const){
     const body=renderInlineTurn(state,'turn','thread','running',mode);
     assert.equal(body.match(/data-t3-tool-id="three"/g)?.length,1);
-    assert.match(body,/<span class="send-to-t3-response-activity"[^\n]+<span>Running npm<\/span>/);
-    assert.match(body,mode==='collapse'?/^> <span class="send-to-t3-response-activity"/m:/^<span class="send-to-t3-response-activity"/m);
+    assert.match(body,/<button class="send-to-t3-response-activity"[^\n]+<span>Running npm<\/span>/);
+    assert.match(body,mode==='collapse'?/^> <button class="send-to-t3-response-activity"/m:/^<button class="send-to-t3-response-activity"/m);
     assert.match(body,/data-t3-tool-id="three"[^>]+data-t3-tool-status="completed"[^\n]+Ran npm/);
-    if(mode!=='remove'){assert.match(body,/<details class="send-to-t3-tool-group"[^>]*><summary>[^\n]*<span>Ran 2 commands<\/span><\/summary>/);assert.equal(body.match(/first output/g)?.length,1);}
-    const stopped=stoppedResponseBody(body);assert.doesNotMatch(stopped,/data-t3-live-tool|response-activity|inline-spinner/);assert.match(stopped,/build passed/);
+    if(mode!=='remove'){assert.match(body,/<details class="send-to-t3-tool-group"[^>]*><summary>[^\n]*<span>Ran 2 commands<\/span><\/summary>/);assert.doesNotMatch(body,/first output/);}
+    const stopped=stoppedResponseBody(body);assert.doesNotMatch(stopped,/data-t3-live-tool|response-activity|inline-spinner/);assert.doesNotMatch(stopped,/build passed/);
   }
   const collapsed=renderInlineTurn(state,'turn','thread','running','collapse');assert.ok(collapsed.indexOf('Before.')<collapsed.indexOf('Ran 2 commands')&&collapsed.indexOf('Ran 2 commands')<collapsed.indexOf('Between batches.'));
   state.messages.push(message('reason',7,'Public reasoning summary','reasoning'));
-  assert.equal(currentResponseToolGroup(state,'turn'),undefined);assert.equal(responseActivityLabel(state,'turn'),'Thinking');
-  const advanced=renderInlineTurn(state,'turn','thread','running','collapse');assert.match(advanced,/<span>Ran 1 command · 1 thought<\/span><\/summary>/);assert.match(advanced,/class="send-to-t3-thought"/);assert.match(advanced,/Public reasoning summary/);assert.doesNotMatch(advanced,/<strong>Running npm/);
+  assert.equal(currentResponseToolGroup(state,'turn'),undefined);assert.equal(responseActivityLabel(state,'turn'),'Public reasoning summary');
+  const advanced=renderInlineTurn(state,'turn','thread','running','collapse');assert.match(advanced,/<span>Ran 1 command · Thought<\/span><\/summary>/);assert.match(advanced,/class="send-to-t3-thought"/);assert.match(advanced,/Public reasoning summary/);assert.doesNotMatch(advanced,/<strong>Running npm/);
 });
 
 test('new prose, user input and turns split groups without merging reused tool IDs or reopening results',()=>{
@@ -96,7 +96,7 @@ test('summary matches T3 sentence and distinct file counts, including sparse fil
   const tools=responseTools({messages:[],activities},['turn']);assert.equal(tools.length,5);assert.equal(summarizeResponseTools(tools),'Ran 4 commands and changed 7 files');
   assert.deepEqual(tools.at(-1)?.files,['a.ts','b.ts','c.ts','d.ts','e.ts','f.ts','g.ts']);
   tools.push({...tools.at(-1)!,id:'again',files:['a.ts']});assert.equal(summarizeResponseTools(tools),'Ran 4 commands and changed 7 files');
-  const body=renderInlineTurn({messages:[],activities},'turn','thread','complete','collapse');assert.match(body,/<summary><span data-t3-tool-icon="hammer"[^\n]+<span>Ran 4 commands and changed 7 files<\/span><\/summary>/);
+  const body=renderInlineTurn({messages:[],activities},'turn','thread','complete','collapse');assert.match(body,/<summary><span data-t3-tool-icon="wrench"[^\n]+<span>Ran 4 commands and changed 7 files<\/span><\/summary>/);
   const browser=responseTools({messages:[],activities:[a('browser',1,'tool.completed',{toolCallId:'browser',data:{server:'t3-code',tool:'preview_snapshot'}})]},['turn']);
   assert.equal(summarizeResponseTools([...browser,...tools.slice(0,1)]),'Used browser 1 time and ran 1 command');
 });
@@ -109,11 +109,11 @@ test('alternating thoughts and tools share one stable batch through live, histor
   const [group]=responseToolGroups(state,['turn']);assert.equal(group.id,identity);assert.equal(group.thoughts?.length,2);assert.equal(group.tools.length,2);
   const live=renderInlineTurn(state,'turn','thread','running','collapse');
   assert.equal(live.match(/data-t3-tool-group=/g)?.length,1);assert.equal(live.match(/class="send-to-t3-thought"/g)?.length,2);
-  assert.ok(live.indexOf('Summary first')<live.indexOf('first result')&&live.indexOf('first result')<live.indexOf('Summary second')&&live.indexOf('Summary second')<live.indexOf('data-t3-tool-id="two"'));
-  assert.doesNotMatch(live,/\[!t3-thought\]/);assert.match(live,/data-t3-tool-summary="Ran 2 commands · 2 thoughts"/);
-  const stopped=stoppedResponseBody(live);assert.match(stopped,/Ran 2 commands · 2 thoughts/);assert.match(stopped,/Summary second/);assert.doesNotMatch(stopped,/inline-spinner|data-t3-live-tool/);
+  assert.ok(live.indexOf('Summary first')<live.indexOf('data-t3-tool-id="one"')&&live.indexOf('data-t3-tool-id="one"')<live.indexOf('Summary second')&&live.indexOf('Summary second')<live.indexOf('data-t3-tool-id="two"'));
+  assert.doesNotMatch(live,/\[!t3-thought\]/);assert.match(live,/data-t3-tool-summary="Ran 2 commands · Thought \(×2\)"/);
+  const stopped=stoppedResponseBody(live);assert.match(stopped,/Ran 2 commands · Thought \(×2\)/);assert.match(stopped,/Summary second/);assert.doesNotMatch(stopped,/inline-spinner|data-t3-live-tool/);
   state.messages.push(thought('third',5));
-  const history=renderInlineTurn(state,'turn','thread','running','collapse');assert.equal(history.match(/data-t3-tool-group=/g)?.length,1);assert.match(history,/<span>Ran 2 commands · 3 thoughts<\/span>/);
+  const history=renderInlineTurn(state,'turn','thread','running','collapse');assert.equal(history.match(/data-t3-tool-group=/g)?.length,1);assert.match(history,/<span>Ran 2 commands · Thought \(×3\)<\/span>/);
 });
 
 test('same-time commentary and other public display items split mixed batches by ordinal',()=>{
@@ -152,9 +152,42 @@ test('a trailing command summary never disappears when a new call takes over the
       assert.equal(text.match(/class="send-to-t3-tool-group"/g)?.length,1);
       assert.equal(text.match(/class="send-to-t3-response-activity"/g)?.length,1);
       assert.ok(text.includes(`data-t3-tool-group="${group.replaceAll('&','&amp;').replaceAll('"','&quot;')}"`));
-      assert.equal(text.match(/kept result/g)?.length,1);
+      assert.doesNotMatch(text,/kept result/);
       assert.ok(text.indexOf('Latest paragraph.')<text.indexOf('class="send-to-t3-tool-group"'));
     }
-    assert.match(thinking,/<span>Thinking<\/span>/);assert.match(next,/<span>Running ls<\/span>/);
+    assert.match(thinking,/<span>Next step\.<\/span>/);assert.match(next,/<span>Next step\.<\/span>/);
   }
+});
+
+test('thought group labels use the total count with a multiplication sign',()=>{
+ const thought={id:'r1',role:'reasoning' as const,turnId:'turn',text:'Public summary',streaming:false};
+ const group={id:'thoughts',turnId:'turn',tools:[],thoughts:[thought]};
+ assert.match(renderResponseToolGroup(group),/data-t3-tool-summary="Thought"/);
+ assert.match(renderResponseToolGroup({...group,thoughts:[thought,{...thought,id:'r2'}]}),/Thought \(×2\)/);
+});
+
+test('live public reasoning uses a heading or first sentence with a group action',()=>{
+ assert.equal(liveThoughtLine('**Checking release**\n\nPublic summary.'),'Checking release');
+ assert.equal(liveThoughtLine('First **sentence**. A second sentence.'),'First sentence.');
+ assert.match(responseActivityRow('Public preview','brain','group'),/type="button" data-t3-open-tool-group="group"/);
+});
+test('catalogue labels, source identity and linked thread titles survive normalization',()=>{
+ const state={messages:[],activities:[a('watch',1,'tool.completed',{toolCallId:'watch',status:'completed',data:{toolName:'mcp__t3_code_direct__watch_pull_request'}}),a('source',2,'tool.completed',{toolCallId:'source',status:'completed',data:{toolName:'mcp__calendar__list',toolSource:{name:'Calendar',kind:'integration',icon:{_tag:'themed-logo',logoUrl:'https://example.com/icon.png'}}}}),a('read',3,'tool.completed',{toolCallId:'read',status:'completed',data:{toolName:'t3-code.t3_thread_read',input:{threadId:'target'},output:{thread:{title:'Release checks',link:'t3-thread://v2/env/target'}}}})]};
+ const tools=responseTools(state,['turn']);
+ assert.equal(tools[0].label,'Watching a pull request');assert.equal(tools[0].icon,'git-pull-request');
+ assert.match(renderResponseTool(tools[1]),/Calendar/);assert.match(renderResponseTool(tools[1]),/src="https:\/\/example.com\/icon.png"/);
+ assert.match(renderResponseTool(tools[2]),/href="t3-thread:\/\/v2\/env\/target"/);assert.match(tools[2].label,/Release checks/);
+});
+
+test('integration labels preserve unsuccessful outcomes and source identity',()=>{
+ const labels={inProgress:'Using',completed:'Used',failed:'Failed to use',declined:'Declined to use',stopped:'Stopped using'};
+ for(const [status,verb] of Object.entries(labels)){
+  const tool=responseTools({messages:[],activities:[a('source',1,'tool.updated',{toolCallId:'source',status,data:{toolName:'mcp__calendar__list_events',toolSource:{name:'Calendar'}}})]},['turn'])[0];
+  assert.equal(tool.label,`${verb} Calendar · list events`);
+  assert.equal(tool.icon,'plug');
+  const body=renderResponseTool(tool);
+  assert.match(body,new RegExp(`data-t3-tool-status="${status}"`));
+  assert.ok(body.includes(tool.label));assert.doesNotMatch(body,/<details|<summary/);
+  if(['failed','declined','stopped'].includes(status))assert.equal(tool.activeLabel,tool.label);
+ }
 });
