@@ -224,3 +224,21 @@ test('selection placement survives the source reply finalizing while destination
  assert.equal(savedSelectionAnchor(body+'\n\nSelected generated sentence.',anchor,captured),undefined,'Ambiguous copies never retarget');
  assert.equal(savedSelectionAnchor(body.replace('Selected generated','Edited generated'),anchor,captured),undefined,'Changed selection is preserved, not guessed');
 });
+
+
+test('reservation rechecks a selected response that finishes during destination preparation',async()=>{
+  const {containerBody}=await import('../src/responses/response-container');
+  const id=randomUUID(),body='Selected generated sentence.\nRemaining line in the same paragraph.',captured='Before.\n\n'+containerBody(id,'**T3 · Working for**\n\n'+body)+'\n\nTail.';
+  const h=await fixture(captured),at=captured.indexOf('Selected generated');h.select(at,at+'Selected generated sentence.'.length);
+  const context=h.plugin.capturePaletteSource().context.editor,manager=new h.exports.InlineChatManager(h.app,'selection-lab',async()=>undefined);
+  manager.prepare=async()=>{};manager.start=()=>{};h.plugin.inlineChat=manager;
+  h.plugin.sendChat=async(_prompt:any,_note:any,options:any)=>{
+    h.view.setViewData('Before.\n\n'+body+'\n\nTail.');
+    await options.onPrepared({id:randomUUID(),title:'Independent answer'});
+  };
+  try{
+    await h.plugin.sendInlineChat('Explain',h.file,context,{newThread:true});
+    assert.ok(h.value().indexOf('t3-inline:start:')>h.value().indexOf('Selected generated sentence.'));
+    assert.ok(h.value().indexOf('t3-inline:end:')<h.value().indexOf('Remaining line'));
+  }finally{manager.dispose();}
+});

@@ -1701,7 +1701,7 @@ export default class SendToT3 extends Plugin {
         // The pending indicator never enters image or prompt snapshots.
         if(request.inlineSteering)return;
 
-        const selected=context.anchor&&!activeId?savedSelectionAnchor(context.editor.getValue(),context.canonicalAnchor??context.anchor,context.snapshot):undefined;
+        const selected=context.anchor?savedSelectionAnchor(context.editor.getValue(),context.canonicalAnchor??context.anchor,context.snapshot):undefined;
         job=context.queueSend?manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions):selected?manager.reserve(context.editor,context.view,selected,requestId,note.path,initialInput,request.title,jobOptions):context.insertion?manager.reserveAtCursor(context.editor,context.view,context.insertion,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
         this.sendPreviews.hide(context.view as MarkdownView);
         await manager.prepare(job,request);
