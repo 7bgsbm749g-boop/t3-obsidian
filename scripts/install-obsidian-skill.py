@@ -14,19 +14,19 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / 'skills' / 'obsidian-t3'
 
 
-def destinations(home):
+def destinations(home, name='obsidian-t3'):
     roots = [home / '.agents' / 'skills', home / '.codex' / 'skills']
     for detected, skills in [(home / '.claude', home / '.claude' / 'skills'),
                              (home / '.config' / 'opencode', home / '.config' / 'opencode' / 'skills')]:
         if detected.is_dir():
             roots.append(skills)
-    return [root / 'obsidian-t3' for root in roots]
+    return [root / name for root in roots]
 
 
-def install(home, source=SOURCE, backups=None, check=False):
+def install(home, source=SOURCE, backups=None, check=False, name='obsidian-t3'):
     source = source.resolve(strict=True)
     digest = hashlib.sha256((source / 'SKILL.md').read_bytes()).hexdigest()
-    targets = destinations(home)
+    targets = destinations(home, name)
     # Link the folder: Codex follows skill-directory links, but skips linked
     # SKILL.md files inside otherwise ordinary directories.
     for target in targets:
@@ -40,7 +40,7 @@ def install(home, source=SOURCE, backups=None, check=False):
         if not check and not current:
             target.parent.mkdir(parents=True, exist_ok=True)
             backup = None
-            temporary = target.with_name('.obsidian-t3.' + uuid.uuid4().hex)
+            temporary = target.with_name('.' + name + '.' + uuid.uuid4().hex)
             try:
                 temporary.symlink_to(source, target_is_directory=True)
                 if target.exists():
@@ -64,9 +64,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check', action='store_true', help='Verify links without changing files')
     args = parser.parse_args()
-    result = install(Path.home(), check=args.check)
-    print(json.dumps(result, indent=2))
-    raise SystemExit(0 if result['ok'] else 1)
+    results = [install(Path.home(), source=source, check=args.check, name=source.name) for source in (SOURCE, ROOT / 'skills' / 'taskflow')]
+    print(json.dumps(results, indent=2))
+    raise SystemExit(0 if all(result['ok'] for result in results) else 1)
 
 
 if __name__ == '__main__':

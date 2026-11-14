@@ -18,6 +18,7 @@ PROTOCOLS = ['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25']
 MAX_MESSAGE = 2_200_000
 SKILL = Path(__file__).with_name('SKILL.md')
 URI = 't3-obsidian://instructions'
+TASKFLOW_SKILL = Path(__file__).with_name('TASKFLOW.md')
 
 
 def string(description):
@@ -44,6 +45,7 @@ def tool(name, description, properties=None, required=(), readonly=False):
 TOOLS = [
     dict(name='instructions', description='Read the complete safe Obsidian editing and continuation skill. Before waiting for an automatic next turn, register its reply stream in the same note.',
          inputSchema=dict(type='object', properties={}, additionalProperties=False), annotations=dict(readOnlyHint=True)),
+    dict(name='taskflow_instructions', description='Read the Taskflow skill when a prompt contains Taskflow task ID. Complete the actual task as the final step after its work and verification, even across several runs.', inputSchema=dict(type='object', properties={}, additionalProperties=False), annotations=dict(readOnlyHint=True)),
     tool('connected_clients', 'List matching live Obsidian device identities on this T3 machine. No note scan or tokens are returned.', readonly=True),
     tool('note_context', 'Find the exact source note and response destinations for a send. Supply a note or exact T3 send identity.',
          dict(notePath=NOTE, threadId=string('Exact T3 thread ID.'), messageId=string('Exact T3 message ID.'), environmentId=string('Exact T3 environment ID.')), readonly=True),
@@ -72,6 +74,18 @@ TOOLS = [
     tool('link_folder', 'Link an explicitly selected existing folder to a verified T3 project, changing future note routing.', dict(folderPath=string('Exact vault-relative folder, excluding the root.'), projectId=string('Verified project ID.'), connectionId=string('Verified plugin connection ID.'), environmentId=string('Verified T3 environment ID.'), mode=dict(type='string', enum=['project', 'self']), relink=dict(type='boolean')), ['folderPath', 'projectId', 'connectionId', 'environmentId', 'mode', 'relink']),
     tool('unlink_folder', 'Remove an explicitly selected folder link; does not delete notes or projects.', dict(folderPath=string('Exact vault-relative folder.')), ['folderPath']),
 ]
+TASK_ID = string('Exact associated Taskflow task ID from the prompt or task snapshot.')
+REVISION = string('Current task revision from the latest Taskflow response.')
+ASSIGNMENT = string('Current assignment.id from the task snapshot.')
+TOOLS += [
+    tool('taskflow_get', 'Read the exact associated task and its current revision and assignment.', dict(taskId=TASK_ID), ['taskId'], True),
+    tool('taskflow_assign', 'Assign an open task to a stable agent/thread identity. Do not replace another owner automatically.', dict(taskId=TASK_ID, expectedRevision=REVISION, assignee=string('Stable owner, normally the current T3 thread ID.')), ['taskId', 'expectedRevision', 'assignee']),
+    *[tool('taskflow_' + action, description, dict(taskId=TASK_ID, expectedRevision=REVISION, assignmentId=ASSIGNMENT, **(dict(result=string('Short verified result, at most 4000 characters.')) if action == 'complete' else {})), ['taskId', 'expectedRevision', 'assignmentId']) for action, description in [
+        ('start', 'Start work on this assigned task using Taskflow timing and prerequisite rules.'),
+        ('complete', 'Complete the actual task as the final step after its requested work is verified. Run completion alone is insufficient.'),
+        ('unassign', 'Release the current assignment without changing task status.'),
+    ]],
+]
 BY_NAME = {item['name']: item for item in TOOLS}
 
 
@@ -98,6 +112,8 @@ def call_tool(name, arguments, root):
             raise ValueError('Invalid tool argument value: ' + key)
     if name == 'instructions':
         return text_result(instructions())
+    if name == 'taskflow_instructions':
+        return text_result(TASKFLOW_SKILL.read_text(encoding='utf-8'))
     if name == 'connected_clients':
         matches = select_client(arguments['vault'], root, arguments.get('clientId'), all_matches=True)
         return text_result(dict(ok=True, clients=[{key: item.get(key) for key in ['vaultName', 'vaultId', 'clientId', 'instanceId', 'loadedVersion', 'environmentId', 'expiresAt']} for _, item in matches]))

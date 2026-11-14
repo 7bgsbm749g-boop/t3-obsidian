@@ -71,7 +71,7 @@ export class AgentSetup {
     return {config:item.config,path:join(this.root,item.path)};
   }
   async prepare(runtime:string):Promise<ManualSetup>{
-    const names=['mcp_server.py','connect_commands.py','SKILL.md','LICENSE'];
+    const names=['mcp_server.py','connect_commands.py','SKILL.md','TASKFLOW.md','LICENSE'];
     if(Object.keys(this.bundle.files).sort().join('|')!==[...names].sort().join('|')||!/^[a-f0-9]{64}$/.test(this.bundle.hash)||contentHash(JSON.stringify(this.bundle.files))!==this.bundle.hash)throw Error('The bundled agent tools failed verification.');
     const item=this.shared(runtime);
     for(const [name,source] of [...Object.entries(this.bundle.files).map(([name,value])=>[item.directory+'/'+name,value]),[item.path,item.config]]){

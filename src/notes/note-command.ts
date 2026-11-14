@@ -1,3 +1,4 @@
+import {isTaskFlowCommand,validateTaskFlowCommand,type TaskFlowCommand} from './taskflow';
 import {isRecord} from '../shared/values';
 import {isResponseCommand,validateResponseCommand,type ResponseCommand} from '../responses/response-command';
 import {isRecoveryCommand,validateRecoveryCommand,type RecoveryCommand,type RecoveryCommandResult} from '../responses/recovery-command';
@@ -27,6 +28,6 @@ export function validateNoteCommand(input:unknown):NoteCommand {
   return value;
 }
 
-export type AgentCommand=RecoveryCommand|ResponseCommand|NoteCommand|ThreadCommand|FolderCommand|ClientCommand|NoteContextCommand|NoteEditCommand;
+export type AgentCommand=TaskFlowCommand|RecoveryCommand|ResponseCommand|NoteCommand|ThreadCommand|FolderCommand|ClientCommand|NoteContextCommand|NoteEditCommand;
 export type AgentCommandResult=RecoveryCommandResult|NoteCommandResult|ThreadDisplayResult|FolderCommandResult|ClientCommandResult|NoteContextResult|Record<string,unknown>;
-export function validateAgentCommand(value:unknown):AgentCommand{return isNoteEditCommand(value)?validateNoteEditCommand(value):isNoteContextCommand(value??{})?validateNoteContextCommand(value):isRecoveryCommand(value??{})?validateRecoveryCommand(value):isClientCommand(value??{})?validateClientCommand(value):isResponseCommand(value??{})?validateResponseCommand(value):isFolderCommand(value??{})?validateFolderCommand(value):isThreadCommand(value)?validateThreadCommand(value):validateNoteCommand(value);}
+export function validateAgentCommand(value:unknown):AgentCommand{return isTaskFlowCommand(value)?validateTaskFlowCommand(value):isNoteEditCommand(value)?validateNoteEditCommand(value):isNoteContextCommand(value??{})?validateNoteContextCommand(value):isRecoveryCommand(value??{})?validateRecoveryCommand(value):isClientCommand(value??{})?validateClientCommand(value):isResponseCommand(value??{})?validateResponseCommand(value):isFolderCommand(value??{})?validateFolderCommand(value):isThreadCommand(value)?validateThreadCommand(value):validateNoteCommand(value);}
