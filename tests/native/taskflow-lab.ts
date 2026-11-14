@@ -1,5 +1,5 @@
 import {Plugin,MarkdownView} from 'obsidian';
-import {writeFileSync} from 'node:fs';
+import {existsSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 
 /** Isolated vault only: exercise native properties and the production MCP bridge. */
@@ -8,6 +8,7 @@ export default class TaskflowLab extends Plugin {
   private async run(){
     const result:{ok:boolean;checks:string[];error?:string}={ok:false,checks:[]};
     const root=(this.app.vault.adapter as unknown as {getBasePath():string}).getBasePath();
+    if(!existsSync(join(root,'..','ISOLATED-NATIVE-LAB')))throw Error('Refuse a vault without the isolated test marker.');
     const check=(value:unknown,message:string)=>{if(!value)throw Error(message);result.checks.push(message);};
     const wait=async(work:()=>Promise<boolean>)=>{for(let n=0;n<100;n++){if(await work())return;await new Promise(resolve=>setTimeout(resolve,50));}throw Error('Native state did not settle.');};
     const manager=(this.app as any).plugins;
