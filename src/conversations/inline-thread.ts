@@ -31,7 +31,7 @@ export interface InlineBindingCheckpoint {failedContinuations?:Record<string,Fai
 export interface InlineThreadState extends InlineBindingCheckpoint {title?:string;messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;turns?:Record<string,InlineTurn>;historyComplete?:boolean;legacyMessageIds?:string[];v2Requests?:Record<string,WireRuntimeRequest>;v2Controls?:Record<string,WireTurnItem>;checkpoints?:Array<{turnId:string;status:string;checkpointRef:string;assistantMessageId?:string|null;completedAt?:string}>}
 
 export function selectionAnchor(document:string,text:string,start:number,end:number):SelectionAnchor {
-  if(!text.trim()||document.slice(start,end)!==text)throw Error('The selected text changed. Select it again before asking T3.');
+  if(!text.trim()||document.slice(start,end)!==text)throw Error('The selected text changed. Select it again before asking the agent.');
   return {text,start,end,before:document.slice(Math.max(0,start-24),start),after:document.slice(end,end+24)};
 }
 
@@ -40,7 +40,7 @@ export function insertionOffset(document:string,anchor:SelectionAnchor):number {
   const matchesAt=(start:number)=>document.slice(start,start+anchor.text.length)===anchor.text&&document.slice(Math.max(0,start-anchor.before.length),start).endsWith(anchor.before)&&document.slice(start+anchor.text.length).startsWith(anchor.after);
   if(!matchesAt(anchor.start)){
     const first=document.indexOf(anchor.text);
-    if(first<0||document.indexOf(anchor.text,first+1)>=0||!matchesAt(first))throw Error('The selected text moved or changed. Select it again before asking T3.');
+    if(first<0||document.indexOf(anchor.text,first+1)>=0||!matchesAt(first))throw Error('The selected text moved or changed. Select it again before asking the agent.');
     end=first+anchor.text.length;
   }
   const lineEnd=document.indexOf('\n',end);

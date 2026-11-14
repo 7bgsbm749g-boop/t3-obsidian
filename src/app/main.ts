@@ -396,7 +396,7 @@ export default class SendToT3 extends Plugin {
       if(!checking)void this.openManualAction(file,'',editor.getSelection(),{editor,view},this.commandSendSelector(view)).catch(error=>new Notice(`T3 Code: ${message(error)}`,10000));
       return true;
     }});
-    this.addCommand({id:'ask-agent',name:'Ask agent…',editorCheckCallback:(checking,editor,view)=>{if(this.stopped||this.busy||!view.file)return false;if(!checking)this.openAsk(view.file,editor.getSelection(),{editor,view});return true;}});
+    this.addCommand({id:'ask-agent',name:'Ask Agent…',editorCheckCallback:(checking,editor,view)=>{if(this.stopped||this.busy||!view.file)return false;if(!checking)this.openAsk(view.file,editor.getSelection(),{editor,view});return true;}});
     this.addCommand({id:'send-or-ask-choose',name:'Send or ask: choose destination…',editorCheckCallback:(checking,editor,view)=>{
       const file=view.file;
       if(this.stopped||this.busy||this.defaultSending||!file||file.extension.toLowerCase()!=='md')return false;
@@ -717,7 +717,7 @@ export default class SendToT3 extends Plugin {
         item.setTitle('Send to agent').setIcon('send');
         item.setDisabled(this.busy||this.defaultSending).onClick(event=>this.openNoteSend(file,Boolean(event?.ctrlKey)));
       });
-      menu.addItem(item=>item.setTitle('Ask agent…').setIcon('message-circle').setDisabled(this.busy||this.defaultSending).onClick(()=>this.openAsk(file)));
+      menu.addItem(item=>item.setTitle('Ask Agent…').setIcon('message-circle').setDisabled(this.busy||this.defaultSending).onClick(()=>this.openAsk(file)));
       if(Platform.isMobile)menu.addItem(item=>item.setTitle('Send to agent: choose destination…').setIcon('send').setDisabled(this.busy||this.defaultSending).onClick(()=>this.openNoteSend(file,true)));
     }));
     this.registerEvent(this.app.workspace.on('editor-menu',(menu,editor,view)=>{
@@ -742,10 +742,10 @@ export default class SendToT3 extends Plugin {
         if(failed){
           menu.addItem(item=>item.setTitle('Continue T3 response'+suffix).setIcon('rotate-cw').setDisabled(this.busy).onClick(()=>this.continueInline(id,file.path).catch(error=>new Notice(`T3: ${message(error)}`,10000))));
           menu.addItem(item=>item.setTitle('Attach latest T3 continuation'+suffix).setIcon('link').setDisabled(this.busy).onClick(()=>{void this.attachInline(id,file.path).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));
-        }else {if(captured)menu.addItem(item=>item.setTitle('Ask T3 in this response'+suffix).setIcon('message-circle').onClick(event=>this.openEditorChat(selection,file,{editor,view,...captured,responseId:id},Boolean(event?.ctrlKey))));}
+        }else {if(captured)menu.addItem(item=>item.setTitle('Ask Agent in this response'+suffix).setIcon('message-circle').onClick(event=>this.openEditorChat(selection,file,{editor,view,...captured,responseId:id},Boolean(event?.ctrlKey))));}
         menu.addItem(item=>item.setTitle('Stop T3 response'+suffix).setIcon('square').onClick(()=>{void this.inlineChat!.stopAt(id,editor,view).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));
       }
-      menu.addItem(item=>item.setTitle('Ask agent…').setIcon('message-circle').setDisabled(this.busy||this.defaultSending).onClick(()=>this.openAsk(file,selection,{editor,view,...captured})));
+      menu.addItem(item=>item.setTitle('Ask Agent…').setIcon('message-circle').setDisabled(this.busy||this.defaultSending).onClick(()=>this.openAsk(file,selection,{editor,view,...captured})));
       if(!captured)return;
       menu.addItem(item=>item.setTitle('Send to agent').setIcon('message-circle').setDisabled(this.busy||this.defaultSending).onClick(event=>void this.openManualAction(file,'',selection,{editor,view,...captured},Boolean(event?.ctrlKey))));
       if(Platform.isMobile)menu.addItem(item=>item.setTitle('Send to agent: choose destination…').setIcon('message-circle').setDisabled(this.busy||this.defaultSending).onClick(()=>void this.openManualAction(file,'',selection,{editor,view,...captured},true)));
@@ -1452,7 +1452,7 @@ export default class SendToT3 extends Plugin {
     const active=this.app.workspace.getActiveViewOfType(MarkdownView);
     const view=captured?.view??(active?.file?.path===file.path?active:undefined);
     const editor=captured?.editor??view?.editor;
-    if(captured&&view?.file?.path!==file.path)throw Error('The original note is no longer open. Reopen it before asking T3.');
+    if(captured&&view?.file?.path!==file.path)throw Error('The original note is no longer open. Reopen it before asking the agent.');
     const selected=selection.trim();
     let context:EditorChatContext|undefined;
     if(view?.file?.path===file.path&&editor){
@@ -1504,7 +1504,7 @@ export default class SendToT3 extends Plugin {
   private canonicalChatContext(context:EditorChatContext):EditorChatContext {
     if(!context.anchor||context.canonicalAnchor&&context.snapshot!==undefined)return context;
     const display=context.editor.getValue(),range=selectionRange(display,context.anchor);
-    if(!range)throw Error('The selected text changed. Select it again before asking T3.');
+    if(!range)throw Error('The selected text changed. Select it again before asking the agent.');
     const adapter=nativeResponses(this.app).view(context.view as MarkdownView),mapped=adapter?.canonicalSelection(range.from,range.to);
     const snapshot=mapped?.document??context.snapshot??display;
     const canonicalAnchor=mapped?selectionAnchor(snapshot,mapped.text,mapped.start,mapped.end):context.anchor;
@@ -1633,7 +1633,7 @@ export default class SendToT3 extends Plugin {
   }
   private async sendInlineChat(prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions}){
     const manager=this.inlineChat;if(!manager)throw Error('Inline T3 response is unavailable. Reload the plugin.');
-    if(context.view.file?.path!==note.path)throw Error('The original note is no longer open. Reopen it before asking T3.');
+    if(context.view.file?.path!==note.path)throw Error('The original note is no longer open. Reopen it before asking the agent.');
     const activeId=inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId);
     if(activeId&&!options?.newThread&&!options?.threadId)return this.sendInlineSteering(activeId,prompt,note,context,options);
     const jobOptions=options?.jobOptions??resolveJobOptions(this.settings.inlineStreaming);

@@ -269,8 +269,8 @@ export class AskComposer extends NoteTabPanel {
   private sending=false;
   constructor(app:App,path:string,private draft:string,private saveDraft:(text:string)=>void,private submit:(text:string,choose:boolean)=>Promise<void>){super(app,path);}
   onOpen(){
-    this.titleEl.setText('Ask agent');this.titleEl.hidden=true;this.contentEl.empty();this.modalEl?.classList.add('send-to-t3-ask-composer');
-    this.field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Ask agent',placeholder:'Ask agent…',rows:'3'}});this.field.value=this.draft;
+    this.titleEl.setText('Ask Agent');this.titleEl.hidden=true;this.contentEl.empty();this.modalEl?.classList.add('send-to-t3-ask-composer');
+    this.field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Ask Agent',placeholder:'Ask Agent…',rows:'3'}});this.field.value=this.draft;
     this.field.addEventListener('input',()=>{this.draft=this.field!.value;this.saveDraft(this.draft);});
     this.field.addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&!event.isComposing){event.preventDefault();void this.send(false);}});
     const actions=this.contentEl.createDiv({cls:'send-to-t3-ask-actions'});
