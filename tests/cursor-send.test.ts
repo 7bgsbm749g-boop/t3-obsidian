@@ -200,3 +200,27 @@ for(const state of ['completed','running'])for(const cursor of [3,'First paragra
   const once=h.value();assert.equal((await h.plugin.importRun(h.file.path,project,threadId,messageId,false,insertion)).duplicate,true);
   assert.equal(h.value(),once);assert.equal(registered.length,2);assert.equal(registered[0].id,registered[1].id);
 });
+
+
+test('a saved agent selection uses the selected line rather than the rest of its paragraph',async()=>{
+ const document='Agent sentence selected.\nRemaining line in the same paragraph.\n\nTail.',h=await fixture(document),manager=new h.exports.InlineChatManager(h.app,'jobs',async()=>undefined);
+ h.select(0,'Agent sentence selected.'.length);const context=h.plugin.capturePaletteSource().context.editor;context.referenceSelection=true;
+ manager.prepare=async()=>{};manager.start=()=>{};h.plugin.inlineChat=manager;
+ h.plugin.sendChat=async(_prompt:any,_note:any,options:any)=>options.onPrepared({id:randomUUID(),title:'Synthetic'});
+ await h.plugin.sendInlineChat('Explain',{path:h.file.path},context,{newThread:true});
+ assert.ok(h.value().indexOf('t3-inline:end:')<h.value().indexOf('Remaining line'));manager.dispose();
+});
+
+test('selection placement survives the source reply finalizing while destination selection is open',async()=>{
+ const {savedSelectionAnchor}=await import('../src/notes/selection-insertion');
+ const {initialRegion,selectionAnchor,insertionOffset}=await import('../src/conversations/inline-thread');
+ const id=randomUUID(),body='Selected generated sentence.\nRemaining line of the same paragraph.\n\nLater paragraph.';
+ const framed=initialRegion(id).text.replace('Sending…',body);
+ // Use an actual response frame, with its final prose captured before save.
+ const captured=framed.includes(body)?framed:initialRegion(id).text.replace(/(<!-- t3-inline:start:[^>]+ -->)/,'$1\n'+body);
+ const at=captured.indexOf('Selected generated'),anchor=selectionAnchor(captured,'Selected generated sentence.',at,at+'Selected generated sentence.'.length);
+ const rebased=savedSelectionAnchor(body,anchor,captured);assert.ok(rebased);assert.equal(rebased.text,anchor.text);
+ assert.ok(insertionOffset(body,rebased)<body.indexOf('Remaining line'));
+ assert.equal(savedSelectionAnchor(body+'\n\nSelected generated sentence.',anchor,captured),undefined,'Ambiguous copies never retarget');
+ assert.equal(savedSelectionAnchor(body.replace('Selected generated','Edited generated'),anchor,captured),undefined,'Changed selection is preserved, not guessed');
+});

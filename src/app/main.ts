@@ -1,3 +1,4 @@
+import {savedSelectionAnchor} from '../notes/selection-insertion';
 import {queuedEditIndicator} from '../notes/queued-edit-indicator';
 import {savedResponseProof} from '../responses/saved-response-proof';
 import {RouteStatus} from '../connection/route-status';
@@ -1534,7 +1535,7 @@ export default class SendToT3 extends Plugin {
     const document=view.editor.getValue();
     if(context&&inlineSteeringTarget(document,context.editor.posToOffset(context.editor.getCursor()),context.responseId))return ()=>{};
     let offset=endInsertionOffset(document);
-    if(context?.anchor)offset=insertionOffset(document,context.anchor);
+    if(context?.anchor){const anchor=savedSelectionAnchor(document,context.canonicalAnchor??context.anchor,context.snapshot);offset=anchor?insertionOffset(document,anchor):context.insertion?resolveCursorInsertion(document,context.insertion):endInsertionOffset(document);}
     else if(context?.insertion)offset=resolveCursorInsertion(document,context.insertion);
     else if(insertion){
       const adapter=nativeResponses(this.app).view(view as MarkdownView);
@@ -1693,7 +1694,8 @@ export default class SendToT3 extends Plugin {
         // The pending indicator never enters image or prompt snapshots.
         if(request.inlineSteering)return;
 
-        job=context.anchor&&!context.referenceSelection&&!activeId?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path,initialInput,request.title,jobOptions):context.insertion?manager.reserveAtCursor(context.editor,context.view,context.insertion,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
+        const selected=context.anchor&&!activeId?savedSelectionAnchor(context.editor.getValue(),context.canonicalAnchor??context.anchor,context.snapshot):undefined;
+        job=selected?manager.reserve(context.editor,context.view,selected,requestId,note.path,initialInput,request.title,jobOptions):context.insertion?manager.reserveAtCursor(context.editor,context.view,context.insertion,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
         this.sendPreviews.hide(context.view as MarkdownView);
         await manager.prepare(job,request);
       }});delivered=true;if(job)manager.start(job);
