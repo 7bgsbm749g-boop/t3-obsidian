@@ -615,7 +615,7 @@ test('first-send selection waits for confirmation and follows the note identity 
   await h.plugin.openNoteSend(file);assert.equal(h.modals.length,1);assert.equal(sent.length,0);assert.equal(h.plugin.hasConfirmedNoteSend(file.path),false);
   h.modals[0].close();await h.plugin.openNoteSend(file);assert.equal(h.modals.length,2);assert.equal(sent.length,0);
   await h.modals[1].choose('new');assert.equal(sent.length,1);assert.equal(h.plugin.hasConfirmedNoteSend(file.path),true);
-  moveSmartNotes(h.plugin.smartData(),file.path,'Notes/Renamed.md');file.path='Notes/Renamed.md';document+='\nFollow-up.';
+  moveSmartNotes(h.plugin.smartData(),file.path,'Notes/Renamed.md');file.path='Notes/Renamed.md';document+='\n\nFollow-up.';
   assert.equal(h.plugin.hasConfirmedNoteSend('Notes/Fresh.md'),false);assert.equal(h.plugin.hasConfirmedNoteSend('Notes/Copy.md'),false);
   await h.plugin.openNoteSend(file);assert.equal(h.modals.length,2);assert.equal(sent.length,2);assert.equal(sent[1].threadId,'confirmed-thread');
   assert.match(sent[1].prompt,/Follow-up/);assert.doesNotMatch(sent[1].prompt,/First instruction/);
@@ -693,7 +693,7 @@ for(const confirmed of [false,true])test(`import selects its source but only con
   const heads=JSON.stringify(h.plugin.smartData().heads);
   await h.plugin.importRun(file.path,h.project,threadId,messageId,false);
   assert.equal(JSON.stringify(h.plugin.smartData().heads),heads,'reimport must preserve confirmed coverage');
-  document+='\nSecond follow-up.';await h.plugin.openNoteSend(file);
+  document+='\n\nSecond follow-up.';await h.plugin.openNoteSend(file);
   assert.match(sent.at(-1).prompt,/Second follow-up/);assert.doesNotMatch(sent.at(-1).prompt,/Fresh follow-up|Earlier instruction|Imported prompt|Imported answer/);
  }finally{h.plugin.onunload();}
 });
@@ -724,7 +724,7 @@ test('delete/create without an observed rename starts fresh coverage without sca
   const editor={getValue:()=>document,getSelection:()=>'',getCursor:()=>({line:0,ch:0}),posToOffset:()=>0},view={file,editor};
   document=document.replace('Added detail.','Added detail. Another detail.');
   await h.plugin.sendChat(document,{path:renamed},{threadId:'smart-thread',sourceContext:{editor,view,smartDocument:document,smartQuestion:'Why?'}});
-  assert.match(sent[2].prompt,/Another detail/);assert.match(sent[2].prompt,/\*\*USER ASKS:\*\*\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Added detail/);
+  assert.doesNotMatch(sent[2].prompt,/Another detail/,'Edits to a sent paragraph stay local');assert.match(sent[2].prompt,/\*\*USER ASKS:\*\*\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Added detail/);
  }finally{h.plugin.onunload();}
 });
 
@@ -870,7 +870,7 @@ test('a completed response permits a new stream and explicit New remains indepen
  for(const newThread of [false,true]){
   const h=await runningSmartSendHarness();
   try{
-   if(!newThread){h.setActive(false);h.setDocument('First instruction.\nSaved final reply.\nSecond instruction.');}
+   if(!newThread){h.setActive(false);h.setDocument('First instruction.\n\nSaved final reply.\n\nSecond instruction.');}
    await h.plugin.send(h.file,h.project,{newThread,throwOnError:true});
    const request=h.sent.at(-1);assert.equal(request.inlineSteering,undefined);assert.equal(h.newBlocks(),1);
    assert.notEqual(request.inlineBindings[0].id,h.id);
