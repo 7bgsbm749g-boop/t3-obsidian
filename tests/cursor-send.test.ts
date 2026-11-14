@@ -220,7 +220,7 @@ test('selection placement survives the source reply finalizing while destination
  const captured=framed.includes(body)?framed:initialRegion(id).text.replace(/(<!-- t3-inline:start:[^>]+ -->)/,'$1\n'+body);
  const at=captured.indexOf('Selected generated'),anchor=selectionAnchor(captured,'Selected generated sentence.',at,at+'Selected generated sentence.'.length);
  const rebased=savedSelectionAnchor(body,anchor,captured);assert.ok(rebased);assert.equal(rebased.text,anchor.text);
- assert.ok(insertionOffset(body,rebased)<body.indexOf('Remaining line'));
+ assert.equal(insertionOffset(body,rebased),body.indexOf('Remaining line'));
  assert.equal(savedSelectionAnchor(body+'\n\nSelected generated sentence.',anchor,captured),undefined,'Ambiguous copies never retarget');
  assert.equal(savedSelectionAnchor(body.replace('Selected generated','Edited generated'),anchor,captured),undefined,'Changed selection is preserved, not guessed');
 });
