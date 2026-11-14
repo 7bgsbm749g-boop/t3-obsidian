@@ -670,3 +670,5 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 }
 
 .send-to-t3-queued-edit { padding: 6px 12px; color: var(--text-accent); font-size: var(--font-ui-small); border-bottom: 1px solid var(--background-modifier-border); }
+
+.send-to-t3-ask-queue textarea { width: 100%; resize: vertical; }

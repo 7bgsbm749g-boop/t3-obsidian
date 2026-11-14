@@ -5,7 +5,7 @@ export class AskQueueModal extends Modal {
   private sending=false;
   constructor(app:App,private items:QueuedAsk[],private save:(items:QueuedAsk[])=>void,private send:(prompt:string,ids:string[])=>Promise<void>){super(app);}
   onOpen(){
-    this.titleEl.setText('Ask Queue');this.contentEl.empty();
+    this.titleEl.setText('Ask Queue');this.contentEl.empty();this.contentEl.addClass('send-to-t3-ask-queue');
     this.contentEl.createEl('p',{text:'Collect selections and questions, then send one prompt. The reply goes at the end of this note. Selection text is a saved snapshot.'});
     for(const [index,item] of this.items.entries()){
       const row=this.contentEl.createDiv();row.createEl('h4',{text:`${index+1}. ${item.notePath}`});

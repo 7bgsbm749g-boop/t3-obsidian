@@ -1196,8 +1196,8 @@ export default class SendToT3 extends Plugin {
     const save=(updated:QueuedAsk[])=>this.app.saveLocalStorage(key,[...loadAskQueue(this.app.loadLocalStorage(key)).filter(item=>!originalIds.has(item.id)),...updated]);
     new AskQueueModal(this.app,items,save,async(prompt,ids)=>{
       const view=await this.editorForNoteSend(file);if(!view)throw Error('Open this note in the editor before sending.');
-      const document=view.editor.getValue(),sent=new Map(items.filter(item=>ids.includes(item.id)).map(item=>[item.id,JSON.stringify(item)]));
-      await this.openManualAction(file,prompt,'',{view,editor:view.editor,queueSend:true,insertion:captureCursorInsertion(document,document.length),onSent:()=>this.app.saveLocalStorage(key,loadAskQueue(this.app.loadLocalStorage(key)).filter(item=>sent.get(item.id)!==JSON.stringify(item)))},true);
+      const sent=new Map(items.filter(item=>ids.includes(item.id)).map(item=>[item.id,JSON.stringify(item)]));
+      await this.openChatWithNote(this.noteContext(file),prompt,{view,editor:view.editor,queueSend:true,onSent:()=>this.app.saveLocalStorage(key,loadAskQueue(this.app.loadLocalStorage(key)).filter(item=>sent.get(item.id)!==JSON.stringify(item)))},true,true);
     }).open();
   }
   private previousNoteThread(path:string,threadId:string){return previousNoteThreads(this.noteThreadRelations(),path).find(entry=>entry.threadId===threadId);}
@@ -1539,9 +1539,10 @@ export default class SendToT3 extends Plugin {
     const view=context?.view??this.app.workspace?.getLeavesOfType?.('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.file?.path===path);
     if(!view?.editor||view.file?.path!==path)return ()=>{};
     const document=view.editor.getValue();
-    if(context&&inlineSteeringTarget(document,context.editor.posToOffset(context.editor.getCursor()),context.responseId))return ()=>{};
+    if(context&&!context.queueSend&&inlineSteeringTarget(document,context.editor.posToOffset(context.editor.getCursor()),context.responseId))return ()=>{};
     let offset=endInsertionOffset(document);
-    if(context?.anchor){const anchor=savedSelectionAnchor(document,context.canonicalAnchor??context.anchor,context.snapshot);offset=anchor?insertionOffset(document,anchor):context.insertion?resolveCursorInsertion(document,context.insertion):endInsertionOffset(document);}
+    if(context?.queueSend)offset=endInsertionOffset(document);
+    else if(context?.anchor){const anchor=savedSelectionAnchor(document,context.canonicalAnchor??context.anchor,context.snapshot);offset=anchor?insertionOffset(document,anchor):context.insertion?resolveCursorInsertion(document,context.insertion):endInsertionOffset(document);}
     else if(context?.insertion)offset=resolveCursorInsertion(document,context.insertion);
     else if(insertion){
       const adapter=nativeResponses(this.app).view(view as MarkdownView);
@@ -1701,7 +1702,7 @@ export default class SendToT3 extends Plugin {
         if(request.inlineSteering)return;
 
         const selected=context.anchor&&!activeId?savedSelectionAnchor(context.editor.getValue(),context.canonicalAnchor??context.anchor,context.snapshot):undefined;
-        job=selected?manager.reserve(context.editor,context.view,selected,requestId,note.path,initialInput,request.title,jobOptions):context.insertion?manager.reserveAtCursor(context.editor,context.view,context.insertion,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
+        job=context.queueSend?manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions):selected?manager.reserve(context.editor,context.view,selected,requestId,note.path,initialInput,request.title,jobOptions):context.insertion?manager.reserveAtCursor(context.editor,context.view,context.insertion,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
         this.sendPreviews.hide(context.view as MarkdownView);
         await manager.prepare(job,request);
       }});delivered=true;if(job)manager.start(job);
