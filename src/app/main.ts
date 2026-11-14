@@ -325,23 +325,27 @@ export default class SendToT3 extends Plugin {
     if(typeof this.register==='function'&&MarkdownView?.prototype)this.register(nativeResponses(this.app).installLoading(MarkdownView.prototype));
     if(typeof this.registerDomEvent==='function')this.register(watchWorkspaceDocuments(this.app,root=>{
       const review=(event:Event)=>{const detail=(event as CustomEvent<unknown>).detail;if(isRecord(detail)&&typeof detail.bindingId==='string')new ResponseLocationModal(this.app,detail.bindingId,command=>this.executeAgentCommand(command)).open();};
-      const toggle=(event:Event)=>{
-        const details=event.target as HTMLDetailsElement;if(!details?.matches?.('details[data-t3-tool-ref]')||!details.open)return;
+      const mount=(details:HTMLDetailsElement)=>{
+        if(!details?.matches?.('details[data-t3-tool-ref]')||!details.open)return;
         const ref=details.getAttribute('data-t3-tool-ref')!,old=this.toolRenderings.get(details);if(old?.ref===ref)return;
         if(old){old.dispose();this.removeChild(old.child);this.toolRenderings.delete(details);}
         const child=new MarkdownRenderChild(details);this.addChild(child);
         const dispose=mountToolGroups(details,value=>nativeResponses(this.app).toolGroup(details,value),(html,target)=>MarkdownRenderer.render(this.app,details.classList.contains('send-to-t3-response-history')?nativeResponses(this.app).renderToolBody(details,html):html,target,this.app.workspace.getActiveFile()?.path??'',child),error=>new Notice(`T3 Code: ${message(error)}`));
         child.register(dispose);this.toolRenderings.set(details,{ref,child,dispose});
       };
+      const toggle=(event:Event)=>mount(event.target as HTMLDetailsElement);
       const openHistories=()=>{
         if(this.stopped)return;
         for(const details of Array.from(root.querySelectorAll<HTMLDetailsElement>('details.send-to-t3-response-history[data-t3-tool-ref]:not([open])'))){
           const fold=details.closest('.callout[data-callout="t3-progress"]');if(fold&&!fold.classList.contains('is-collapsed'))details.open=true;
         }
+        // Restored open widgets need not emit a new toggle event. Mount them
+        // after insertion too, before their first visible expansion.
+        for(const details of Array.from(root.querySelectorAll<HTMLDetailsElement>('details[data-t3-tool-ref][open]')))mount(details);
       };
       root.addEventListener('t3-review-response-location',review);root.addEventListener('toggle',toggle,true);
       const observer=new MutationObserver((records=[])=>{for(const [details,rendering] of this.toolRenderings)if(!details.isConnected){rendering.dispose();this.removeChild(rendering.child);this.toolRenderings.delete(details);}if(records.some(record=>record.type==='childList'||(record.target as Element).matches?.('.callout[data-callout="t3-progress"]')))openHistories();});
-      observer.observe(root,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});
+      observer.observe(root,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});queueMicrotask(openHistories);
       return ()=>{root.removeEventListener('t3-review-response-location',review);root.removeEventListener('toggle',toggle,true);observer.disconnect();for(const [details,rendering] of this.toolRenderings)if(details.ownerDocument===root){rendering.dispose();this.removeChild(rendering.child);this.toolRenderings.delete(details);}};
     }));
     const data = await this.loadSettings();

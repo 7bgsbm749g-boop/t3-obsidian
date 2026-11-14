@@ -232,14 +232,18 @@ export function mountToolGroups(root:HTMLElement,resolve:(ref:string)=>string|un
   let pending=false,loadedRef:string|undefined;
   const alive=(ref:string)=>!disposed&&root.contains(details)&&details.isConnected&&details.getAttribute('data-t3-tool-ref')===ref;
   const toggle=async()=>{
-   const ref=details.getAttribute('data-t3-tool-ref')??'',history=details.getAttribute('class')==='send-to-t3-response-history';
+   const ref=details.getAttribute('data-t3-tool-ref')??'',history=details.classList.contains('send-to-t3-response-history');
    if(!details.open||pending||loadedRef===ref||!alive(ref))return;pending=true;
    try{
     const original=await resolve(ref);if(!alive(ref)||!details.open)return;if(!original||contentHash(original)!==ref||!history&&(!groupAt(original,0)||groupAt(original,0)!.to!==original.length))throw Error('The retained tool details are unavailable.');
     const temporary=root.ownerDocument.win.createDiv();await render(history?historyToolBody(original):original,temporary);if(!alive(ref)||!details.open)return;
     const content=history?temporary:temporary.querySelector('.send-to-t3-tool-group-content'),target=details.querySelector('.send-to-t3-tool-group-content');if(!content||!target)throw Error('Cannot render the retained tool details.');
     target.replaceChildren(...Array.from(content.childNodes));loadedRef=ref;
-   }catch(error){if(alive(ref))failure?.(error);}finally{pending=false;if(alive(details.getAttribute('data-t3-tool-ref')??'')&&details.open&&ref!==details.getAttribute('data-t3-tool-ref'))void toggle();}
+   }catch(error){if(alive(ref)){
+      const target=details.querySelector('.send-to-t3-tool-group-content');
+      if(target){const retry=root.ownerDocument.win.createEl('button',{text:history?'Retry loading history':'Retry loading details'});retry.addEventListener('click',()=>{void toggle();});target.replaceChildren(retry);}
+      failure?.(error);
+    }}finally{pending=false;if(alive(details.getAttribute('data-t3-tool-ref')??'')&&details.open&&ref!==details.getAttribute('data-t3-tool-ref'))void toggle();}
   };
   // Retained open nodes do not emit toggle when their canonical content changes.
   // Reload that exact new reference, rejecting any pending result for the old one.

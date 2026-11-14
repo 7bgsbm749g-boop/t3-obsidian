@@ -76,6 +76,7 @@ test('live and stopped summaries are preserved without changing lifecycle status
 });
 class FakeElement {
  children:FakeElement[]=[];parent?:FakeElement;attrs:Record<string,string>={};events=new Map<string,Set<()=>unknown>>();open=false;isConnected=true;className='';textContent='';
+ classList={contains:(value:string)=>(this.attrs.class??this.className).split(/\s+/).includes(value)};
  ownerDocument=installDomFactories({createElement:()=>new FakeElement()});
  constructor(public tag='div'){}
  get childNodes(){return this.children;}
@@ -112,7 +113,7 @@ test('a connected group with a replaced reference rejects old output before reso
  }
 });
 test('unknown and corrupt references fail closed before rendering',async()=>{
- const p=presentToolGroups(html()),h=dom(p.groups[0].ref),errors:unknown[]=[];let renders=0;const dispose=mountToolGroups(h.root as unknown as HTMLElement,()=>html('changed'),()=>{renders++;},error=>errors.push(error));await h.details.toggle(true);assert.equal(errors.length,1);assert.equal(renders,0);assert.equal(h.target.children.length,0);dispose();assert.equal(canonicalToolGroup(p,'unknown'),undefined);
+ const p=presentToolGroups(html()),h=dom(p.groups[0].ref),errors:unknown[]=[];let renders=0;const dispose=mountToolGroups(h.root as unknown as HTMLElement,()=>html('changed'),()=>{renders++;},error=>errors.push(error));await h.details.toggle(true);assert.equal(errors.length,1);assert.equal(renders,0);assert.equal(h.target.children.length,1);assert.equal(h.target.children[0].textContent,'Retry loading details');dispose();assert.equal(canonicalToolGroup(p,'unknown'),undefined);
 });
 
 test('cached tool presentations cannot share mutable ranges with another editor',()=>{
@@ -164,4 +165,21 @@ test('an open retained batch reloads a changed reference without another user to
  assert.equal(h.details.open,true);assert.equal(reads,2);assert.equal(h.target.children[0].textContent,next);
  changed();await new Promise(resolve=>setImmediate(resolve));assert.equal(reads,2);
  dispose();assert.equal(disconnected,true);
+});
+
+
+test('a restored open history with additional native classes loads without another toggle',async()=>{
+ const {body}=historyFixture(),p=presentToolGroups(body),h=dom(p.groups[0].ref);
+ h.details.attrs.class='send-to-t3-response-history native-decoration';h.details.open=true;let rendered='';
+ const dispose=mountToolGroups(h.root as unknown as HTMLElement,ref=>canonicalToolGroup(p,ref),(text,target)=>{rendered=text;(target as unknown as FakeElement).append(new FakeElement('p'));});
+ await new Promise(resolve=>setImmediate(resolve));assert.match(rendered,/Checking\./);assert.equal(h.target.children.length,1);dispose();
+});
+
+
+test('failed retained details expose a retry that reuses the same exact reference',async()=>{
+ const original=html('retry'),p=presentToolGroups(original),h=dom(p.groups[0].ref);let available=false,errors=0;
+ const dispose=mountToolGroups(h.root as unknown as HTMLElement,()=>available?original:undefined,renderMock,()=>{errors++;});
+ await h.details.toggle(true);assert.equal(errors,1);assert.equal(h.target.children[0].textContent,'Retry loading details');
+ available=true;for(const click of h.target.children[0].events.get('click')??[])await click();await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(h.target.children[0].textContent,original);assert.equal(errors,1);dispose();
 });
