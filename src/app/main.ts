@@ -102,6 +102,8 @@ import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,typ
 import {loadFolderLinkChanges,mergeFolderLinkChanges,applyFolderLinkChanges,changedFolderLinks,mergeLegacyFolderLinks,type FolderLinkChange} from '../projects/folder-link-sync';
 import {installPaletteChat,type PaletteChatController} from '../conversations/palette-chat';
 import {SendGesture} from '../responses/send-gesture';
+import {loadAskQueue,relocateQueuedAsks,type QueuedAsk} from '../conversations/ask-queue';
+import {AskQueueModal} from '../conversations/ask-queue-ui';
 import {AskComposer,openChatFlow,openNoteSendFlow,type ChatHost,type ChatDestination} from '../conversations/chat-ui';
 import {selectionRange} from '../conversations/inline-steering';
 import {projectThreads,type ThreadChoice} from '../conversations/thread-target';
@@ -139,7 +141,7 @@ import {approvalTargets,parseApprovalUrl,clearApprovalControls,type ApprovalTarg
 import {settlementState,type ThreadSettlementJob} from '../conversations/thread-settlement';
 import {ThreadSettlementEvents} from '../conversations/thread-settlement-events';
 import {ThreadVisibility,threadHiding} from '../conversations/thread-visibility';
-type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;canonicalAnchor?:SelectionAnchor;insertion?:CursorInsertion;referenceSelection?:boolean;initialQuestion?:string;responseId?:string;snapshot?:string;smartDocument?:string;smartScope?:Span;smartQuestion?:string};
+type EditorChatContext={onSent?:()=>void;queueSend?:boolean;editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;canonicalAnchor?:SelectionAnchor;insertion?:CursorInsertion;referenceSelection?:boolean;initialQuestion?:string;responseId?:string;snapshot?:string;smartDocument?:string;smartScope?:Span;smartQuestion?:string};
 type SteeringSource={document:string;ranges:Span[]};
 type PaletteActionContext={file:TFile;editor?:EditorChatContext;insertion:CursorInsertion|null};
 const NEW_FOLDER_PROJECT='folder:new';
@@ -397,6 +399,8 @@ export default class SendToT3 extends Plugin {
       if(!checking)void this.openManualAction(file,'',editor.getSelection(),{editor,view},this.commandSendSelector(view)).catch(error=>new Notice(`T3 Code: ${message(error)}`,10000));
       return true;
     }});
+    this.addCommand({id:'ask-queue',name:'Review Ask Queue…',editorCallback:(_editor,view)=>{if(view.file)this.openAskQueue(view.file);}});
+    this.addCommand({id:'queue-selection',name:'Add selection to Ask Queue…',editorCheckCallback:(checking,editor,view)=>{if(!view.file||!editor.getSelection().trim())return false;if(!checking)this.openAsk(view.file,editor.getSelection(),{editor,view});return true;}});
     this.addCommand({id:'ask-agent',name:'Ask Agent…',editorCheckCallback:(checking,editor,view)=>{if(this.stopped||this.busy||!view.file)return false;if(!checking)this.openAsk(view.file,editor.getSelection(),{editor,view});return true;}});
     this.addCommand({id:'send-or-ask-choose',name:'Send or ask: choose destination…',editorCheckCallback:(checking,editor,view)=>{
       const file=view.file;
@@ -698,6 +702,8 @@ export default class SendToT3 extends Plugin {
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{void this.relocateNoteThreads(oldPath,file.path,file instanceof TFolder).catch(error=>new Notice(`T3 thread history: ${message(error)}`,10000));}));
       this.registerEvent(this.app.vault.on('delete',file=>{void this.relocateNoteThreads(file.path,undefined,file instanceof TFolder).catch(error=>new Notice(`T3 thread history: ${message(error)}`,10000));}));
     }
+    this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.app.saveLocalStorage(this.askQueueKey(),relocateQueuedAsks(loadAskQueue(this.app.loadLocalStorage(this.askQueueKey())),oldPath,file.path))));
+    this.registerEvent(this.app.vault.on('delete',file=>this.app.saveLocalStorage(this.askQueueKey(),relocateQueuedAsks(loadAskQueue(this.app.loadLocalStorage(this.askQueueKey())),file.path))));
     this.registerEvent(this.app.workspace.on('file-menu',(menu,file,source) => {
       if(file instanceof TFolder){
         const folder=this.folderForMenu(file);
@@ -1164,7 +1170,24 @@ export default class SendToT3 extends Plugin {
     if(captured&&selection.trim()&&!captured.anchor)captured={...captured,anchor:captureEditorSelection(captured.editor)};
     if(captured&&!captured.anchor)captured={...captured,insertion:captured.insertion??captureCursorInsertion(captured.editor.getValue(),captured.editor.posToOffset(captured.editor.getCursor()))};
     const context=captured?this.canonicalChatContext(captured):undefined;
-    new AskComposer(this.app,file.path,this.localDraft(),text=>this.app.saveLocalStorage(this.chatDraftKey,text),(question,selected)=>this.openManualAction(file,question,selection,context,choose||selected)).open();
+    new AskComposer(this.app,file.path,this.localDraft(),text=>this.app.saveLocalStorage(this.chatDraftKey,text),(question,selected)=>this.openManualAction(file,question,selection,context,choose||selected),question=>this.queueAsk(file,context?.canonicalAnchor?.text??selection,question)).open();
+  }
+  private askQueueKey(){return `ask-queue:${this.settings.vaultId}`;}
+  private queueAsk(file:TFile,selection:string,question:string){
+    const items=loadAskQueue(this.app.loadLocalStorage(this.askQueueKey()));
+    if(items.length>=32)throw Error('The Ask Queue is full. Send or remove some questions first.');
+    items.push({id:randomId(),notePath:file.path,selection,question});this.app.saveLocalStorage(this.askQueueKey(),items);
+    new Notice(`Added to Ask Queue (${items.filter(item=>item.notePath===file.path).length}). Use Review Ask Queue to send.`);
+  }
+  private openAskQueue(file:TFile){
+    const key=this.askQueueKey(),items=loadAskQueue(this.app.loadLocalStorage(key)).filter(item=>item.notePath===file.path);
+    const originalIds=new Set(items.map(item=>item.id));
+    const save=(updated:QueuedAsk[])=>this.app.saveLocalStorage(key,[...loadAskQueue(this.app.loadLocalStorage(key)).filter(item=>!originalIds.has(item.id)),...updated]);
+    new AskQueueModal(this.app,items,save,async(prompt,ids)=>{
+      const view=await this.editorForNoteSend(file);if(!view)throw Error('Open this note in the editor before sending.');
+      const document=view.editor.getValue(),sent=new Map(items.filter(item=>ids.includes(item.id)).map(item=>[item.id,JSON.stringify(item)]));
+      await this.openManualAction(file,prompt,'',{view,editor:view.editor,queueSend:true,insertion:captureCursorInsertion(document,document.length),onSent:()=>this.app.saveLocalStorage(key,loadAskQueue(this.app.loadLocalStorage(key)).filter(item=>sent.get(item.id)!==JSON.stringify(item)))},true);
+    }).open();
   }
   private previousNoteThread(path:string,threadId:string){return previousNoteThreads(this.noteThreadRelations(),path).find(entry=>entry.threadId===threadId);}
   private projectForNoteThread(entry:NoteThread):Project{
@@ -1636,9 +1659,13 @@ export default class SendToT3 extends Plugin {
     new ExistingThreadModal(this.app,threads,thread=>this.sendResolvedChat(prompt,note,inline,answerOnly,{threadId:thread.id,expectedProjectKey:projectKey(project),projectOverrideKey:overrideKey,jobOptions:resolve?.()}),'Ask in an existing thread','No existing threads in this project. Use New thread.',back).open();
   }
   private async sendResolvedChat(prompt:string,note:{path:string;absolutePath?:string}|undefined,context:EditorChatContext|undefined,answerOnly:boolean,options:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions}){
+    await this.performResolvedChat(prompt,note,context,answerOnly,options);context?.onSent?.();
+  }
+  private async performResolvedChat(prompt:string,note:{path:string;absolutePath?:string}|undefined,context:EditorChatContext|undefined,answerOnly:boolean,options:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions}){
+    if(context?.queueSend&&options.responseId)throw Error('This thread is still running. Wait for it to finish or choose New thread for the Ask Queue.');
     const jobOptions=options.jobOptions??resolveJobOptions(this.settings.inlineStreaming);
     // Steering extends the existing response, even when this draft says Off.
-    const activeId=options.responseId??(!options.threadId&&context?inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId):undefined);
+    const activeId=context?.queueSend?undefined:options.responseId??(!options.threadId&&context?inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId):undefined);
     if(context&&note&&activeId&&!options.newThread)return this.sendInlineSteering(activeId,prompt,note,context,options);
     if(jobOptions.inline.enabled&&note&&(context||typeof this.app.workspace.getLeaf==='function')){
       if(!context){const file=this.app.vault.getFileByPath(note.path);if(!file)throw Error('The original note is unavailable.');const view=await this.editorForNoteSend(file);if(!view)throw Error('A Markdown editor is required for inline streaming.');context={view,editor:view.editor};}
@@ -1649,7 +1676,7 @@ export default class SendToT3 extends Plugin {
   private async sendInlineChat(prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions}){
     const manager=this.inlineChat;if(!manager)throw Error('Inline T3 response is unavailable. Reload the plugin.');
     if(context.view.file?.path!==note.path)throw Error('The original note is no longer open. Reopen it before asking the agent.');
-    const activeId=inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId);
+    const activeId=context.queueSend?undefined:inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId);
     if(activeId&&!options?.newThread&&!options?.threadId)return this.sendInlineSteering(activeId,prompt,note,context,options);
     const jobOptions=options?.jobOptions??resolveJobOptions(this.settings.inlineStreaming);
     const requestId=randomId(),initialInput=context.initialQuestion?{messageId:commandId(requestId,'message'),text:context.initialQuestion}:undefined;
@@ -2225,8 +2252,8 @@ export default class SendToT3 extends Plugin {
       }
       if(this.stopped)throw Error('The plugin was disabled before sending.');
       const title=await this.requestTitle(connection,project,threadId,note?.path);
-      request={...(this.settings.hideObsidianThreads===true&&!threadId?{hideObsidianThread:true}:{}),...(smartCapture?{smartSend:smartCapture}:{}),...(options?.jobOptions?{jobOptions:options.jobOptions}:{}),id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
-      if(note&&!options?.barePrompt)await this.prepareNoteSteering(request,note.path,preparedInput,options?.sourceContext,options?.responseId,steeringSource);
+      request={...(options?.sourceContext?.queueSend?{queueSend:true}:{}),...(this.settings.hideObsidianThreads===true&&!threadId?{hideObsidianThread:true}:{}),...(smartCapture?{smartSend:smartCapture}:{}),...(options?.jobOptions?{jobOptions:options.jobOptions}:{}),id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
+      if(note&&!options?.barePrompt&&!options?.sourceContext?.queueSend)await this.prepareNoteSteering(request,note.path,preparedInput,options?.sourceContext,options?.responseId,steeringSource);
       await options?.onPrepared?.(request,preparedInput);
       logEvent('request.prepared',{requestId:request.id,threadId:request.threadId,projectId:request.project.id,notePath:note?.path,promptHash:contentHash(request.prompt),promptLength:request.prompt.length});
       this.settings.pending.push(request);

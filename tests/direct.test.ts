@@ -230,3 +230,11 @@ test('a new MCP-enabled pairing requests agent configuration access and refuses 
  const result=await pair(url+'/pair#token=code','',fetcher as any,undefined,scopes);assert.equal(requested,scopes.join(' '));assert.ok(result.session.permissions?.includes('providers:manage'));
  for(const missing of ['settings:write','providers:manage']){grant=scopes.filter(permission=>permission!==missing).join(' ');await assert.rejects(pair(url+'/pair#token=code','',fetcher as any,undefined,scopes),/does not permit MCP setup/);}
 });
+
+test('an Ask Queue refuses an active target before dispatch instead of steering its response',async()=>{
+ const request:Request={queueSend:true,id:'11111111-1111-4111-8111-111111111111',threadId:'thread',project:{id:'project',title:'Project',workspaceRoot:'/'},connection:{transport:'direct',host:'direct',executable:'',environmentId:eid},title:'Questions',prompt:'One combined prompt.'};
+ let dispatches=0;
+ const access:any={origin:url,api:async(path:string)=>{if(path.includes('controlOnly'))return {thread:{id:'thread',projectId:'project',session:{status:'running',activeTurnId:'active'}}};dispatches++;throw Error('Must not dispatch');}};
+ await assert.rejects(sendDirect(request,undefined,async()=>{},undefined,access),/still running/);
+ assert.equal(dispatches,0);assert.equal(request.directPlan,undefined);
+});

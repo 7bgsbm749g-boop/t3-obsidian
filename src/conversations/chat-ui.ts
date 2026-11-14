@@ -267,13 +267,14 @@ export async function openNoteSendFlow(app:App,host:ChatHost,showSelector=false)
 export class AskComposer extends NoteTabPanel {
   private field?:HTMLTextAreaElement;
   private sending=false;
-  constructor(app:App,path:string,private draft:string,private saveDraft:(text:string)=>void,private submit:(text:string,choose:boolean)=>Promise<void>){super(app,path);}
+  constructor(app:App,path:string,private draft:string,private saveDraft:(text:string)=>void,private submit:(text:string,choose:boolean)=>Promise<void>,private queue?:(text:string)=>void){super(app,path);}
   onOpen(){
     this.titleEl.setText('Ask Agent');this.titleEl.hidden=true;this.contentEl.empty();this.modalEl?.classList.add('send-to-t3-ask-composer');
     this.field=this.contentEl.createEl('textarea',{attr:{'aria-label':'Ask Agent',placeholder:'Ask Agent…',rows:'3'}});this.field.value=this.draft;
     this.field.addEventListener('input',()=>{this.draft=this.field!.value;this.saveDraft(this.draft);});
     this.field.addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&!event.isComposing){event.preventDefault();void this.send(false);}});
     const actions=this.contentEl.createDiv({cls:'send-to-t3-ask-actions'});
+    if(this.queue)actions.createEl('button',{text:'Add to Ask Queue'}).addEventListener('click',()=>{if(!this.field?.value.trim())return;this.queue!(this.field.value);this.draft='';this.field.value='';this.saveDraft('');this.close();});
     actions.createEl('button',{text:'Choose destination…'}).addEventListener('click',()=>void this.send(true));
     actions.createEl('button',{text:'Send',cls:'mod-cta'}).addEventListener('click',()=>void this.send(false));this.field.focus();
   }
