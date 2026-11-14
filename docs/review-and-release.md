@@ -12,7 +12,8 @@ checks CSS for expensive `:has()` selectors, partially supported layout
 features, and undocumented priority overrides. Desktop adapters remain lazy;
 mobile does not import their filesystem, process, HTTP-server or timer APIs.
 The production plugin does not import filesystem, process, or HTTP-server
-modules, enumerate vault notes, or access the clipboard. Only desktop hashing
+modules, enumerate vault notes, or read the clipboard. The explicit Copy run ID menu
+action can write only a validated application run ID to the clipboard. Only desktop hashing
 and timers use guarded Node imports. Agent commands and edit proposals use
 T3 Connect file RPCs; private receipts and snapshots use IndexedDB. Native
 indexed settings require Obsidian 1.13.0; no legacy settings renderer remains.
@@ -30,8 +31,8 @@ and build before attesting and publishing. Branch pushes do not publish releases
 The plugin uses authenticated network requests and WebSockets for T3 and
 Obsidian's APIs for requested note changes and safe final saves. It does not
 start a command service on a local port. Normal editor clipboard behavior is
-provided by Obsidian; plugin copy buttons and custom link suggestions were
-removed. Note, property, folder and job event emissions were removed. Reply
+provided by Obsidian; note copy buttons and custom link suggestions were
+removed. Copy run ID is an explicit menu action and reads no clipboard data. Note, property, folder and job event emissions were removed. Reply
 streaming and explicit following remain.
 Clerk account requests use Obsidian `requestUrl`. The T3 browser transport keeps
 abort, redirect rejection and incremental body limits, which `requestUrl` does
