@@ -44,8 +44,9 @@ interface TaskFlowApi {
 /** A narrow bridge to Taskflow's checked API; never infer status from a run. */
 export async function executeTaskFlowCommand(command:TaskFlowCommand,api?:TaskFlowApi){
   const input=validateTaskFlowCommand(command);
-  if(!api||api.version!==1)throw Error('Enable Task Flow with API v1 in this Obsidian vault.');
-  await api.ready;
+  const unavailable=(error:string)=>({id:input.id,ok:false,error,code:'unavailable',retryable:true});
+  if(!api||api.version!==1)return unavailable('Enable Task Flow with API v1 in this Obsidian vault.');
+  try{await api.ready;}catch(error){return unavailable(error instanceof Error?error.message:'Task Flow could not become ready.');}
   const {id,version:_version,kind,...ref}=input;
   try {
     const task=kind==='taskflow-get'?await api.get({taskId:ref.taskId}):kind==='taskflow-assign'?await api.assign({taskId:ref.taskId,expectedRevision:ref.expectedRevision!,assignee:ref.assignee!}):await api[kind==='taskflow-start'?'start':kind==='taskflow-complete'?'complete':'unassign']({taskId:ref.taskId,expectedRevision:ref.expectedRevision!,assignmentId:ref.assignmentId!,...(kind==='taskflow-complete'&&ref.result!==undefined?{result:ref.result}:{})});
