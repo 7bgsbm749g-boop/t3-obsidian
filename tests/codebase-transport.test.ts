@@ -3,7 +3,37 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {codebaseTransport} from '../src/projects/codebase-transport';
 import {CodebaseDocument} from '../src/projects/codebase-core';
+import {filesystemReference} from '../src/projects/codebase-links';
 const scope={environmentId:'env',projectId:'project',root:'/outside',title:'Project'};
+test('machine file RPCs need authentication and filesystem access but no registered project',async()=>{
+ let catalogs=0,remote='original';const calls:Array<{tag:string;payload:any}>=[];
+ const io=codebaseTransport(async environmentId=>{assert.equal(environmentId,'env');return {origin:'https://t3.example',api:async()=>{catalogs++;throw Error('No catalog');}};},{connect:async()=>({closed:false,close(){},call:async(tag,payload:any)=>{
+  calls.push({tag,payload});
+  if(tag==='projects.readFile')return {contents:remote,byteLength:remote.length,truncated:false};
+  if(tag==='projects.writeFile'){remote=payload.contents;return {};}
+  if(tag==='assets.createUrl')return {relativeUrl:'/api/assets/file?key=signed',expiresAt:Date.now()+300000};
+  throw Error('Unexpected RPC');
+ }})});
+ try{
+  for(const path of ['/srv/reports/report.md','/srv/a%23b%3Fc%25d/report.md','C:/Reports/report.md','/report.md','C:/report.md']){
+   const reference=filesystemReference(path,'env')!,doc=new CodebaseDocument(reference.scope,reference.path,io,()=>{});
+   await doc.read();await doc.save('edited '+path);assert.equal(remote,'edited '+path);
+   assert.equal(calls.at(-1)!.payload.cwd,reference.scope.root);assert.equal(calls.at(-1)!.payload.relativePath,reference.path);
+   const resource=await io.resource(reference.scope,'chart.png');assert.match(resource.url,/^https:\/\/t3.example\/api\/assets\//);assert.equal(calls.at(-1)!.payload.resource.cwd,reference.scope.root);
+  }
+  assert.equal(catalogs,0);
+  const file=filesystemReference('/srv/reports/report.md','env')!.scope,before=calls.length;
+  for(const root of ['relative','/srv/../etc','//host/share','/srv\n'])await assert.rejects(io.read({...file,root},'file.md'),/Invalid/);
+  for(const path of ['../secret','/etc/passwd','a//b','a\\b'])await assert.rejects(io.read(file,path),/Invalid/);
+  await assert.rejects(io.read({...file,projectId:'project'},'file.md'),/Invalid/);
+  await assert.rejects(io.deleteProject!(file),/project root/);assert.equal(calls.length,before);
+ }finally{io.dispose!();}
+});
+
+test('machine file access propagates connection permission errors before any file RPC',async()=>{
+ let calls=0;const io=codebaseTransport(async()=>{throw Error('Filesystem access denied');},{connect:async()=>{calls++;throw Error('Must not connect');}});
+ try{const reference=filesystemReference('/srv/reports/report.md','env')!;await assert.rejects(io.read(reference.scope,reference.path),/Filesystem access denied/);assert.equal(calls,0);}finally{io.dispose!();}
+});
 function fixture(){let connects=0,catalogs=0,accesses=0,closes=0,remote='original',root='/outside',time=0;const calls:string[]=[];let closed=false;const io=codebaseTransport(async()=>{accesses++;return {origin:'http://localhost',api:async path=>{assert.equal(path,'/api/orchestration/shell');catalogs++;return {projects:[{id:'project',workspaceRoot:root}],threads:[]};},close:()=>{closes++;}};},{now:()=>time,connect:async()=>{connects++;closed=false;return {get closed(){return closed;},close(){closed=true;},call:async(tag,payload:any)=>{calls.push(tag);if(tag==='projects.readFile')return {contents:remote,byteLength:remote.length,truncated:false};if(tag==='projects.writeFile'){remote=String(expectRecord(payload).contents);return {};}return {entries:[],truncated:false};}};}});return {io,calls,get connects(){return connects;},get catalogs(){return catalogs;},get accesses(){return accesses;},get closes(){return closes;},setRoot(value:string){root=value;},closeSocket(){closed=true;},advance(ms:number){time+=ms;}};}
 test('100 concurrent folders share one credential, catalog fetch, and socket; closed sockets reconnect',async()=>{const f=fixture();await Promise.all(Array.from({length:100},(_,i)=>f.io.list(scope,`folder${i}`)));assert.equal(f.connects,1);assert.equal(f.catalogs,1);assert.equal(f.accesses,1);assert.equal(f.calls.length,100);f.closeSocket();await f.io.list(scope,'');assert.equal(f.connects,2);assert.equal(f.catalogs,1);f.io.dispose!();await Promise.resolve();assert.equal(f.closes,1);await assert.rejects(f.io.list(scope,''),/stopped/);});
 test('warm reads reuse memory but every save checks fresh bytes and verifies current project root',async()=>{const f=fixture(),doc=new CodebaseDocument(scope,'file.md',f.io,()=>{});await Promise.all([doc.read(),doc.read()]);await doc.read();assert.equal(f.calls.filter(t=>t==='projects.readFile').length,1);await doc.save('edited');assert.deepEqual(f.calls.slice(1),['projects.readFile','projects.writeFile','projects.readFile']);assert.equal(f.catalogs,2);f.setRoot('/moved');await assert.rejects(doc.save('new edit'),/workspace changed/);assert.equal(f.calls.filter(t=>t==='projects.writeFile').length,1);f.io.dispose!();});

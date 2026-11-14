@@ -7,7 +7,7 @@ import {WikiGesture} from './wiki-gesture';
 import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import {App,type View,type OpenViewState,type DataWriteOptions,type HeadingCache,type ButtonComponent,MarkdownView,Menu,Modal,Setting,Notice,TFile,TFolder,FuzzySuggestModal,WorkspaceLeaf,type Plugin,editorInfoField} from 'obsidian';
 import {CODEBASE_PREFIX,CodebaseDocument,codebaseRootLabels,contextualCandidates,linkedCodebases,relativeCodebasePath,scopeKey,virtualPath,catalogCodebases,type CodebaseScope,type CodebaseIO,type CodebaseProjectChange} from './codebase-core';
-import {projectLink,projectMarkdownLink,projectPathRoutes} from './codebase-links';
+import {filesystemReference,projectLink,projectMarkdownLink,projectPathRoutes} from './codebase-links';
 import {registerProjectReferences} from './project-reference';
 import type {FolderLink} from './folder-link';
 import type {ReplyReference} from '../responses/reply-assets';
@@ -30,7 +30,7 @@ class FileChoice extends FuzzySuggestModal<RegisteredFile>{
   private settled=false;
   constructor(app:App,private items:RegisteredFile[],private finish:(file:RegisteredFile|undefined)=>void,private title:(scope:CodebaseScope)=>string=scope=>scope.title){super(app);this.setPlaceholder('Choose the project file');}
   getItems(){return this.items;}
-  getItemText(item:RegisteredFile){return `${this.title(item.scope)} / ${item.path}${item.scope.threadId?' (thread workspace)':''}`;}
+  getItemText(item:RegisteredFile){const machine=item.scope.filesystem&&this.items.some(other=>other.scope.environmentId!==item.scope.environmentId)?` (${item.scope.environmentId})`:'';return `${this.title(item.scope)} / ${item.path}${item.scope.threadId?' (thread workspace)':''}${machine}`;}
   onChooseItem(item:RegisteredFile){if(!this.settled){this.settled=true;this.finish(item);}}
   onClose(){super.onClose?.();setTimeout(()=>{if(!this.settled){this.settled=true;this.finish(undefined);}},0);}
 }
@@ -150,10 +150,10 @@ export class CodebaseBridge {
       let route=this.pathRoute(link,source);
       const tracked=route.owned||!physicalLink(link.split('#')[0],source)&&(this.absoluteReference(link)||this.files.has(source)||!!this.resolve(link,source)||this.candidates(link,source).length>0);
       const open=async()=>{
-        if(!route.owned&&this.absoluteReference(link)){const discovered=await this.discoverWorkspaces();route=this.pathRoute(link,source);if(!route.owned&&!discovered){new Notice('Project locations are unavailable. No vault note was created.');return;}}
+        if(!route.owned&&this.absoluteReference(link)){const discovered=await this.discoverWorkspaces();route=this.pathRoute(link,source,true);if(!route.owned&&!discovered){new Notice('File locations are unavailable. No vault note was created.');return;}}
         if(route.owned){const item=route.items.length===1?route.items[0]:route.items.length?await this.choose(route.items,link,source):undefined;if(!item){new Notice('The project file is unavailable or its location is ambiguous.');return;}try{this.choices[JSON.stringify([source,link.split('#')[0]])]=item.file.path;this.pin(item,source);const parsed=projectLink(link)!;return await this.open(item,workspace.getLeaf(newLeaf),{...state,eState:{...state?.eState,...(parsed.line===undefined?{}:{line:parsed.line,startLoc:{line:parsed.line,col:parsed.column??0},endLoc:{line:parsed.line,col:parsed.column??0},cursor:{from:{line:parsed.line,ch:parsed.column??0},to:{line:parsed.line,ch:parsed.column??0}}})}},parsed.subpath);}catch(error){new Notice(`The project file is unavailable: ${error instanceof Error?toError(error).message:String(error)}`,10000);return;}}
         if(physicalLink(link.split('#')[0],source))return original(link,source,newLeaf,state);
-        if(this.absoluteReference(link)&&(this.environmentIds().length||this.sourceOrigins.has(source))){new Notice('This path is not available in a linked project workspace.');return;}
+        if(this.absoluteReference(link)&&(this.environmentIds().length||this.sourceOrigins.has(source))){new Notice('This file is unavailable on its connected machine.');return;}
         const sourceItem=this.files.get(source);if(sourceItem&&link.split('#')[0].includes('/')&&!this.resolve(link,source)){const parts=sourceItem.path.split('/').slice(0,-1);for(const part of link.split('#')[0].split('/')){if(part==='.')continue;if(part==='..'){if(!parts.length)throw Error('The link leaves the project workspace.');parts.pop();}else parts.push(part);}this.register(sourceItem.scope,parts.join('/'));}
         let candidates=this.candidates(link,source);
         // Unclaimed vault links belong to Obsidian, including newly typed wiki
@@ -197,6 +197,7 @@ export class CodebaseBridge {
   private patch<T extends object,K extends keyof T>(target:T,key:K,wrap:(original:T[K])=>T[K]){const original=target[key];if(typeof original!=='function')return;const bound=original.bind(target) as unknown as T[K],replacement=wrap(bound);target[key]=replacement;this.undo.push(()=>{if(target[key]===replacement)target[key]=original;});}
   private environmentIds(){return [...new Set(this.storage?.environments?.()??this.scopes().map(scope=>scope.environmentId))];}
   private allowed(scope:CodebaseScope,linked=this.scopes()){
+    if(scope.filesystem)return !!this.storage?.environments&&this.environmentIds().includes(scope.environmentId);
     if(this.storage?.environments)return this.environmentIds().includes(scope.environmentId)&&!this.links().some(link=>link.self&&link.environmentId===scope.environmentId&&link.projectId===scope.projectId);
     return linked.some(s=>s.environmentId===scope.environmentId&&s.projectId===scope.projectId&&(!!scope.threadId||s.root===scope.root));
   }
@@ -334,7 +335,7 @@ export class CodebaseBridge {
   private async prepareRenderedEmbed(link:string,source:string){
     if(this.stopped||!MEDIA.test(link.split('#')[0].split('?')[0]))return;
     let item=this.resolve(link,source);
-    if(!item&&(this.absoluteReference(link)||this.storage?.environments&&projectLink(link)?.path.includes('/')&&!this.app.metadataCache.getFirstLinkpathDest(link,source))){await this.discoverWorkspaces();item=this.resolve(link,source);}
+    if(!item&&(this.absoluteReference(link)||this.storage?.environments&&projectLink(link)?.path.includes('/')&&!this.app.metadataCache.getFirstLinkpathDest(link,source))){await this.discoverWorkspaces();const route=this.pathRoute(link,source,true);item=route.items.length===1?route.items[0]:this.resolve(link,source);}
     if(!item&&!this.app.metadataCache.getFirstLinkpathDest(link,source)){
       const sourceItem=this.files.get(source);
       if(sourceItem){
@@ -362,12 +363,15 @@ export class CodebaseBridge {
   async reply(reference:ReplyReference,request:ResponseRequest,access:ThreadAccess){
     this.observeSource(request);
     const parsed=projectLink(reference.source);if(!parsed)return undefined;
-    const shell=await access.api('/api/orchestration/shell');
+    let shell:unknown;
+    try{shell=await access.api('/api/orchestration/shell');}catch{/* Absolute file access does not require a project catalog. */}
     const scopes=catalogCodebases(request.threadEnvironmentId,shell).filter(scope=>scope.projectId===request.projectId&&(!scope.threadId||scope.threadId===request.threadId));
-    if(!scopes.length)return undefined;
     for(const scope of scopes)this.knownScopes.set(virtualPath(scope,'identity'),scope);
-    const route=projectPathRoutes(reference.source,scopes);let match=route.matches[0];
-    if(!route.owned&&!/^(?:\/|[a-z]:\/)/i.test(parsed.path))try{relativeCodebasePath(parsed.path);match={scope:scopes.at(-1)!,path:parsed.path};}catch{/* An invalid relative path does not create a project-file match. */}
+    const route=projectPathRoutes(reference.source,scopes);let match:{scope:CodebaseScope;path:string}|undefined=route.matches[0];
+    if(!route.owned){
+      if(/^(?:\/|[a-z]:\/)/i.test(parsed.path))match=filesystemReference(reference.source,request.threadEnvironmentId);
+      else if(scopes.length)try{relativeCodebasePath(parsed.path);match={scope:scopes.at(-1)!,path:parsed.path};}catch{/* An invalid relative path does not create a project-file match. */}
+    }
     if(match&&this.allowed(match.scope)){const item=this.register(match.scope,match.path);this.automaticChoice(request.notePath,parsed.path,item.file.path);this.automaticChoice(request.notePath,item.file.name,item.file.path);this.pin(item,request.notePath);if(MEDIA.test(item.path)&&typeof this.io.resource==='function')await this.prepare(item);}
     // References retain their original spelling. Resolution is a plugin concern.
     return undefined;
@@ -391,7 +395,7 @@ export class CodebaseBridge {
       const source=sourceFor(anchor),route=this.pathRoute(link,source),absolute=this.absoluteReference(link);
       if(!route.owned&&(!absolute||!this.io.workspaces&&!this.io.catalog||!this.environmentIds().length))return;
       event.preventDefault();event.stopImmediatePropagation();
-      const open=async()=>{const discovered=route.owned||await this.discoverWorkspaces();if(this.stopped)return;if(this.pathRoute(link,source).owned)await this.app.workspace.openLinkText(link,source,event.ctrlKey||event.metaKey);else if(!discovered||this.sourceOrigins.has(source)||this.files.has(source)){new Notice('Project locations are unavailable.');}else{replay.add(anchor);anchor.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:event.ctrlKey,metaKey:event.metaKey,shiftKey:event.shiftKey,altKey:event.altKey}));}};
+      const open=async()=>{const discovered=route.owned||await this.discoverWorkspaces();if(this.stopped)return;if(this.pathRoute(link,source,true).owned)await this.app.workspace.openLinkText(link,source,event.ctrlKey||event.metaKey);else if(!discovered||this.sourceOrigins.has(source)||this.files.has(source)){new Notice('File locations are unavailable.');}else{replay.add(anchor);anchor.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:event.ctrlKey,metaKey:event.metaKey,shiftKey:event.shiftKey,altKey:event.altKey}));}};
       void this.withFileOpeningNotice(link,source,open).catch(error=>new Notice(String(error),10000));
     };
     root.addEventListener('click',click,true);
@@ -438,7 +442,7 @@ export class CodebaseBridge {
     return this.app.metadataCache.getCache?.(source)?.links?.some(link=>link.original.startsWith('[[')&&link.link.split('#')[0]===path)??false;
   }
   private routeScopes(linked=this.scopes()){const scopes=[...linked,...this.knownScopes.values(),...linked.flatMap(scope=>this.browse.workspaces(scope)),...[...this.workspaceScopes.values()].flatMap(r=>r.value)];return [...new Map(scopes.map(s=>[virtualPath(s,'identity'),s])).values()];}
-  private pathRoute(name:string,source:string){
+  private pathRoute(name:string,source:string,filesystem=false){
     if(name.startsWith('T3 Code Attachments/')||name.startsWith('T3%20Code%20Attachments/')){
       const alias=projectLink(name)?.path??name.split('#')[0];
       if(this.vaultAliases[alias]&&!this.physicalFileLookup?.(alias)){const item=this.vaultAlias(alias);return {owned:true,items:item?[item]:[] as RegisteredFile[]};}
@@ -451,9 +455,18 @@ export class CodebaseBridge {
     if(chosen&&!allowed(chosen.scope)&&projectPathRoutes(name,[chosen.scope]).owned)return {owned:true,items:[] as RegisteredFile[]};
     const origins=[...this.sourceOrigins.get(source)?.values()??[]],originKeys=new Set(origins.map(origin=>JSON.stringify(origin))),origin=originKeys.size===1?origins[0]:undefined;
     const sourceScope=this.files.get(source)?.scope,link=this.links().filter(l=>source===l.folderPath||source.startsWith(l.folderPath+'/')).sort((a,b)=>b.folderPath.length-a.folderPath.length)[0],collision=(this.automaticChoices.get(JSON.stringify([source,parsed?.path??name]))?.size??0)>1,context=sourceScope??(collision?undefined:origin??(originKeys.size>1?undefined:link));
-    const preferred=[...(chosen&&allowed(chosen.scope)?[[chosen.scope]]:[]),...(context?[active.filter(s=>s.environmentId===context.environmentId&&s.projectId===context.projectId),active.filter(s=>s.environmentId===context.environmentId)]:[]),...(!sourceScope&&(!origin||collision)?[active]:[])];
+    const preferred=[...(chosen&&allowed(chosen.scope)?[[chosen.scope]]:[]),...(context?[active.filter(s=>s.environmentId===context.environmentId&&s.projectId===context.projectId),active.filter(s=>s.environmentId===context.environmentId)]:[]),...(!sourceScope&&(!origin||collision)?[active.filter(scope=>!scope.filesystem&&(collision||!origins.length||origins.some(origin=>origin.environmentId===scope.environmentId)))]:[])];
     for(const candidates of preferred){const route=projectPathRoutes(name,candidates);if(route.owned)return {owned:true,items:route.matches.map(r=>this.register(r.scope,r.path))};}
-    return {owned:projectPathRoutes(name,scopes).owned,items:[] as RegisteredFile[]};
+    const ownershipScopes=context?scopes.filter(scope=>scope.environmentId===context.environmentId):origins.length?scopes.filter(scope=>origins.some(origin=>origin.environmentId===scope.environmentId)):scopes;
+    const owned=projectPathRoutes(name,ownershipScopes.filter(scope=>context||!scope.filesystem)).owned;
+    if(!owned&&filesystem&&this.storage?.environments&&parsed&&/^(?:\/|[a-z]:\/)/i.test(parsed.path)){
+      // The sending machine owns response paths. Never try another machine
+      // when that source is offline; an unscoped link keeps the native chooser.
+      const environments=sourceScope?[sourceScope.environmentId]:origins.length?[...new Set(origins.map(value=>value.environmentId))]:link?.environmentId?[link.environmentId]:this.environmentIds();
+      const items=environments.flatMap(environmentId=>{const reference=filesystemReference(name,environmentId);return reference&&this.allowed(reference.scope)?[this.register(reference.scope,reference.path)]:[];});
+      return {owned:true,items};
+    }
+    return {owned,items:[] as RegisteredFile[]};
   }
   private async discoverWorkspaces(){
     if(this.io.catalog&&this.storage?.environments){
@@ -489,7 +502,7 @@ export class CodebaseBridge {
   }
 
   projectMenu(scope:CodebaseScope,event:MouseEvent){
-    if(scope.threadId)return;
+    if(scope.threadId||scope.filesystem)return;
     const menu=new Menu();
     menu.addItem(item=>item.setTitle('Rename project…').setIcon('pencil').setDisabled(!this.io.renameProject||!this.storage?.projectChanged).onClick(()=>this.projectModal(scope,false)));
     menu.addItem(item=>item.setTitle('Delete project…').setIcon('trash').setDisabled(!this.io.deleteProject||!this.storage?.projectChanged).onClick(()=>this.projectModal(scope,true)));

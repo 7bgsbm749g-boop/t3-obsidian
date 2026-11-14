@@ -1,9 +1,16 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {projectLink,projectMarkdownLink,projectPathRoutes} from '../src/projects/codebase-links';
+import {filesystemReference,projectLink,projectMarkdownLink,projectPathRoutes} from '../src/projects/codebase-links';
 import {replyReferences} from '../src/responses/reply-assets';
 const main={environmentId:'a',projectId:'p',title:'Project',root:'/home/ubuntu/projects/code'};
 const worktree={...main,root:'/home/ubuntu/worktrees/code',threadId:'thread'};
+test('machine file references separate absolute parents from names without accepting traversal or network paths',()=>{
+ for(const [value,root,path] of [['/srv/reports/a%20b.md:4#Heading','/srv/reports','a b.md'],['/srv/a%23b%3Fc%25d/report.md','/srv/a#b?c%d','report.md'],['file:///C:/Reports/a.md','C:/Reports','a.md'],['/report.md','/','report.md'],['C:/report.md','C:/','report.md']]){
+  const reference=filesystemReference(value,'env')!;assert.ok(reference);assert.equal(reference.scope.root,root);assert.equal(reference.path,path);assert.equal(reference.scope.filesystem,true);
+  assert.deepEqual(projectPathRoutes(value,[reference.scope]).matches,[reference]);
+ }
+ for(const value of ['relative/file.md','https://example.com/file.md','file://host/file.md','//host/share/file.md','/../secret','/a/./b','/a//b','/a/%00','/a/%zz','/directory/','C:/../secret','/srv/a:b.md'])assert.equal(filesystemReference(value,'env'),undefined,value);
+});
 test('copied project Markdown links round-trip exact paths without using wiki syntax',()=>{
  for(const scope of [main,worktree,{...main,root:'C:\\Projects\\Code'}]){
   const path='docs/a [b] (c)#d?e%.md',name='a [b] (c)#d?e%.md',markdown=projectMarkdownLink(scope,path,name),references=replyReferences(markdown);

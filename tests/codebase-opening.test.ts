@@ -50,15 +50,24 @@ test('a clicked project link shows progress before discovery and keeps it until 
   }finally{f.bridge.dispose();}
 });
 
-test('failed discovery and failed reads clear progress while retaining the error notice',async()=>{
-  for(const stage of ['catalog','read']){
+test('failed file reads clear progress while retaining the error notice even without a catalog',async()=>{
+  for(const catalogAvailable of [true,false]){
     const f=await fixture();try{
-      f.io[stage]=async()=>{throw Error('Connection failed');};
+      if(!catalogAvailable)f.io.catalog=async()=>{throw Error('No catalog');};
+      f.io.read=async()=>{throw Error('Connection failed');};
       await f.app.workspace.openLinkText('/outside/report.md','Reference.md',false);
       assert.equal(f.progress().length,1);assert.equal(f.progress()[0].hidden,1);
       assert.ok(f.notices.some(notice=>!notice.classes.has('send-to-t3-file-opening')&&/unavailable/.test(notice.text)&&!notice.hidden));
     }finally{f.bridge.dispose();}
   }
+});
+
+test('an unavailable catalog does not block a machine file or its opening progress',async()=>{
+  const f=await fixture();try{
+    f.io.catalog=async()=>{throw Error('No catalog');};
+    await f.app.workspace.openLinkText('/outside/report.md','Reference.md',false);
+    assert.equal(f.leaf.view.value,'Project text');assert.equal(f.progress().length,1);assert.equal(f.progress()[0].hidden,1);assert.deepEqual(f.nativeLinks,[]);
+  }finally{f.bridge.dispose();}
 });
 
 test('a media link keeps progress through preview authorization and native viewer opening',async()=>{
