@@ -1,6 +1,7 @@
 import {MarkdownView} from 'obsidian';
 import Main from '../../src/app/main';
 import {CompletionGlow} from '../../src/responses/completion-glow';
+import {queuedEditIndicator} from '../../src/notes/queued-edit-indicator';
 import {renderInlineTurn} from '../../src/conversations/inline-thread';
 // Product commands, menus and editor; synthetic catalog and provider output.
 // This lab runs only in its unsynced fixture vault and sends no prompts.
@@ -35,7 +36,8 @@ export default class WorkflowPolishLab extends Main {
       subject.performResolvedChat=async(prompt:string,_note:unknown,context:any)=>{write('COMBINED-SEND.json',{prompt,queueSend:context?.queueSend,insertion:context?.insertion,scope:'Synthetic provider, product queue and composer; no external dispatch.'});};
       const record=()=>write('STATE.json',{scope:'Native Obsidian product menus, palette, queue and history; synthetic catalog, run and read-state API; no Sync, external dispatch or native mobile proof.',activeNote:this.app.workspace.getActiveFile()?.path,history:document.querySelector('.callout[data-callout="t3-progress"] .callout-content')?.textContent,loading:document.body.textContent?.includes('Loading history…'),lastVisited,queue:subject.askQueueKey?this.app.loadLocalStorage(subject.askQueueKey()):undefined});
       this.registerDomEvent(document,'click',()=>queueMicrotask(record));record();
-      this.addCommand({id:'fixture-cleanup',name:'Clean up workflow polish fixture',callback:()=>void(async()=>{for(const tab of this.app.workspace.getLeavesOfType('markdown'))tab.detach();for(const path of ['Project/Review.md','Project','Other.md','Reference.md','Virtual.md']){const item=this.app.vault.getAbstractFileByPath(path);if(item)await this.app.vault.delete(item);}write('CLEANUP.json',{remainingNotes:this.app.vault.getMarkdownFiles().map(file=>file.path),threadsCreated:[],syncConfigured:false});})()});
+      this.addCommand({id:'fixture-edit-status',name:'Show a synthetic queued note edit',callback:()=>{const active=this.app.workspace.getActiveViewOfType(MarkdownView);if(active)queuedEditIndicator(active,1);}});
+      this.addCommand({id:'fixture-cleanup',name:'Clean up workflow polish fixture',callback:()=>void(async()=>{for(const tab of this.app.workspace.getLeavesOfType('markdown'))tab.detach();for(const path of ['Project/Review.md','Other.md','Reference.md','Virtual.md','Project']){const item=this.app.vault.getAbstractFileByPath(path);if(item)await this.app.vault.delete(item,true);}write('CLEANUP.json',{remainingNotes:this.app.vault.getMarkdownFiles().map(file=>file.path),threadsCreated:[],syncConfigured:false});})().catch(fail)});
     })().catch(fail));
   }
 }
