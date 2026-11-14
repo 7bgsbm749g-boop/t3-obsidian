@@ -12,7 +12,7 @@ import type {FolderLink} from '../projects/folder-link';
 import type {ResponseRequest} from '../responses/response-model';
 import type {ThreadAccess} from '../conversations/thread-stream';
 import type {SteeringInput} from '../conversations/inline-steering';
-export interface Project { id: string; title: string; workspaceRoot: string; connectionId?:string; connectionName?:string }
+export interface Project { id: string; title: string; workspaceRoot: string; connectionId?:string; connectionName?:string; environmentId?:string; repositoryIdentity?:{canonicalKey:string;origin?:{canonicalKey:string}} }
 export function projectKey(project:Project){return project.connectionId?`${project.connectionId}:${project.id}`:project.id;}
 export function projectLabel(project:Project){return project.title+(project.connectionName?` · ${project.connectionName}`:'');}
 export interface Connection { executable: string; host: string; scriptPath?: string; transport?: 'desktop'|'https'|'direct'; url?: string; native?:boolean; baseDir?:string; stateDir?:string;connectionId?:string;environmentId?:string }
@@ -27,7 +27,10 @@ export function parseProjects(value: unknown): Project[] {
   const ids = new Set<string>();
   return value.projects.map((p: unknown) => {
     if (!isRecord(p) || typeof p.id !== 'string' || !p.id || typeof p.title !== 'string' || !p.title || typeof p.workspaceRoot !== 'string' || ids.has(p.id)) throw new Error('T3 returned an invalid or duplicate project.');
-    ids.add(p.id); return {id:p.id,title:p.title,workspaceRoot:p.workspaceRoot};
+    ids.add(p.id);
+    const identity=isRecord(p.repositoryIdentity)&&typeof p.repositoryIdentity.canonicalKey==='string'?p.repositoryIdentity:undefined;
+    const origin=identity&&isRecord(identity.origin)&&typeof identity.origin.canonicalKey==='string'?{canonicalKey:identity.origin.canonicalKey}:undefined;
+    return {id:p.id,title:p.title,workspaceRoot:p.workspaceRoot,...(identity?{repositoryIdentity:{canonicalKey:identity.canonicalKey as string,...(origin?{origin}:{})}}:{})};
   });
 }
 interface Runtime {beforeThreadCreate?:(request:Request)=>void|Promise<void>;mobile:boolean;access?:(environmentId:string)=>Promise<ThreadAccess>;pairedSession?:(id:string)=>PairedSession|undefined|Promise<PairedSession|undefined>;saveRequest?:(request:Request)=>Promise<void>}

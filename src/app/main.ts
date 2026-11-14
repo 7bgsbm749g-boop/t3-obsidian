@@ -108,6 +108,7 @@ import {projectThreads,type ThreadChoice} from '../conversations/thread-target';
 import {assertThreadNoteMode,oneToOneNoteThreads,threadNoteMode,type ThreadNoteMode,type ModeThread} from '../conversations/thread-note-mode';
 import {lastUsedNoteThread,loadNoteThreads,mergeNoteThreads,mutateNoteThreads,previousNoteThreads,bindNoteThreadIds,resolveNoteThreadPaths,type NoteThread} from '../notes/note-threads';
 import {noteIndicators} from '../responses/explorer-responses';
+import {projectGroups,groupedProjectLabel,projectRepositoryKey} from '../projects/project-groups';
 import {CompletionGlow} from '../responses/completion-glow';
 import {folderNotePath,type FolderNotesSettings} from '../projects/folder-note-adapter';
 import {installFolderIndicators,type FolderIndicatorController} from '../projects/folder-indicator';
@@ -706,7 +707,16 @@ export default class SendToT3 extends Plugin {
           const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();
           if(!submenu){item.onClick(()=>new FolderLinkProjectModal(this.app,this,folder).open());return;}
           const projects=this.projects();
-          for(const project of projects)submenu.addItem(i=>i.setTitle(`Link to ${this.projectChoiceLabel(project)}`).onClick(()=>void this.linkFolder(folder,project,false)));
+          for(const group of projectGroups(projects)){
+            submenu.addItem(i=>i.setTitle(group.label).setIsLabel(true));
+            const shown=new Set<string>();
+            for(const project of group.projects){const key=projectRepositoryKey(project);if(group.shared&&key&&shown.has(key))continue;if(key)shown.add(key);submenu.addItem(i=>{
+              i.setTitle(project.title);
+              if(group.shared){const targets=(i as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(targets){for(const member of group.projects.filter(member=>projectRepositoryKey(member)===key))targets.addItem(target=>target.setTitle(member.connectionName??'This machine').onClick(()=>void this.linkFolder(folder,member,false)));return;}}
+              i.onClick(()=>void this.linkFolder(folder,project,false));
+            });}
+            submenu.addSeparator();
+          }
           submenu.addSeparator();
           submenu.addItem(i=>i.setTitle('Create T3 project…').onClick(()=>void this.createFolderProject(folder)));
           submenu.addItem(i=>i.setTitle('Unlink').setIcon('unlink').setDisabled(!this.settings.folderLinks.some(link=>link.folderPath===folder.path)).onClick(async()=>{
@@ -2246,7 +2256,7 @@ export default class SendToT3 extends Plugin {
       const score=this.connectionScore(c);
       if(!catalog.has(key)||score>catalog.get(key)!.score)catalog.set(key,{project,score});
     }
-    return [...catalog.values()].map(entry=>entry.project);
+    return projectGroups([...catalog.values()].map(entry=>({...entry.project,environmentId:this.settings.paired.find(connection=>connection.id===entry.project.connectionId)?.environmentId}))).flatMap(group=>group.projects);
   }
   private connectionScore(connection?:PairedConnection){
     const session=connection&&this.pairedSessions[connection.id];
@@ -2404,7 +2414,7 @@ export default class SendToT3 extends Plugin {
   projectChoiceLabel(project:Project){
     const c=project.connectionId?this.settings.paired.find(c=>c.id===project.connectionId):undefined;
     const status=this.projectDiscovery?.status(this.sourceKey(c));
-    return projectLabel(project)+(status==='offline'?' · Offline (cached)':status==='unverified'||status==='checking'?' · Cached; checking connection':'');
+    return groupedProjectLabel(project,this.projects())+(status==='offline'?' · Offline (cached)':status==='unverified'||status==='checking'?' · Cached; checking connection':'');
   }
   private syncProjectSources(){
     if(!this.projectDiscovery)return;
@@ -3022,7 +3032,7 @@ class FolderLinkProjectModal extends FuzzySuggestModal<FolderLinkChoice>{
   onOpen(){void super.onOpen?.();this.unwatch=this.plugin.watchProjects(()=>this.inputEl?.dispatchEvent(new Event('input')));}
   onClose(){this.unwatch?.();super.onClose?.();}
   getItems(){return [...this.plugin.projects(),{create:true as const,title:'Create T3 project…'}];}
-  getItemText(choice:FolderLinkChoice){return 'create' in choice?choice.title:`Link to ${this.plugin.projectChoiceLabel(choice)}`;}
+  getItemText(choice:FolderLinkChoice){return 'create' in choice?choice.title:this.plugin.projectChoiceLabel(choice);}
   onChooseItem(choice:FolderLinkChoice){if('create' in choice)void this.plugin.createFolderProject(this.folder);else void this.plugin.linkFolder(this.folder,choice,false);}
 }
 class FolderLinkModal extends Modal{
