@@ -982,8 +982,9 @@ export default class SendToT3 extends Plugin {
     const restoreFolderLinks=JSON.stringify(diskLinks)!==JSON.stringify(this.settings.folderLinks)||JSON.stringify(diskChanges)!==JSON.stringify(this.folderLinkReplica);
     await deviceState(`folder-links:${this.deviceId}:${this.settings.vaultId}`,this.folderLinkReplica);
     const remoteThreads=loadNoteThreads(data.noteThreads);
-    const mergedThreads=mergeNoteThreads(remoteThreads,this.settings.noteThreads);
-    this.settings.noteThreads=remoteThreads;
+    // A send can capture its destination while identity publication is waiting.
+    // Keep confirmed local links available alongside the incoming links.
+    this.settings.noteThreads=mergeNoteThreads(remoteThreads,this.settings.noteThreads);
     this.settings.autoSettleThreads=adopted.autoSettleThreads;
     this.syncSettlementEvents();
     this.settings.hideObsidianThreads=adopted.hideObsidianThreads;void this.syncThreadVisibility();
@@ -996,6 +997,8 @@ export default class SendToT3 extends Plugin {
     this.syncProjectSources();if(connectionsChanged){this.refreshProjectsInBackground(true);void this.syncThreadVisibility();}
     remote.folderLinks=this.settings.folderLinks;remote.folderLinkChanges=this.folderLinkReplica;
     this.sharedBaseline=JSON.stringify(remote);
+    // Include sends and note moves confirmed while the refresh was awaiting IO.
+    const mergedThreads=mergeNoteThreads(remoteThreads,this.settings.noteThreads);
     this.settings.noteThreads=mergedThreads;
     if(JSON.stringify(data.smartSend)!==JSON.stringify(this.smartReplica)||restoreFolderLinks||restoreResponseBindings||restoreNoteContexts||JSON.stringify(mergedThreads)!==JSON.stringify(remoteThreads))await this.save(restoreFolderLinks||restoreResponseBindings||restoreNoteContexts);
     if(previousBindings!==JSON.stringify(this.responseBindingReplica))this.deviceInline?.localBindingsChanged();

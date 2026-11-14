@@ -1,4 +1,4 @@
-import {loadSmartSend,rememberResponse} from '../src/notes/smart-send';
+import {loadSmartSend,prepareSmartSend,rememberResponse,smartDestination} from '../src/notes/smart-send';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -16,10 +16,67 @@ async function harness(initial:any,deviceId=randomUUID()){
   }
   const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base};
   const module={exports:{} as any};
-  runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console},{timeout:5000});
+  runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},URL,TextEncoder,TextDecoder,AbortController,crypto:webcrypto,setTimeout,clearTimeout,console},{timeout:5000});
   const plugin=new module.exports.default();await plugin.onload();
   return {plugin,deviceId,saves:()=>saves,current:()=>current,setCurrent:(value:any)=>{current=value;}};
 }
+
+async function noteRoutingHarness(){
+  const h=await harness({vaultId:randomUUID(),inlineStreaming:{enabled:false}}),p=h.plugin;
+  const project={id:'project',title:'Synthetic project',workspaceRoot:'/synthetic/project',connectionId:'connection'};
+  const notePath='Synthetic/Discussion.md',threadId='previous-thread';
+  p.app.vault={adapter:{}};p.noteNeedsRelink=async()=>false;
+  p.settings.directProjects=[project];p.settings.paired=[{id:'connection',name:'Synthetic machine',url:'https://synthetic.invalid',environmentId:'environment'}];
+  p.projects=()=>[project];p.syncProjectSources=()=>{};
+  const data=loadSmartSend(undefined),plan=await prepareSmartSend(data,notePath,smartDestination('environment',project.id,threadId),'Original request.');
+  p.settings.smartSend=data;
+  const request={id:randomUUID(),project,connection:{connectionId:'connection',environmentId:'environment'},noteThread:p.noteThreadIntent(notePath,project,{environmentId:'environment'}),smartSend:plan.capture};
+  p.rememberStarted(request,threadId);
+  p.settings.noteThreads[0].selectedAt='2026-01-01T00:00:00.000Z';
+  await p.save();
+  p.readChatThread=async(_connection:unknown,_project:unknown,id:string)=>({id,projectId:project.id,title:'Existing discussion'});
+  p.hasSmartContent=async()=>true;p.previewSend=()=>()=>{};
+  const sends:Array<{threadId?:string;projectKey?:string;newThread:boolean;overrideKey?:string}>=[];
+  p.sendNote=async(_file:unknown,threadId:string|undefined,projectKey:string|undefined,newThread:boolean,overrideKey:string|undefined)=>{sends.push({threadId,projectKey,newThread,overrideKey});};
+  return {...h,project,notePath,threadId,request,sends};
+}
+
+function pauseIdentityPublication(plugin:any){
+  let release!:()=>void,entered!:()=>void;
+  const waiting=new Promise<void>(resolve=>{release=resolve;}),ready=new Promise<void>(resolve=>{entered=resolve;});
+  plugin.publishVaultIdentity=async()=>{entered();await waiting;};
+  return {ready,release};
+}
+
+test('a direct note send keeps its previous thread while a stale Sync settings refresh is waiting',async()=>{
+  const h=await noteRoutingHarness(),p=h.plugin;
+  const other={...p.settings.noteThreads[0],notePath:'Synthetic/Other.md',noteId:'a'.repeat(64),threadId:'remote-thread'};
+  h.setCurrent({...h.current(),noteThreads:[other]});
+  const pause=pauseIdentityPublication(p),refresh=p.onExternalSettingsChange();
+  try{
+    await pause.ready;
+    await p.openNoteSend({path:h.notePath},false,null);
+    assert.deepEqual(h.sends,[{threadId:h.threadId,projectKey:'connection:project',newThread:false,overrideKey:'connection:project'}]);
+    assert.equal(p.noteThread('Synthetic/Other.md')?.threadId,other.threadId,'new remote links are available during the refresh');
+  }finally{pause.release();await refresh;}
+  assert.equal(h.current().noteThreads.some((entry:any)=>entry.threadId===h.threadId),true);
+  assert.equal(h.current().noteThreads.some((entry:any)=>entry.threadId===other.threadId),true);
+});
+
+test('a send confirmed during a Sync settings refresh stays remembered after refresh and restart',async()=>{
+  const h=await noteRoutingHarness(),p=h.plugin;
+  h.setCurrent({...h.current(),noteThreads:[]});
+  const pause=pauseIdentityPublication(p),refresh=p.onExternalSettingsChange();
+  try{
+    await pause.ready;
+    p.rememberStarted({...h.request,id:randomUUID()},'newly-selected-thread');
+  }finally{pause.release();await refresh;}
+  assert.equal(p.noteThread(h.notePath)?.threadId,'newly-selected-thread');
+  await p.openNoteSend({path:h.notePath},false,null);
+  assert.equal(h.sends[0]?.threadId,'newly-selected-thread');assert.equal(h.sends[0]?.newThread,false);
+  const restarted=await harness(h.current(),h.deviceId);
+  assert.equal(restarted.plugin.noteThread(h.notePath)?.threadId,'newly-selected-thread');
+});
 
 test('established vault startup and device-only saves do not rewrite synced settings',async()=>{
   const h=await harness({vaultId:'vault'});
