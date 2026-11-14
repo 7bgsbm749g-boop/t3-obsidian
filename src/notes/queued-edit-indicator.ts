@@ -2,6 +2,7 @@ import type {MarkdownView} from 'obsidian';
 
 /** Status only: never enters the editor document, prompt, or saved reply. */
 export function queuedEditIndicator(view:MarkdownView,count:number){
+  if(!view.contentEl)return;
   let indicator=view.contentEl.querySelector<HTMLElement>(':scope > .send-to-t3-queued-edit');
   if(!count){indicator?.remove();return;}
   if(!indicator){indicator=view.contentEl.createDiv({cls:'send-to-t3-queued-edit',attr:{role:'status','aria-live':'polite'}});view.contentEl.prepend(indicator);}
