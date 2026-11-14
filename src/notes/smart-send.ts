@@ -121,7 +121,7 @@ function textCoverage(before:string,after:string,covered:Span[],paragraphs=false
 function mappedCoverage(before:string,after:string,covered:Span[]){
   if(before===after)return covered;
   const a=markdownText(before),b=markdownText(after);
-  return b.map(textCoverage(a.text,b.text,a.map(covered)),true);
+  return b.map(textCoverage(a.text,b.text,a.map(covered),true),true);
 }
 /** Capture only staged replacements, before the checked final write. Mapping
  * these spans later keeps ordinary typing outside and inside the agent edit. */
@@ -194,7 +194,7 @@ export async function sourceProjection(data:SmartSendData,noteId:string,document
     const found=uniqueTextOffset(current.text,original.text),range=found>=0?[found,found+original.text.length] as Span:
       editedResponseRange(current.text,original.text,{...record,before:markdownText(record.before).text,after:markdownText(record.after).text});
     if(!range)continue;
-        const raw=current.map([range],true);if(!raw.length)continue;
+    const raw=current.map([range],true);if(!raw.length)continue;
     known.push([raw[0][0],raw.at(-1)![1]]);
     const [left,right]=range;
     const matched=current.map(textCoverage(original.text,current.text.slice(left,right),[[0,original.text.length]],true).map(([from,to])=>[left+from,left+to] as Span),true);
@@ -240,9 +240,10 @@ export async function prepareSmartSend(data:SmartSendData,path:string,destinatio
   let covered:Span[]=[];for(const [,head] of heads)covered.push(...mappedCoverage(await unpackText(head.source),current,head.covered));covered=union(covered);
   const requested:Span[]=scope?projection.segments.flatMap(segment=>{const from=Math.max(scope[0],segment.rawFrom),to=Math.min(scope[1],segment.rawTo);return to>from?[[segment.from+from-segment.rawFrom,segment.from+to-segment.rawFrom] as Span]:[];}):[[0,current.length]];
   let added=subtractSpans(requested,covered);
+  const freshBlocks=!scope&&heads.length>0;
   // A fresh Markdown block has no previously sent prose. Keep a paragraph,
   // list or code example whole instead of extracting word-level edits.
-  if(!scope&&heads.length){
+  if(freshBlocks){
     const blocks=unified().use(remarkParse).parse(current).children;
     added=blocks.flatMap(block=>{
       const from=block.position?.start.offset,to=block.position?.end.offset;
@@ -251,7 +252,7 @@ export async function prepareSmartSend(data:SmartSendData,path:string,destinatio
     });
   }
   const view=markdownText(current);
-  const text=view.render(view.map(added));
+  const text=freshBlocks?added.map(([from,to])=>current.slice(from,to)).join('\n\n'):view.render(view.map(added));
   const capture:SmartCapture={noteId,source:await packText(current),covered:union([...covered,...added]),parents:heads.map(([id])=>id),bindings:[...new Set(heads.flatMap(([,h])=>h.bindings??[]))]};
   // Retain exact source coordinates before the generated-response projection
   // is discarded. Steering consumes only this newly sent source.

@@ -193,11 +193,11 @@ test('ambiguous copies of an edited reply are not classified by whitespace or ol
 });
 test('parallel confirmed branches merge, and a successor retires only observed branches',async()=>{
   const root=(await send(fresh(),'Base')).data,a=mergeSmartSend(root),b=mergeSmartSend(root);
-  await send(a,'Base\nFrom A',undefined,'a');await send(b,'Base\nFrom B',undefined,'b');
+  await send(a,'Base\n\nFrom A',undefined,'a');await send(b,'Base\n\nFrom B',undefined,'b');
   const merged=mergeSmartSend(a,b);assert.equal(Object.keys(merged.heads).length,2);
-  assert.equal((await prepareSmartSend(merged,path,destination,'Base\nFrom A\nFrom B')).text,'');
-  await send(merged,'Base\nFrom A\nFrom B\nNew',undefined,'c');
-  const stale=mergeSmartSend(merged,root,a,b);assert.deepEqual(Object.keys(stale.heads),['c']);assert.equal((await prepareSmartSend(stale,path,destination,'Base\nFrom A\nFrom B\nNew')).text,'');
+  assert.equal((await prepareSmartSend(merged,path,destination,'Base\n\nFrom A\n\nFrom B')).text,'');
+  await send(merged,'Base\n\nFrom A\n\nFrom B\n\nNew',undefined,'c');
+  const stale=mergeSmartSend(merged,root,a,b);assert.deepEqual(Object.keys(stale.heads),['c']);assert.equal((await prepareSmartSend(stale,path,destination,'Base\n\nFrom A\n\nFrom B\n\nNew')).text,'');
 });
 test('stable note identity follows rename, move back, deletion and recreation',async()=>{
   const {data}=await send();const id=smartNote(data,path);moveSmartNotes(data,path,'Moved.md');assert.equal(smartNote(data,'Moved.md'),id);
@@ -213,7 +213,7 @@ test('a synced old-path deletion cannot overwrite a rename, including a rename b
   deleted.notes[id].revision=renamed.notes[id].revision+100;
   for(const merged of [mergeSmartSend(deleted,renamed),mergeSmartSend(renamed,deleted)]){
     assert.equal(merged.notes[id].path,'Moved.md');assert.ok(!merged.notes[id].deleted);
-    assert.equal((await prepareSmartSend(merged,'Moved.md',destination,'First request. Added.')).text,' Added.');
+    assert.equal((await prepareSmartSend(merged,'Moved.md',destination,'First request.\n\nAdded.')).text,'Added.');
   }
   moveSmartNotes(renamed,'Moved.md',path);
   const back=mergeSmartSend(renamed,deleted);assert.equal(back.notes[id].path,path);assert.ok(!back.notes[id].deleted);
