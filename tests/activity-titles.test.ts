@@ -79,3 +79,11 @@ test('Mobile Tab Bar shines the exact current and adjacent notes, respects wrapp
   notes.clear();decorateMobileActivityTabs(root as any,paths,2,false,notes);
   for(const label of [previous,current,next,activeRow.children[0]])assert.equal(active(label),false);
 });
+
+
+test('unread completion accent follows all matching desktop tabs and clears independently of activity',()=>{
+ const title=new Element(),mirror=new Element(),other=new Element(),tabs=[{path:'A.md',title},{path:'A.md',title:mirror},{path:'B.md',title:other}];
+ const notes=new Map([['A.md',{...note(0),unread:1}]]);decorateActivityTabs(tabs as any,notes);
+ assert.equal(title.getAttribute('data-t3-completion-glow'),'note');assert.equal(mirror.getAttribute('data-t3-completion-glow'),'note');assert.equal(other.hasAttribute('data-t3-completion-glow'),false);
+ notes.clear();decorateActivityTabs(tabs as any,notes);assert.equal(title.hasAttribute('data-t3-completion-glow'),false);
+});

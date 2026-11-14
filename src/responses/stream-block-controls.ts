@@ -1,5 +1,7 @@
 import {clockForDocument} from '../shared/clock';
 import type {App,MarkdownView} from 'obsidian';
+import {Menu} from 'obsidian';
+import {copyRunId} from './run-id';
 import {nativeResponses} from './native-response-manager';
 import {streamBlock} from './stream-block';
 import {removeStreamBlockFromEditor} from './stream-block-edit';
@@ -118,6 +120,16 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
     const fold=element?.closest('.callout[data-callout="t3-progress"]')??(element?.closest('.send-to-t3-stream-actions')?.closest('.cm-embed-block')?.querySelector('.callout[data-callout="t3-progress"]'));
     return fold&&generated(fold)&&fold.closest('.markdown-source-view.is-live-preview')?{element,fold}:undefined;
   };
+  const contextMenu=(event:MouseEvent)=>{
+    const element=event.target as Element|null,fold=element?.closest('.callout[data-callout="t3-progress"]');
+    if(!fold||!generated(fold))return;
+    const view=viewFor(fold),foldKey=key(fold),id=view&&foldKey?nativeResponses(app).view(view)?.responseForFold(foldKey):undefined;
+    const runId=fold.querySelector<HTMLElement>(':scope > .callout-title [data-t3-run-id]')?.dataset.t3RunId??(id?nativeResponses(app).runId(id):undefined)??(view?.file&&foldKey?nativeResponses(app).runIdForFold(foldKey,view.file.path):undefined);
+    const menu=Menu.forEvent(event);
+    menu.addItem(item=>item.setTitle('Copy run ID').setIcon('copy').setDisabled(!runId).onClick(()=>{if(runId)void copyRunId(root.defaultView,runId).catch(onError);}));
+    event.preventDefault();
+  };
+  root.addEventListener('contextmenu',contextMenu,true);
   const pointer=(event:Event)=>{if(target(event))event.stopImmediatePropagation();};
   const click=(event:Event)=>{
     const found=target(event);if(!found)return;
@@ -129,5 +141,5 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
   root.addEventListener(responseScrollChanged,schedule);
   const observer=new MutationObserver(records=>{if(records.some(record=>record.type==='childList'||record.target.instanceOf(Element)&&record.target.matches('.callout[data-callout="t3-progress"]')&&((record.oldValue??'').split(/\s+/).includes('is-collapsed')!==record.target.classList.contains('is-collapsed'))))schedule();});observer.observe(root.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class'],attributeOldValue:true});
   const timer=setInterval(refresh,1000);refresh();
-  return ()=>{disposed=true;stopControls();stopDrag();observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener(responseScrollChanged,schedule);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('mousedown',pointer,true);root.removeEventListener('click',click,true);for(const [actions,controls] of owned){controls.close.remove();controls.follow.remove();controls.signIn.remove();controls.footer?.classList.remove('send-to-t3-stream-footer');controls.fold.style.removeProperty('--send-to-t3-stream-footer-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading){actions.parentElement?.classList.remove('send-to-t3-has-reading-actions');actions.remove();}actions.closest('.cm-embed-block')?.classList.remove('send-to-t3-stream-collapsed');}owned.clear();};
+  return ()=>{disposed=true;root.removeEventListener('contextmenu',contextMenu,true);stopControls();stopDrag();observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener(responseScrollChanged,schedule);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('mousedown',pointer,true);root.removeEventListener('click',click,true);for(const [actions,controls] of owned){controls.close.remove();controls.follow.remove();controls.signIn.remove();controls.footer?.classList.remove('send-to-t3-stream-footer');controls.fold.style.removeProperty('--send-to-t3-stream-footer-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading){actions.parentElement?.classList.remove('send-to-t3-has-reading-actions');actions.remove();}actions.closest('.cm-embed-block')?.classList.remove('send-to-t3-stream-collapsed');}owned.clear();};
 }

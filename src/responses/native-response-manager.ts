@@ -279,6 +279,17 @@ export class NativeResponseManager {
     this.refresh();
   }
   view(view:MarkdownView){const adapter=this.views.get(view);return adapter&&!adapter.isDisposed()?adapter:undefined;}
+  runId(id:string){return this.streams.get(id)?.turnId??this.records.get(id)?.state?.turnId??this.records.get(id)?.request.importTurn?.turnId;}
+  runIdForFold(key:string,path:string){
+    const marker=`data-t3-fold="${key}"`,matches=new Set<string>();
+    for(const record of this.records.values()){
+      if((record.state?.notePath??record.request.notePath)!==path)continue;
+      const body=record.finalWriter?.body??record.state?.finalBody??record.state?.body;
+      const id=record.state?.turnId??record.request.importTurn?.turnId;
+      if(id&&body?.includes(marker))matches.add(id);
+    }
+    return matches.size===1?[...matches][0]:undefined;
+  }
   toolGroup(element:HTMLElement,ref:string){for(const [view,adapter] of this.views)if(view.contentEl?.contains(element))return adapter.toolGroup(ref);}
   renderToolBody(element:HTMLElement,body:string){for(const [view,adapter] of this.views)if(view.contentEl?.contains(element))return adapter.renderToolBody(body,element.getAttribute('data-t3-tool-ref')??undefined);return body;}
   preview(view:MarkdownView,id:string,body:string){this.provisional.set(id,{path:view.file!.path,body});this.refresh();}

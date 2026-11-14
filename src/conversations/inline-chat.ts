@@ -124,7 +124,7 @@ export class InlineChatManager {
   }
   private reserveAt(editor:Editor,info:MarkdownView|MarkdownFileInfo,offset:number,requestId:string,expectedPath:string,initialInput?:InitialInlineInput,threadTitle?:string,options?:ResolvedJobOptions,paragraphBreak=false):InlineJob {
     if(this.stopped)throw Error('The plugin was disabled.');
-    const file=info.file;if(!file||file.path!==expectedPath||file.extension.toLowerCase()!=='md')throw Error('The original Markdown note is no longer open. Reopen it and ask T3 again.');
+    const file=info.file;if(!file||file.path!==expectedPath||file.extension.toLowerCase()!=='md')throw Error('The original Markdown note is no longer open. Reopen it and ask the agent again.');
     const id=requestId,createdAt=new Date().toISOString(),mode=options?.inline.intermediateMode??intermediateMode(this.keepIntermediate()),region=initialRegion(id,initialInput,file.basename??file.path.split('/').at(-1)!.replace(/\.md$/i,''),mode,{startedAt:createdAt},'sending');
     const job:InlineJob={id,path:file.path,requestId,bodyHash:region.bodyHash,phase:'sending',createdAt,keepIntermediate:mode!=='remove',intermediateMode:mode,finalAnswerFormat:options?.inline.finalAnswerFormat??finalAnswerFormat(this.answerFormat()),...(initialInput?{initialInput}:{})};
     this.jobs.push(job);this.runtime(job).source={editor,info};

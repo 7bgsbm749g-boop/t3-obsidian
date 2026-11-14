@@ -28,8 +28,8 @@ async function harness(){
 
 test('startup shows cached unchecked projects immediately, discovers every connection without settings, preserves routing/history, and never syncs derived cache',async()=>{
  const h=await harness(),p=h.plugin;assert.equal(p.projects().length,2);assert.equal(p.settings.directSelected.length,0);
- const menu:any={items:[],addSeparator(){},addItem(cb:Function){const item:any={setTitle(title:string){this.title=title;return this;},setIcon(){return this;},setSubmenu:()=>menu,setDisabled(){return this;},onClick(){return this;}};cb(item);menu.items.push(item);return menu;}};
- h.events.get('file-menu')!(menu,new h.Folder(),'file-explorer-context-menu');assert.ok(menu.items.some((i:any)=>i.title.startsWith('Link to Same name · Laptop')));assert.ok(menu.items.some((i:any)=>i.title.startsWith('Link to Same name · VPS')));
+ const menu:any={items:[],addSeparator(){},addItem(cb:Function){const item:any={setTitle(title:string){this.title=title;return this;},setIcon(){return this;},setIsLabel(value:boolean){this.label=value;return this;},setSubmenu:()=>menu,setDisabled(){return this;},onClick(){return this;}};cb(item);menu.items.push(item);return menu;}};
+ h.events.get('file-menu')!(menu,new h.Folder(),'file-explorer-context-menu');assert.deepEqual(menu.items.filter((i:any)=>i.label).map((i:any)=>i.title),['Laptop','VPS']);assert.equal(menu.items.filter((i:any)=>i.title==='Same name').length,2,'Equal names stay under their separate machine sections');
  const startup=h.layouts.find(cb=>cb.toString().includes('refreshProjectsInBackground(true)'));assert.ok(startup,'startup registers automatic discovery');startup!();await p.refreshMachines();assert.equal(h.reads(),2);assert.equal(p.projects().length,4);assert.equal(h.saves(),0);
  assert.equal(p.projectForLink(p.settings.folderLinks[0]).connectionId,'b');assert.equal(p.projectForNoteThread(p.settings.noteThreads[0]).connectionId,'b');
  const choices=p.destinationContext({path:'Notes/Note.md'}).getProjectChoices();assert.ok(choices.some((c:any)=>c.key==='a:new'));assert.ok(choices.some((c:any)=>c.key==='b:new'));

@@ -31,7 +31,7 @@ export interface InlineBindingCheckpoint {failedContinuations?:Record<string,Fai
 export interface InlineThreadState extends InlineBindingCheckpoint {title?:string;messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;turns?:Record<string,InlineTurn>;historyComplete?:boolean;legacyMessageIds?:string[];v2Requests?:Record<string,WireRuntimeRequest>;v2Controls?:Record<string,WireTurnItem>;checkpoints?:Array<{turnId:string;status:string;checkpointRef:string;assistantMessageId?:string|null;completedAt?:string}>}
 
 export function selectionAnchor(document:string,text:string,start:number,end:number):SelectionAnchor {
-  if(!text.trim()||document.slice(start,end)!==text)throw Error('The selected text changed. Select it again before asking T3.');
+  if(!text.trim()||document.slice(start,end)!==text)throw Error('The selected text changed. Select it again before asking the agent.');
   return {text,start,end,before:document.slice(Math.max(0,start-24),start),after:document.slice(end,end+24)};
 }
 
@@ -40,7 +40,7 @@ export function insertionOffset(document:string,anchor:SelectionAnchor):number {
   const matchesAt=(start:number)=>document.slice(start,start+anchor.text.length)===anchor.text&&document.slice(Math.max(0,start-anchor.before.length),start).endsWith(anchor.before)&&document.slice(start+anchor.text.length).startsWith(anchor.after);
   if(!matchesAt(anchor.start)){
     const first=document.indexOf(anchor.text);
-    if(first<0||document.indexOf(anchor.text,first+1)>=0||!matchesAt(first))throw Error('The selected text moved or changed. Select it again before asking T3.');
+    if(first<0||document.indexOf(anchor.text,first+1)>=0||!matchesAt(first))throw Error('The selected text moved or changed. Select it again before asking the agent.');
     end=first+anchor.text.length;
   }
   const lineEnd=document.indexOf('\n',end);
@@ -626,11 +626,12 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     // placement. Keep their exact input record separate from turn bindings.
     const history:string[]=[...(initialInput?[renderInitialInput(initialInput,timing?.startedAt)]:[])];let final='';
     const completedSegments:string[]=[];let segmentStart=timing?.startedAt,segmentNumber=0;
+    const runIdentity=turnId?`<span class="send-to-t3-run-identity" data-t3-run-id="${escapeReplyHtml(turnId)}"></span>`:"";
     const segmentFold=(contents:string[],end?:string,last=false)=>{
       const finished=!!end,caption=last&&phase==='error'?'Error':last&&phase==='interrupted'?'Interrupted':last&&phase==='cancelled'?'Stopped':finished?(segmentNumber?'Continued for':'Worked for'):'Working for';
       const duration=segmentStart?runTimer({startedAt:segmentStart,...(end?{finishedAt:end}:{})}):'';
       const key=encodeURIComponent(`${threadId}:${segmentStart??turnId}:${segmentNumber}`)+(finished?':complete':':active');
-      return `> [!t3-progress]${finished?'-':'+'} **${label} · ${caption}**${duration?' '+duration:''}${!finished?spinner:''} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(contents.length?'\n>\n'+contents.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
+      return `> [!t3-progress]${finished?'-':'+'} **${label} · ${caption}**${duration?' '+duration:''}${!finished?spinner:''} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>${runIdentity}`+(contents.length?'\n>\n'+contents.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
     };
     let toolIndex=0;
     const toolsBefore=(at=Infinity,sequence=Infinity)=>{while(toolIndex<historyRows.length){const row=historyRows[toolIndex],time=Date.parse(row.createdAt??'')||0;if(time>at||time===at&&row.sequence>sequence)break;history.push(historyRows[toolIndex++].body);}};
@@ -654,7 +655,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     // A steering input starts its own measured continuation segment. Final
     // answer selection above keeps the existing exact response boundary.
     const fold=completedSegments.length?[...completedSegments,segmentFold(history,phase==='running'||phase==='sending'?undefined:timing?.finishedAt,true)].join('\n\n'):
-      `> [!t3-progress]${finalReady?'-':'+'} ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`)+(finalReady?':complete':':active')}"></span>`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
+      `> [!t3-progress]${finalReady?'-':'+'} ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`)+(finalReady?':complete':':active')}"></span>${runIdentity}`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
     const status=handoffError||errorStatus||approvals;
     return fold+(htmlBodies.length?'\n\n'+htmlBodies.map(value=>value.body).join('\n\n'):'')+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
   }
