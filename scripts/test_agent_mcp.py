@@ -16,25 +16,6 @@ spec.loader.exec_module(mcp)
 
 
 class AgentMcpTests(unittest.TestCase):
-    def test_taskflow_skill_and_checked_calls(self):
-        with patch.object(mcp, 'TASKFLOW_SKILL', ROOT / 'skills/taskflow/SKILL.md'):
-            skill = mcp.call_tool('taskflow_instructions', {}, '/unused')
-        self.assertIn('final action', skill['content'][0]['text'])
-        for action in ('get', 'assign', 'start', 'complete', 'unassign'):
-            fields = dict(taskId='task')
-            if action != 'get':
-                fields['expectedRevision'] = 'a' * 64
-                fields.update(dict(assignee='thread') if action == 'assign' else dict(assignmentId='assignment'))
-            with patch.object(mcp, 'send_command', return_value=dict(ok=True, task=dict(id='task'))) as send:
-                mcp.call_tool('taskflow_' + action, dict(vault='Lab', **fields), '/test')
-                command = send.call_args.args[1]
-                self.assertEqual(command['kind'], 'taskflow-' + action)
-                self.assertEqual(command['taskId'], 'task')
-                self.assertEqual(set(command), {'version', 'id', 'kind', *fields})
-        self.assertTrue(mcp.BY_NAME['taskflow_get']['annotations']['readOnlyHint'])
-        with self.assertRaises(ValueError):
-            mcp.call_tool('taskflow_complete', dict(vault='Lab', taskId='task'), '/test')
-
     def test_continuation_registration_uses_existing_thread_command_without_a_prompt(self):
         request = '73e8f114-bf46-49e7-9560-482ed8128c5f'
         for start, extra in [('future', {}), ('after', dict(afterMessageId='original-prompt'))]:
@@ -95,7 +76,6 @@ class AgentMcpTests(unittest.TestCase):
             shutil.copy(ROOT / 'agent/mcp_server.py', destination)
             shutil.copy(ROOT / 'scripts/connect_commands.py', destination)
             shutil.copy(ROOT / 'skills/obsidian-t3/SKILL.md', destination)
-            shutil.copy(ROOT / 'skills/taskflow/SKILL.md', destination / 'TASKFLOW.md')
             messages = [dict(jsonrpc='2.0', id=1, method='initialize', params=dict(protocolVersion='2025-11-25', capabilities={}, clientInfo=dict(name='test', version='1'))),
                         dict(jsonrpc='2.0', method='notifications/initialized'), dict(jsonrpc='2.0', id=2, method='tools/list'),
                         dict(jsonrpc='2.0', id=3, method='resources/read', params=dict(uri=mcp.URI)),

@@ -15,7 +15,7 @@ function lab(selected=provider){
     return structuredClone(config.settings);
   }};
   const io={read:async(path:string)=>files.get(path),write:async(path:string,text:string)=>{files.set(path,text);},list:async()=>[]};
-  const sources={'mcp_server.py':'# server','connect_commands.py':'# protocol','SKILL.md':'# skill','TASKFLOW.md':'# taskflow skill',LICENSE:'MIT'},hash=contentHash(JSON.stringify(sources));
+  const sources={'mcp_server.py':'# server','connect_commands.py':'# protocol','SKILL.md':'# skill',LICENSE:'MIT'},hash=contentHash(JSON.stringify(sources));
   return {files,patches,io,config,rpc,sources,hash,setup:new AgentSetup(rpc,io,'env','/t3/scratch',{files:sources,hash})};
 }
 test('one setup installs verified source and preserves unrelated instances, credentials and options',async()=>{
