@@ -1,3 +1,4 @@
+import {queuedEditIndicator} from '../notes/queued-edit-indicator';
 import {savedResponseProof} from '../responses/saved-response-proof';
 import {RouteStatus} from '../connection/route-status';
 import {readImportThreads,readImportRuns,readImportRun,readImportPreview,importHistoryState} from '../conversations/import-source';
@@ -617,6 +618,9 @@ export default class SendToT3 extends Plugin {
             tabs.push({path:activityLeafPath(leaf as typeof leaf&ActivityLeaf),title:header?.querySelector<HTMLElement>('.workspace-tab-header-inner-title')??null});
           });
           decorateActivityTabs(tabs,notes);
+          const pending=responseBindingRequests(this.settings.responseBindings??{}).filter(request=>request.localStage&&!this.deviceInline?.responseStatus(request.id)?.finalSaved);
+          for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file)queuedEditIndicator(view,pending.filter(request=>request.notePath===view.file!.path).length);}
+
           const mobile=(this.app as App&{plugins?:{plugins?:Record<string,{
             tabs?:()=>ActivityLeaf[];
             activeTab?:(tabs:ActivityLeaf[])=>ActivityLeaf|null;
@@ -2971,7 +2975,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
-  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){for(const leaf of this.app.workspace.getLeavesOfType('markdown'))queuedEditIndicator(leaf.view as MarkdownView,0);this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async setThreadHiding(enabled:boolean){this.settings.hideObsidianThreads=enabled;await this.save();await this.syncThreadVisibility();}
   private syncThreadVisibility(force=false):Promise<void>{
     if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve();

@@ -648,3 +648,5 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 @media (max-width: 600px) {
   .send-to-t3-thread-picker, .send-to-t3-run-picker { height: min(600px, calc(100dvh - 32px)); }
 }
+
+.send-to-t3-queued-edit { padding: 6px 12px; color: var(--text-accent); font-size: var(--font-ui-small); border-bottom: 1px solid var(--background-modifier-border); }
