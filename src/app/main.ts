@@ -624,6 +624,11 @@ export default class SendToT3 extends Plugin {
         this.registerEvent(this.app.workspace.on('layout-change',()=>this.folderIndicators?.refresh()));
         this.registerEvent(this.app.workspace.on('file-open',()=>this.folderIndicators?.refresh()));
         this.registerEvent(this.app.workspace.on('active-leaf-change',()=>this.folderIndicators?.refresh()));
+        this.registerDomEvent(document,'click',event=>{
+          const target=event.target as Element|null;
+          if(!target?.closest('.nav-file-title, .workspace-tab-header'))return;
+          queueMicrotask(()=>{const view=this.app.workspace.getActiveViewOfType(MarkdownView);if(view?.file&&document.hasFocus()&&document.visibilityState==='visible'){this.completionGlow?.view(view.file.path,Date.now(),true);this.folderIndicators?.refresh();}});
+        });
         this.registerDomEvent(document,'visibilitychange',()=>{this.completionGlow?.view(undefined);this.folderIndicators?.refresh();});
         this.registerDomEvent(window,'blur',()=>this.completionGlow?.view(undefined));
         this.registerDomEvent(window,'focus',()=>{this.folderIndicators?.refresh();void this.completionGlow?.refresh(true);});
