@@ -711,8 +711,10 @@ export default class SendToT3 extends Plugin {
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{void this.relocateNoteThreads(oldPath,file.path,file instanceof TFolder).catch(error=>new Notice(`T3 thread history: ${message(error)}`,10000));}));
       this.registerEvent(this.app.vault.on('delete',file=>{void this.relocateNoteThreads(file.path,undefined,file instanceof TFolder).catch(error=>new Notice(`T3 thread history: ${message(error)}`,10000));}));
     }
-    this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.app.saveLocalStorage(this.askQueueKey(),relocateQueuedAsks(loadAskQueue(this.app.loadLocalStorage(this.askQueueKey())),oldPath,file.path))));
-    this.registerEvent(this.app.vault.on('delete',file=>this.app.saveLocalStorage(this.askQueueKey(),relocateQueuedAsks(loadAskQueue(this.app.loadLocalStorage(this.askQueueKey())),file.path))));
+    if(typeof this.app.vault.on==='function'){
+      this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.app.saveLocalStorage(this.askQueueKey(),relocateQueuedAsks(loadAskQueue(this.app.loadLocalStorage(this.askQueueKey())),oldPath,file.path))));
+      this.registerEvent(this.app.vault.on('delete',file=>this.app.saveLocalStorage(this.askQueueKey(),relocateQueuedAsks(loadAskQueue(this.app.loadLocalStorage(this.askQueueKey())),file.path))));
+    }
     this.registerEvent(this.app.workspace.on('file-menu',(menu,file,source) => {
       if(file instanceof TFolder){
         const folder=this.folderForMenu(file);
