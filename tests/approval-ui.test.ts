@@ -48,6 +48,6 @@ test('Live Preview controls are inline and exclude fenced examples; source mode 
   const extension=h.module.exports.approvalEditorExtension(h.controller),plugin=extension[0];
   const view=(live:boolean)=>({state:EditorState.create({doc:text}),contentDOM:{closest:()=>({classList:{contains:()=>live}})}});
   const instance=plugin.create(view(true)),ranges:string[]=[];instance.decorations.between(0,text.length,(from:number,to:number)=>ranges.push(text.slice(from,to)));
-  assert.deepEqual(ranges,[`[Approve](${approvalUrl(target,'accept')})`,`[Deny](${approvalUrl(target,'decline')})`]);
+  assert.deepEqual(ranges,[`[Cancel](${approvalUrl(target,'cancel')})`,`[Decline](${approvalUrl(target,'decline')})`,`[Always allow this session](${approvalUrl(target,'acceptForSession')})`,`[Approve](${approvalUrl(target,'accept')})`]);
   assert.equal(plugin.create(view(false)).decorations.size,0);h.controller.dispose();
 });

@@ -8,7 +8,8 @@ import {presentToolGroups,canonicalToolGroup,toolDisplayOffset,restoreToolGroups
 import {renderResponseToolGroup,type ResponseTool,type ResponseToolGroup} from '../src/responses/response-tools';
 const tool=(id='one',output='exact output'):ResponseTool=>({id,turnId:'turn',key:JSON.stringify(['turn',id]),status:'completed',label:'Ran npm',activeLabel:'Running npm',icon:'terminal',action:'command',sequence:1,command:'npm test',output});
 const group=(id='group',output='exact output',count=2):ResponseToolGroup=>({id,turnId:'turn',tools:Array.from({length:count},(_,i)=>tool(String(i),output))});
-const html=(id='group',output='exact output',count=2)=>renderResponseToolGroup(group(id,output,count));
+// Legacy saved-note fixtures exercise exact recovery without restoring product output UI.
+const html=(id='group',output='exact output',count=2)=>renderResponseToolGroup(group(id,output,count)).replace(/<div class="send-to-t3-tool"[^>]*>[\s\S]*?<\/div>/g,(row)=>row.replace('<div','<details').replace(/<\/div>$/,'</details>').replace(/(<span data-t3-tool-icon=[\s\S]*?<\/span><span>[\s\S]*?<\/span>)/,()=>'<summary><span>Ran npm</span></summary><pre><code>'+output.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\r\n?|\n/g,'&#10;')+'</code></pre>'));
 test('large nested generated groups leave CodeMirror while exact canonical bytes and summaries remain available',()=>{
  const original=html('large','🎯 private detail '.repeat(1500),20),canonical='Before.\n\n> '+original+'\n\nFinal prose.\n',p=presentToolGroups(canonical);
  assert.ok(canonical.length>300_000);assert.ok(p.display.length<800);assert.equal(p.canonical,canonical);assert.equal(p.groups.length,1);assert.equal(p.groups[0].ref.length,64);assert.equal(canonicalToolGroup(p,p.groups[0].ref),original);assert.equal(p.groups[0].canonicalTo-p.groups[0].canonicalFrom,original.length);assert.match(p.display,/Ran 20 commands/);assert.doesNotMatch(p.display,/private detail/);assert.equal(restoreToolGroups(p.display,p),canonical);assert.deepEqual(toolDisplayOffset(p,2),{kind:'canonical',offset:2});assert.deepEqual(toolDisplayOffset(p,p.groups[0].displayFrom+10),{kind:'tool',ref:p.groups[0].ref,from:p.groups[0].canonicalFrom,to:p.groups[0].canonicalTo});assert.deepEqual(toolDisplayOffset(p,p.display.length),{kind:'canonical',offset:canonical.length});
@@ -27,9 +28,9 @@ test('mixed and thought-only batches retain formatted summaries and exact canoni
  const text='# Heading\n\n**Bold** and *emphasis* with [link](https://example.com "Title").\n\n2. First\n3. Second\n\n> Quote\n\n---\n\nLine  \nbreak\n\n![image](https://example.com/image.png "Image")\n\n```ts\nconst exact = `<script>`;\n```\n\n<script>literal</script> [unsafe](javascript:alert(1))';
  for(const tools of [[],group().tools]){
   const original=renderResponseToolGroup({...group(),tools,thoughts:[{id:'thought',turnId:'turn',role:'reasoning',text,streaming:false,createdAt:'2026-10-30T01:00:00Z',sequence:0}]});
-  const p=presentToolGroups(original);assert.equal(p.groups.length,1);assert.match(p.display,/1 thought/);assert.doesNotMatch(p.display,/Heading/);assert.match(original,/<strong>Bold<\/strong>/);assert.match(original,/&lt;script&gt;/);assert.doesNotMatch(original,/<script>|href="javascript:/);
+  const p=presentToolGroups(original);assert.equal(p.groups.length,1);assert.match(p.display,/Thought/);assert.doesNotMatch(p.display,/Heading/);assert.match(original,/<strong>Bold<\/strong>/);assert.match(original,/&lt;script&gt;/);assert.doesNotMatch(original,/<script>|href="javascript:/);
   assert.equal(canonicalToolGroup(p,p.groups[0].ref),original);assert.equal(restoreToolGroups(p.display,p),original);
-  assert.throws(()=>restoreToolGroups(p.display.replace('1 thought','2 thoughts'),p),/changed/);
+  assert.throws(()=>restoreToolGroups(p.display.replace('Thought','Thought (×2)'),p),/changed/);
  }
 });
 test('tool bytes are restored exactly while ordinary edits stay on both sides',()=>{

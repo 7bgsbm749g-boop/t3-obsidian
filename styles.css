@@ -508,6 +508,15 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 .send-to-t3-tasks > summary::before { content: '›'; width: .6em; flex: 0 0 .6em; }
 .send-to-t3-tasks[open] > summary::before { transform: rotate(90deg); }
 .send-to-t3-tasks-content { padding-inline-start: 1.7em; }
+.send-to-t3-proposed-plan { margin: .75em 0; padding: 1em; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: var(--background-primary-alt); }
+.send-to-t3-plan-header { display: flex; align-items: center; flex-wrap: wrap; gap: .6em; }
+.send-to-t3-plan-header strong { overflow-wrap: anywhere; }
+.send-to-t3-plan-badge { font-size: var(--font-smallest); padding: .15em .5em; border-radius: var(--radius-s); background: var(--background-modifier-hover); color: var(--text-muted); }
+.send-to-t3-plan-status { font-size: var(--font-smallest); color: var(--text-muted); }
+.send-to-t3-plan-content, .send-to-t3-plan-preview { margin-top: .75em; overflow-wrap: anywhere; }
+.send-to-t3-proposed-plan details > summary { margin-top: .75em; cursor: pointer; color: var(--text-accent); }
+.send-to-t3-proposed-plan details:not([open]) .send-to-t3-plan-collapse, .send-to-t3-proposed-plan details[open] .send-to-t3-plan-expand, .send-to-t3-proposed-plan details[open] + .send-to-t3-plan-preview { display: none; }
+.send-to-t3-plan-preview { max-height: 20em; overflow: hidden; mask-image: linear-gradient(#000 70%, transparent); }
 .send-to-t3-task { display: flex; align-items: baseline; gap: .6em; margin: .35em 0; }
 .send-to-t3-task-mark { position: relative; display: inline-block; flex: 0 0 .85em; width: .85em; height: .85em; border: 1.5px solid var(--text-muted); border-radius: 2px; box-sizing: border-box; pointer-events: none; }
 .send-to-t3-task[data-t3-task-state="in_progress"] > .send-to-t3-task-mark::after { content: ''; position: absolute; width: 1.5px; height: 85%; background: var(--text-muted); left: 45%; top: 8%; transform: rotate(35deg); }
@@ -524,10 +533,13 @@ body [data-t3-codebase-hidden="true"] { display: none; }
   font-weight: var(--font-normal);
   color: var(--text-muted);
 }
-.send-to-t3-tool > summary, .send-to-t3-thought > summary, details[data-t3-tool-group] > summary, .send-to-t3-answer > summary { display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); font-weight: var(--font-normal); }
-.send-to-t3-tool > summary::before, .send-to-t3-thought > summary::before, details[data-t3-tool-group] > summary::before, .send-to-t3-answer > summary::before { content: '›'; width: .6em; flex: 0 0 .6em; }
-.send-to-t3-tool[open] > summary::before, .send-to-t3-thought[open] > summary::before, details[data-t3-tool-group][open] > summary::before, .send-to-t3-answer[open] > summary::before { transform: rotate(90deg); }
+.send-to-t3-thought > summary, details[data-t3-tool-group] > summary, .send-to-t3-answer > summary { display: flex; align-items: center; gap: .5em; cursor: pointer; color: var(--text-muted); font-weight: var(--font-normal); }
+.send-to-t3-thought > summary::before, details[data-t3-tool-group] > summary::before, .send-to-t3-answer > summary::before { content: '›'; width: .6em; flex: 0 0 .6em; }
+.send-to-t3-thought[open] > summary::before, details[data-t3-tool-group][open] > summary::before, .send-to-t3-answer[open] > summary::before { transform: rotate(90deg); }
 .send-to-t3-thought-content { padding-inline-start: 1.7em; }
+div.send-to-t3-thought { display: flex; align-items: center; gap: .5em; padding-inline-start: 1.1em; color: var(--text-muted); }
+.send-to-t3-thought-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.send-to-t3-thought-time { flex: 0 0 auto; }
 .send-to-t3-answer-label { flex-shrink: 0; }
 .send-to-t3-answer-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-normal); }
 .send-to-t3-answer-time { margin-left: auto; flex-shrink: 0; font-size: var(--font-ui-smaller); }
@@ -540,9 +552,13 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 .send-to-t3-tool-group-content { padding-left: 1.1em; }
 .markdown-rendered .send-to-t3-response-history,.markdown-rendered .send-to-t3-response-history>.send-to-t3-tool-group-content{display:block;margin:0;padding:0;border:0;background:transparent;}
 .markdown-rendered .send-to-t3-response-history>summary{display:none;}
-.send-to-t3-tool[data-t3-tool-status="failed"] > summary { color: var(--text-error); }
-.send-to-t3-tool pre { max-height: 18em; overflow: auto; white-space: pre-wrap; }
-.send-to-t3-tool pre { position: relative; }
+.send-to-t3-tool[data-t3-tool-status="inProgress"]::after { content: ''; width: .65em; height: .65em; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: send-to-t3-inline-spin .8s linear infinite; }
+.send-to-t3-tool[data-t3-tool-status="failed"] { color: var(--text-error); }
+.send-to-t3-tool { display: flex; align-items: center; gap: .5em; color: var(--text-muted); }
+/* Old saved tool details remain on disk; their native display is a flat label. */
+details.send-to-t3-tool > :not(summary) { display: none; }
+details.send-to-t3-tool > summary { display: flex; align-items: center; gap: .5em; list-style: none; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .send-to-t3-tool::after { animation: none; } }
 .send-to-t3-worktree-setup { margin: .5em 0; line-height: 1.5; }
 .send-to-t3-setup-stage[data-worktree-setup-status="running"] > .send-to-t3-setup-icon { display: none; }
 .send-to-t3-setup-header { display: flex; align-items: baseline; gap: 8px; min-height: 32px; padding: 4px 4px 8px; margin-bottom: 6px; border-bottom: 1px solid color-mix(in srgb, var(--background-modifier-border) 60%, transparent); }
@@ -627,6 +643,10 @@ body [data-t3-codebase-hidden="true"] { display: none; }
 .t3-agent-progress { color: var(--text-muted); }
 
 .t3-agent-config { width: 100%; min-height: 12em; font-family: var(--font-monospace); resize: vertical; }
+.send-to-t3-tool-source-icon { width: 16px; height: 16px; object-fit: contain; flex: 0 0 16px; }
+button.send-to-t3-response-activity { display: inline-flex; align-items: center; gap: .5em; max-width: 100%; height: auto; text-align: start; white-space: normal; box-shadow: none; }
+.send-to-t3-question-navigation { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5em; margin: .5em 0; }
+.send-to-t3-question-dialog fieldset[hidden] { display: none; }
 
 /* Import starts with recent threads across every connected project. */
 .send-to-t3-thread-picker { height: min(580px, calc(100dvh - 80px)); display: flex; flex-direction: column; }

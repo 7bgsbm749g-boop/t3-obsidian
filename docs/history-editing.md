@@ -1,6 +1,5 @@
 # Editing conversation history
 
-
 Changing a saved note does not change T3 conversation history. The current
 Orchestrator v2 command contract supports editing queued runs, checkpoint
 rollback, and thread forks. It has no client command to replace completed user

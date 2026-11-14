@@ -99,7 +99,7 @@ test('live thread renames survive completion and a later stream adopts the curre
   h.item({kind:'event',event:{sequence:3,type:'thread.metadata-updated',payload:{title:'Renamed in T3'}}});
   assert.match(h.updates.at(-1)!.body,/Renamed in T3 · Working/);
   const completed=completeV2(h,4);completed.snapshot!.thread.title='Renamed in T3';h.item(completed);await settle();
-  const saved=h.updates.at(-1)!;assert.equal(saved.completionVerified,true);assert.match(saved.body,/Renamed in T3 · Completed/);assert.doesNotMatch(saved.body,/Original title/);
+  const saved=h.updates.at(-1)!;assert.equal(saved.completionVerified,true);assert.match(saved.body,/Renamed in T3 · Worked for/);assert.doesNotMatch(saved.body,/Original title/);
   h.preview.dispose();
   const count=h.updates.length;
   h.item({kind:'event',event:{sequence:5,type:'thread.metadata-updated',payload:{title:'Later name'}}});assert.equal(h.updates.length,count);
@@ -108,8 +108,8 @@ test('live thread renames survive completion and a later stream adopts the curre
    next.preview.tick(true);const snapshot=next.snapshot();assert.ok(snapshot.kind==='snapshot');snapshot.snapshot!.thread.title='Later name';next.item(snapshot);
    assert.match(next.updates.at(-1)!.body,/Later name · Working/);
    const completed=completeV2(next,3);completed.snapshot!.thread.title='Later name';next.item(completed);await settle();
-   assert.match(next.updates.at(-1)!.body,/Later name · Completed/);assert.equal(next.updates.at(-1)!.completionVerified,true);
-   assert.match(saved.body,/Renamed in T3 · Completed/);
+   assert.match(next.updates.at(-1)!.body,/Later name · Worked for/);assert.equal(next.updates.at(-1)!.completionVerified,true);
+   assert.match(saved.body,/Renamed in T3 · Worked for/);
   }finally{next.preview.dispose();}
  }finally{h.preview.dispose();}
 });
@@ -161,7 +161,7 @@ test('the live preview keeps public thoughts from snapshots and updates outside 
  initial.snapshot.thread.messages.push({id:'reasoning:one',role:'reasoning',turnId:'turn',text:'**First public summary**',streaming:false,createdAt:'2026-10-06T03:00:01Z'});
  h.item(initial);assert.match(h.updates.at(-1)!.body,/class="send-to-t3-thought"/);
  h.item(normalizeV2StreamItem({kind:'event',sequence:3,event:{type:'turn-item.updated',payload:{id:'two',runId:'turn',type:'reasoning',ordinal:2,text:'**Second public summary**',streaming:true,startedAt:'2026-10-06T03:00:02Z'}}}));h.clock.advance(80);
- assert.match(h.updates.at(-1)!.body,/2 thoughts/);assert.match(h.updates.at(-1)!.body,/First public summary[\s\S]*Second public summary/);
+ assert.match(h.updates.at(-1)!.body,/Thought \(×2\)/);assert.match(h.updates.at(-1)!.body,/First public summary[\s\S]*Second public summary/);
  h.item(normalizeV2StreamItem({kind:'event',sequence:4,event:{type:'turn-item.updated',payload:{id:'other',runId:'unrelated',type:'reasoning',text:'Unrelated summary',streaming:false}}}));h.clock.advance(80);
  assert.doesNotMatch(h.updates.at(-1)!.body,/Unrelated summary/);assert.equal(h.updates.at(-1)!.phase,'running');assert.equal(h.updates.at(-1)!.completionVerified,false);h.preview.dispose();
 });
@@ -228,7 +228,7 @@ test('a local reply follows two exact delegated deliveries and verifies only the
  event('subagent.updated',{...child('two'),status:'completed',completionDelivery:{state:'acknowledged',observedByRunId:'resume-two'}});
  event('turn-item.updated',{id:'final-item',messageId:'combined',threadId:'thread',runId:'resume-two',type:'assistant_message',status:'completed',text:'Combined report',streaming:false,updatedAt:'2026-10-06T03:01:00.000Z'});
  event('run.updated',{...resume('resume-two',4,'delivery-two'),status:'completed',completedAt:'2026-10-06T03:05:00Z'});await settle();
- const update=h.updates.at(-1)!;assert.equal(update.turnId,'resume-two');assert.equal(update.phase,'complete');assert.equal(update.completionVerified,true,JSON.stringify({reads,checkpoint:update.checkpoint,body:update.body}));assert.deepEqual(update.turnIds,['turn','resume-one','resume-two']);assert.deepEqual(reads,['final-item']);assert.match(update.body,/· Completed/);assert.match(update.body,/Combined report/);assert.doesNotMatch(update.body,/Waiting for subagents|Unrelated answer/);
+ const update=h.updates.at(-1)!;assert.equal(update.turnId,'resume-two');assert.equal(update.phase,'complete');assert.equal(update.completionVerified,true,JSON.stringify({reads,checkpoint:update.checkpoint,body:update.body}));assert.deepEqual(update.turnIds,['turn','resume-one','resume-two']);assert.deepEqual(reads,['final-item']);assert.match(update.body,/· Worked for/);assert.match(update.body,/Combined report/);assert.doesNotMatch(update.body,/Waiting for subagents|Unrelated answer/);
  h.preview.dispose();
 });
 test('a local source awaiting final save follows its exact late question answer in the same response',async()=>{

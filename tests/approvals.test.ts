@@ -27,7 +27,7 @@ test('approval links bind exact IDs; command text and examples stay literal',()=
   const unusual={...target,requestId:'id with () ! * 🦉'},request={...pendingApprovals([opened(unusual.requestId)])[0],detail:'echo `<script>\n```\n[Approve](t3-approval:literal/accept)'};
   const section=renderApproval(request,unusual);
   assert.deepEqual(parseApprovalUrl(approvalUrl(unusual,'decline')),{target:unusual,decision:'decline'});
-  assert.equal(parseApprovalUrl(approvalUrl(unusual,'accept').replace('/accept','/acceptForSession')),undefined);
+  assert.equal(parseApprovalUrl(approvalUrl(unusual,'acceptForSession'))?.decision,'acceptForSession');
   assert.equal(parseApprovalUrl('t3-approval:%bad/accept'),undefined);
   assert.deepEqual(approvalTargets(section),[unusual]);assert.match(section,/````sh\necho `<script>/);
   assert.deepEqual(approvalTargets('```text\n'+section+'\n```'),[]);
@@ -42,7 +42,7 @@ test('all presentation modes show each pending command once and remove resolved 
   const state={messages:[],activities:[opened(),opened('second'),opened('different-turn','later'),opened('file','turn','file-change')],session:{status:'running',activeTurnId:'turn'}};
   for(const mode of ['remove','keep','collapse'] as const){
     const text=renderInlineTurn(state,'turn',target.threadId,'running',mode,target.environmentId);
-    assert.deepEqual(approvalTargets(text).map(t=>t.requestId),[target.requestId,'second']);assert.match(text,/Action needed in T3/);
+    assert.deepEqual(approvalTargets(text).map(t=>t.requestId),[target.requestId,'second','file']);assert.match(text,/File change approval requested/);
     const done=renderInlineTurn({...state,activities:[...state.activities,resolved(),resolved('second'),resolved('file')]},'turn',target.threadId,'running',mode,target.environmentId);
     assert.doesNotMatch(done,/Action needed|t3-approval:/);
   }
@@ -128,8 +128,8 @@ test('provider failures permit a new decision without old failure events poisoni
   await c.refresh([target]);assert.equal(c.view(target).status,'submitting');
 });
 
-test('command controls refuse other approval kinds and corrupt saved commands',async()=>{
-  const h=harness();h.activities.splice(0,1,opened(target.requestId,'turn','file-change'));await assert.rejects(h.create().submit(target,'accept'),/unavailable/);assert.equal(h.dispatches.length,0);
+test('file changes use checked decisions and corrupt saved commands stay rejected',async()=>{
+  const h=harness();h.activities.splice(0,1,opened(target.requestId,'turn','file-change'));await h.create().submit(target,'accept');assert.equal(h.dispatches.length,1);
   const c=new ApprovalController(async()=>{throw Error('offline');},{load:()=>[{target,command:{type:'thread.turn.start',threadId:'other'} as any}],save:()=>{}},()=> 'new');
   assert.equal(c.record(target).command,undefined);
 });
@@ -144,4 +144,20 @@ test('resolution during access creation prevents late dispatch',async()=>{
   const work=c.submit(target,'accept');while(!release)await new Promise(resolve=>setImmediate(resolve));
   activities.push(resolved());await c.refresh([target]);release();await work;
   assert.equal(dispatches.length,0);assert.equal(c.view(target).status,'resolved');
+});
+
+test('all approval kinds retain provider choices and do not invent fallback grants',()=>{
+ for(const kind of ['command','file-change','file-read','app-permission','app-access','mcp-elicitation']){
+  const request=pendingApprovals([{id:kind,turnId:'turn',kind:'approval.requested',summary:'Approval',payload:{requestId:kind,requestKind:kind,options:[{decision:'acceptAlways',label:'Allow remembered scope',warning:'Persistent permission'},{decision:'cancel',label:'Cancel'}]}}])[0];
+  const body=renderApproval(request,{environmentId:'environment',threadId:'thread',requestId:kind});
+  assert.match(body,/Allow remembered scope/);assert.match(body,/acceptAlways/);assert.doesNotMatch(body,/Always allow this session|\[Approve\]/);
+ }
+});
+
+test('provider-only remembered permission keeps its retry identity and rejects unavailable choices',async()=>{
+ const h=harness();(h.activities[0].payload as any).options=[{decision:'acceptAlways',label:'Remember scope',warning:'Persistent'}];
+ const c=h.create();await assert.rejects(c.submit(target,'accept'),/no longer available/);assert.equal(h.dispatches.length,0);
+ h.throwDispatch(true);await assert.rejects(c.submit(target,'acceptAlways'),/Lost acknowledgement/);assert.equal(h.dispatches[0].decision,'acceptAlways');
+ h.throwDispatch(false);await c.submit(target,'acceptAlways');assert.deepEqual(h.dispatches[1],h.dispatches[0]);
+ c.dispose();
 });

@@ -4,7 +4,7 @@ import type {WireRuntimeRequest,WireTurnItem} from '../connection/wire-types';
 import {escapeReplyHtml,markdownCodeRanges} from '../responses/reply-html';
 import {contentHash} from '../responses/completion';
 import {pendingQuestions,renderQuestion} from '../interaction/questions';
-import {pendingApprovals,renderApproval} from '../interaction/approvals';
+import {interactiveApproval,pendingApprovals,renderApproval} from '../interaction/approvals';
 import {intermediateMode,runTimer,type IntermediateMode,type RunTiming,type FinalAnswerFormat} from '../responses/response-presentation';
 import {steeringSegments,type InlineSteering} from './inline-steering';
 import {responseActivityLabel,responseActivityRow} from '../responses/response-activity';
@@ -81,7 +81,7 @@ function safeInsertionOffset(document:string,initialOffset:number):number {
 export function startMarker(id:string){return `<!-- t3-inline:start:${id} -->`;}
 export function endMarker(id:string){return `<!-- t3-inline:end:${id} -->`;}
 export function activeInlineIds(document:string):string[]{
-  return responseIds(document).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · (?:Sending…?|Working|Waiting for subagents|Reconnecting)\*\*/m.test(regionBody(document,id)?.body??''));
+  return responseIds(document).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · (?:Sending…?|Working(?: for)?|Waiting for subagents|Reconnecting)\*\*/m.test(regionBody(document,id)?.body??''));
 }
 export function failedInlineIds(document:string):string[]{
   return responseIds(document).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · Error\*\*/m.test(regionBody(document,id)?.body??''));
@@ -96,7 +96,7 @@ export function renderInlineInput(text:string,label='You'):string {
 }
 
 export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string,mode:IntermediateMode='remove',timing?:RunTiming,phase:'running'|'sending'='running'):{text:string;bodyHash:string} {
-  const status=`${mode==='collapse'?'> [!t3-progress]+ ':''}**${inlineThreadLabel(threadTitle)} · Working**${timing?' '+runTimer(timing):''} <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>`;
+  const status=`${mode==='collapse'?'> [!t3-progress]+ ':''}**${inlineThreadLabel(threadTitle)} · Working for**${timing?' '+runTimer(timing):''} <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>`;
   const contents=[...(initialInput?[renderInitialInput(initialInput,timing?.startedAt)]:[]),responseActivityRow()].join('\n\n');
   const body=phase==='sending'?renderInlineTurn({messages:[],activities:[]},'',id,'sending',mode,undefined,undefined,initialInput,threadTitle,timing).trimEnd():status+(mode==='collapse'?'\n>\n'+contents.split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'\n\n'+contents);
   // The final blank line also closes the quote in Obsidian Live Preview when
@@ -106,7 +106,7 @@ export function initialRegion(id:string,initialInput?:InitialInlineInput,threadT
 
 /** Update a waiting header without rebuilding an unbound response's contents. */
 export function renameInlineHeader(body:string,title:string):string {
-  return body.replace(/^((?:> \[!t3-progress\][+-] )?\*\*)[^\n]*( · (?:Sending…?|Working|Reconnecting)\*\*)/m,(_match,prefix,suffix)=>`${prefix}${inlineThreadLabel(title)}${suffix}`);
+  return body.replace(/^((?:> \[!t3-progress\][+-] )?\*\*)[^\n]*( · (?:Sending…?|Working(?: for)?|Reconnecting)\*\*)/m,(_match,prefix,suffix)=>`${prefix}${inlineThreadLabel(title)}${suffix}`);
 }
 
 export function regionBody(document:string,id:string):{from:number;to:number;body:string}|null {
@@ -553,14 +553,16 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const label=inlineThreadLabel(state.title??threadTitle);
   const delegated=delegatedWork(state,[turnId]),waiting=phase==='running'&&delegated.paused;
   const handoffError=phase==='error'&&delegated.handoffFailed?'Worktree continuation failed. The response output has been kept.':'';
-  const heading=`**${label} · ${phase==='sending'?'Sending':delegated.moving&&phase==='running'?'Moving to worktree':waiting?'Waiting for subagents':phase==='running'?'Working':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
+  const heading=`**${label} · ${phase==='sending'?'Sending':delegated.moving&&phase==='running'?'Moving to worktree':waiting?'Waiting for subagents':phase==='running'?'Working for':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const timer=timing?' '+runTimer(timing):'';
   const spinner=['running','sending'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
   const displayedTurns=[...new Set([turnId,...all.map(message=>message.turnId).filter((id):id is string=>!!id)])];
   const htmlResults=responseHtmlResults(state.activities,displayedTurns,environmentId,threadId);
-  const htmlBodies=htmlResults.map(reference=>({body:renderHtmlResult(reference),at:Date.parse(state.activities.find(activity=>activity.kind==='response.html'&&activity.payload?.itemId===reference.itemId)?.createdAt??'')||0}));
+  const htmlBodies:Array<{body:string;at:number;sequence?:number}>=htmlResults.map(reference=>({body:renderHtmlResult(reference),at:Date.parse(state.activities.find(activity=>activity.kind==='response.html'&&activity.payload?.itemId===reference.itemId)?.createdAt??'')||0}));
+  if(mode!=='collapse')htmlBodies.push(...responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim()))).filter(item=>item.kind==='response.proposed-plan'||item.kind==='response.plan'&&(retain||phase!=='complete')).map(item=>({body:item.body,at:Date.parse(item.createdAt??'')||0,sequence:item.sequence})));
+  htmlBodies.sort((a,b)=>a.at-b.at||(a.sequence??0)-(b.sequence??0));
   let htmlIndex=0;
-  const htmlBefore=(at=Infinity)=>{const parts:string[]=[];while(htmlIndex<htmlBodies.length&&htmlBodies[htmlIndex].at<=at)parts.push(htmlBodies[htmlIndex++].body);return parts.length?parts.join('\n\n')+'\n\n':'';};
+  const htmlBefore=(at=Infinity,sequence=Infinity)=>{const parts:string[]=[];while(htmlIndex<htmlBodies.length&&(htmlBodies[htmlIndex].at<at||htmlBodies[htmlIndex].at===at&&(htmlBodies[htmlIndex].sequence??0)<=sequence))parts.push(htmlBodies[htmlIndex++].body);return parts.length?parts.join('\n\n')+'\n\n':'';};
   const toolGroups=responseToolGroups(state,displayedTurns);
   const emissions=responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim())),phase==='running'?turnId:undefined);
   // The session repeats the canonical error item. Show that message once, in
@@ -569,10 +571,9 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const errorShown=lastError&&state.activities.some(activity=>activity.turnId===turnId&&activity.kind==='response.notification'&&activity.payload?.error&&
     (typeof activity.payload.text==='string'?activity.payload.text:activity.summary).trim()===lastError.trim());
   const errorStatus=lastError&&!errorShown?renderProviderError(`session-error:${turnId}`,lastError,state.latestTurn?.completedAt??state.turns?.[turnId]?.completedAt??undefined):'';
-  // Plans are replaceable task snapshots. Show the latest list immediately
-  // below the thread title, at its existing depth inside the history.
-  const tasks=emissions.filter(item=>item.kind==='response.plan').at(-1)?.body??'';
-  const timelineEmissions=emissions.filter(item=>item.kind!=='response.plan');
+  // Each task item stays at its recorded timeline position. Updates to the
+  // same item replace it; distinct items keep their own disclosure identity.
+  const timelineEmissions=emissions;
   let currentTool=phase==='running'&&!waiting?currentResponseToolGroup(state,turnId,toolGroups):undefined;
   const latestEmission=phase==='running'?timelineEmissions.at(-1):undefined;
   const currentEmission=!waiting&&latestEmission?.active&&latestEmission.turnId===turnId&&
@@ -582,10 +583,12 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   // Keep command history in place as the live label changes. Moving the same
   // batch into and out of the activity row removes a row on every new call.
   const historyGroups=toolGroups;
-  const workRows=historyGroups.map(group=>({createdAt:group.createdAt,sequence:group.sequence??0,body:renderResponseToolGroup(group),hasThoughts:!!group.thoughts?.length}));
+  const workRows=historyGroups.map(group=>({groupId:group.id,createdAt:group.createdAt,sequence:group.sequence??0,body:renderResponseToolGroup(group),hasThoughts:!!group.thoughts?.length}));
   const historyRows=[...workRows,
-    ...timelineEmissions.filter(item=>item!==currentEmission)].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
-  const bottom=spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Sending',currentTool?.tool.icon)}`:'';
+    ...timelineEmissions.filter(item=>item!==currentEmission&&(mode==='collapse'||!['response.plan','response.proposed-plan'].includes(item.kind)))].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
+  const activityGroup=toolGroups.filter(group=>group.turnId===turnId).at(-1);
+  const renderBottom=(groupId?:string)=>spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Sending',currentTool?.tool.icon,groupId)}`:'';
+  const bottom=renderBottom(activityGroup?.id);
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
   const followupIndex=phase!=='complete'&&transcript?.preserveHistory?segments.reduce((last,segment,index)=>segment.role==='user'?index:last,-1):-1;
@@ -593,57 +596,75 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   let previousRole:string|undefined;
   let prose=transcript?segments.reduce((body,segment,index)=>{
     const rendered=segment.role==='user'?renderInput(segment):assistant(segment.text,segment.messageId);
-    const embedded=mode!=='collapse'?htmlBefore(Date.parse(segment.createdAt??all.find(message=>message.id===segment.messageId)?.createdAt??'')||0):'';
+    const embedded=mode!=='collapse'?htmlBefore(Date.parse(segment.createdAt??all.find(message=>message.id===segment.messageId)?.createdAt??'')||0,all.find(message=>message.id===segment.messageId)?.sequence??Infinity):'';
     // Only adjacent assistant quote blocks share a quoted blank line. Callouts
     // and raw Markdown blocks need a real boundary to avoid swallowing prose.
     const separator=body&&previousRole==='assistant'&&segment.role==='assistant'&&!rawFinal(segment.messageId)&&!rawFinal(segments[index-1]?.messageId)&&/^>/.test(body.split('\n').at(-1)??'')&&/^>/.test(rendered)?'\n>\n':'\n\n';
     previousRole=segment.role;
     const next=(body?body+(embedded?'\n\n':separator):'')+embedded+rendered;
-    return index===followupIndex?`${next}\n\n${heading}${timer}${spinner}${tasks?'\n\n'+tasks:''}`:next;
+    return index===followupIndex?`${next}\n\n${heading}${timer}${spinner}`:next;
   },''):messages.some(message=>growing(message.id))?messages.map(message=>assistant(message.text,message.id)).filter(Boolean).join('\n\n'):format==='raw-markdown'?answerBlocks.join('\n\n'):answer?quoteResponse(closeOpenFence(answer)):'';
-  if(mode!=='collapse'&&htmlResults.length){
-    if(!transcript)prose=messages.map(message=>htmlBefore(Date.parse(message.createdAt??'')||0)+assistant(message.text,message.id)).filter(Boolean).join('\n\n');
+  if(mode!=='collapse'&&htmlBodies.length){
+    if(!transcript)prose=messages.map(message=>htmlBefore(Date.parse(message.createdAt??'')||0,message.sequence??Infinity)+assistant(message.text,message.id)).filter(Boolean).join('\n\n');
     const remaining=htmlBefore();if(remaining)prose+=(prose?'\n\n':'')+remaining.trimEnd();
   }
   // Separate the quote from the inline end marker. Without the blank line,
   // Obsidian treats the marker as a lazy continuation of the last paragraph.
   const questions=pending.map(request=>renderQuestion(request,{environmentId:environmentId!,threadId,requestId:request.requestId})).join('\n\n');
-  const approvals=!['complete','interrupted','cancelled'].includes(phase)?pendingApprovals(state.activities).filter(request=>request.turnId===turnId).map(request=>environmentId&&request.kind==='command'?renderApproval(request,{environmentId,threadId,requestId:request.requestId}):'Action needed in T3: '+safeStatus(request.summary)).join('\n\n'):'';
+  const approvals=!['complete','interrupted','cancelled'].includes(phase)?pendingApprovals(state.activities).filter(request=>request.turnId===turnId).map(request=>environmentId&&interactiveApproval(request.kind)?renderApproval(request,{environmentId,threadId,requestId:request.requestId}):'Action needed in T3: '+safeStatus(request.summary)).join('\n\n'):'';
   const input=initialInput?`${renderInitialInput(initialInput,timing?.startedAt)}\n\n`:'';
   if(mode==='collapse'){
     const pieces=steeringSegments(all,conversation?.steering.filter(item=>item.confirmed)??[]);
-    const title=phase==='complete'?`**${label} · ${pending.length?'Waiting for answer':finalReady?'Completed':'Working'}**`:heading;
-    // One native callout owns the entire chronological history, including
-    // steering and earlier completed turns. Only the current completed turn's
+    const title=phase==='complete'?`**${label} · ${pending.length?'Waiting for answer':finalReady?'Worked for':'Working for'}**`:heading;
+    // Native work folds keep chronological history and steering segments.
+    // Only the current completed turn's
     // last final-message piece stays outside. Frozen prefixes of that same
     // message still belong before their steering input inside the history.
     const finalId=finalReady?inlineTurnMessages({...state,messages:all},turnId).at(-1)?.id:undefined;
     const finalIndex=finalId?pieces.reduce((last,piece,index)=>piece.role==='assistant'&&piece.messageId===finalId?index:last,-1):-1;
     // Initial questions and continuation prompts share steering's history
     // placement. Keep their exact input record separate from turn bindings.
-    const history:string[]=[...(tasks?[tasks]:[]),...(initialInput?[renderInitialInput(initialInput,timing?.startedAt)]:[])];let final='';
+    const history:string[]=[...(initialInput?[renderInitialInput(initialInput,timing?.startedAt)]:[])];let final='';
+    const completedSegments:string[]=[];let segmentStart=timing?.startedAt,segmentNumber=0;
+    const runIdentity=turnId?`<span class="send-to-t3-run-identity" data-t3-run-id="${escapeReplyHtml(turnId)}"></span>`:"";
+    const segmentFold=(contents:string[],end?:string,last=false)=>{
+      const finished=!!end,caption=last&&phase==='error'?'Error':last&&phase==='interrupted'?'Interrupted':last&&phase==='cancelled'?'Stopped':finished?(segmentNumber?'Continued for':'Worked for'):'Working for';
+      const duration=segmentStart?runTimer({startedAt:segmentStart,...(end?{finishedAt:end}:{})}):'';
+      const key=encodeURIComponent(`${threadId}:${segmentStart??turnId}:${segmentNumber}`)+(finished?':complete':':active');
+      return `> [!t3-progress]${finished?'-':'+'} **${label} · ${caption}**${duration?' '+duration:''}${!finished?spinner:''} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>${runIdentity}`+(contents.length?'\n>\n'+contents.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
+    };
     let toolIndex=0;
-    const toolsBefore=(at=Infinity)=>{while(toolIndex<historyRows.length&&(Date.parse(historyRows[toolIndex].createdAt??'')||0)<=at)history.push(historyRows[toolIndex++].body);};
+    const toolsBefore=(at=Infinity,sequence=Infinity)=>{while(toolIndex<historyRows.length){const row=historyRows[toolIndex],time=Date.parse(row.createdAt??'')||0;if(time>at||time===at&&row.sequence>sequence)break;history.push(historyRows[toolIndex++].body);}};
     for(const [index,piece] of pieces.entries()){
-      const message=state.messages.find(message=>message.id===piece.messageId)??all.find(message=>message.id===piece.messageId),createdAt=piece.createdAt??message?.createdAt;if(createdAt)toolsBefore(Date.parse(createdAt));
+      const message=state.messages.find(message=>message.id===piece.messageId)??all.find(message=>message.id===piece.messageId),createdAt=piece.createdAt??message?.createdAt;if(createdAt)toolsBefore(Date.parse(createdAt),message?.sequence??Infinity);
       if(index===finalIndex)final=assistant(piece.text,piece.messageId);
-      else if(piece.role==='user')history.push(renderInput(piece));
+      else if(piece.role==='user'){
+        if(!piece.answer&&createdAt&&segmentStart&&Number.isFinite(Date.parse(createdAt))&&Date.parse(createdAt)>=Date.parse(segmentStart)){
+          completedSegments.push(segmentFold(history,createdAt));history.length=0;segmentStart=createdAt;segmentNumber++;
+        }
+        history.push(renderInput(piece));
+      }
       else if(piece.text.trim())history.push(growing(piece.messageId)?quoteStreamingResponse(piece.text):quoteResponse(closeOpenFence(piece.text.trim())));
     }
     toolsBefore();
-    if(bottom)history.push(bottom.trim());
-    // Completion starts a new fold default, independent of live user choices.
-    const key=encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`)+(finalReady?':complete':':active');
-    const fold=`> [!t3-progress]${finalReady?'-':'+'} ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>${turnId?`<span class="send-to-t3-run-identity" data-t3-run-id="${escapeReplyHtml(turnId)}"></span>`:""}`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
+    // Completed folds become lazy history in native views. Only offer a group
+    // action when its target remains in this active segment's rendered body.
+    const currentHistoryGroup=workRows.find(row=>row.groupId===activityGroup?.id);
+    const activity=renderBottom(currentHistoryGroup&&history.includes(currentHistoryGroup.body)?activityGroup?.id:undefined);
+    if(activity)history.push(activity.trim());
+    // A steering input starts its own measured continuation segment. Final
+    // answer selection above keeps the existing exact response boundary.
+    const fold=completedSegments.length?[...completedSegments,segmentFold(history,phase==='running'||phase==='sending'?undefined:timing?.finishedAt,true)].join('\n\n'):
+      `> [!t3-progress]${finalReady?'-':'+'} ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`)+(finalReady?':complete':':active')}"></span>${runIdentity}`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
     const status=handoffError||errorStatus||approvals;
     return fold+(htmlBodies.length?'\n\n'+htmlBodies.map(value=>value.body).join('\n\n'):'')+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
   }
   const toolHistory=(retain||phase!=='complete'?historyRows:[]).map(item=>item.body).join('\n\n');
-  if(phase==='complete')return (retain&&tasks?tasks+'\n\n':'')+input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
+  if(phase==='complete')return input+(prose?`${prose}\n`:'')+(toolHistory?'\n'+toolHistory+'\n':'')+(questions?`\n${questions}\n`:'');
   const status=handoffError?'\n\n'+handoffError:errorStatus?'\n\n'+errorStatus:approvals?'\n\n'+approvals:'';
   const contents=[input.trimEnd(),prose].filter(Boolean).join('\n\n');
   const body=contents?`\n\n${contents}\n`:'';
-  return `${followupIndex<0?heading+timer+spinner+(tasks?'\n\n'+tasks:''):''}${status}${body}${toolHistory?'\n\n'+toolHistory:''}${questions?`\n\n${questions}\n`:''}${bottom}${bottom?'\n':''}`;
+  return `${followupIndex<0?heading+timer+spinner:''}${status}${body}${toolHistory?'\n\n'+toolHistory:''}${questions?`\n\n${questions}\n`:''}${bottom}${bottom?'\n':''}`;
 }
 
 export function turnPhase(state:InlineThreadState,turnId:string):'running'|'complete'|'interrupted'|'error' {

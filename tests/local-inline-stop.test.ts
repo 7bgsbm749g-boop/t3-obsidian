@@ -67,7 +67,7 @@ test('orphan stop uses the clicked editor, and saved stop intent cleans a restor
 
 test('stop all clears running and failed replies, including an orphan from another device, without touching another note or completed prose',async()=>{
   const h=await harness(true),failed=randomUUID(),orphan=randomUUID(),other=randomUUID(),completed=randomUUID();
-  const append=(id:string,label:string)=>{const region=initialRegion(id);h.value+=region.text.replace('Working',label)+`\nAfter ${id}\n`;};
+  const append=(id:string,label:string)=>{const region=initialRegion(id);h.value+=region.text.replace('Working for',label)+`\nAfter ${id}\n`;};
   append(failed,'Error');append(orphan,'Error');append(completed,'Complete');
   h.manager.jobs.push({...h.job,id:failed,requestId:failed,phase:'error'}, {...h.job,id:other,path:'Other.md'}, {...h.job,id:completed,phase:'complete',finalized:true});
   const calls:any[]=[];h.manager.hosted.stop=async(job:any)=>{calls.push(job);};

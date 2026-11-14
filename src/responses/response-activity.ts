@@ -1,5 +1,7 @@
 import type {InlineThreadState} from '../conversations/inline-thread';
-import {currentResponseToolGroup} from './response-tools';
+import {responseToolGroups,currentResponseToolGroup} from './response-tools';
+import {liveThoughtLine} from './response-thought';
+export {liveThoughtLine} from './response-thought';
 
 const text=(value:unknown)=>typeof value==='string'?value.replace(/\s+/g,' ').trim().slice(0,120):'';
 /** Canonical lifecycle records, never assistant prose or another turn's tools.
@@ -7,14 +9,18 @@ const text=(value:unknown)=>typeof value==='string'?value.replace(/\s+/g,' ').tr
  * Idless legacy records are conservative and can only offer a fallback. */
 export function responseActivityLabel(state:InlineThreadState,turnId:string):string {
   if(!turnId)return 'Thinking';
+  const group=responseToolGroups(state,[turnId]).at(-1),thought=group?.thoughts?.at(-1);
+  if(thought&&!state.messages.some(message=>message.turnId===turnId&&message.role!=='reasoning'&&(Date.parse(message.createdAt??'')||0)>(Date.parse(thought.createdAt??'')||0))){const preview=liveThoughtLine(thought.text);if(preview)return preview;}
   const current=currentResponseToolGroup(state,turnId);
   if(current)return current.active?current.tool.activeLabel:current.tool.label;
   return 'Thinking';
 
 }
 
-export function responseActivityRow(label='Thinking',icon='brain'):string {
+export function responseActivityRow(label='Thinking',icon='brain',groupId?:string):string {
   const escaped=text(label).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   const glyph=/^[a-z0-9-]+$/.test(icon)?icon:'brain';
-  return `<span class="send-to-t3-response-activity" role="status" aria-live="polite"><span data-t3-tool-icon="${glyph}" aria-hidden="true"></span><span>${escaped}</span> <span class="send-to-t3-inline-spinner" aria-label="Loading"></span></span>`;
+  const tag=groupId?'button':'span';
+  const attributes=groupId?`type="button" data-t3-open-tool-group="${encodeURIComponent(groupId)}"`:'role="status" aria-live="polite"';
+  return `<${tag} class="send-to-t3-response-activity" ${attributes}><span data-t3-tool-icon="${glyph}" aria-hidden="true"></span><span>${escaped}</span> <span class="send-to-t3-inline-spinner" aria-label="Loading"></span></${groupId?'button':'span'}>`;
 }

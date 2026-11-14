@@ -20,7 +20,7 @@ test('Tasks precedes chronological public reasoning and stays outside final pros
   const body=renderInlineTurn(state,'run','thread','running','collapse');
   assert.match(body,/class="send-to-t3-thought"/);assert.match(body,/<strong>Checking the request<\/strong>/);assert.match(body,/&lt;script&gt;/);
   assert.match(body,/class="send-to-t3-tasks"/);assert.match(body,/data-t3-task-state="completed"[^\n]+Read the contract/);assert.match(body,/data-t3-task-state="in_progress"[^\n]+Verify the result/);
-  assert.ok(body.indexOf('Read the contract')<body.indexOf('Public summary')&&body.indexOf('Public summary')<body.indexOf('Checking.'));
+  assert.ok(body.indexOf('Public summary')<body.indexOf('Read the contract')&&body.indexOf('Read the contract')<body.indexOf('Checking.'));
   state.messages.push({id:'final',role:'assistant',turnId:'run',text:'Final answer.',streaming:false,createdAt:at(7)});
   state.turns!['run'].state='completed';state.turns!['run'].assistantMessageId='final';state.latestTurn=state.turns!['run'];state.session={status:'ready',activeTurnId:null};
   const completed=renderInlineTurn(state,'run','thread','complete','collapse');
@@ -33,14 +33,14 @@ test('consecutive public thoughts share one closed group, timestamp and stable s
     {id:'two',type:'reasoning',text:'**Second summary**',streaming:true,startedAt:at(3)}]);
   const read=()=>responseToolGroups(state,['run']).map(group=>({id:group.id,body:renderResponseToolGroup(group)}));
   const [group]=read();assert.equal(read().length,1);
-  assert.match(group.body,/<span>2 thoughts<\/span>/);
+  assert.match(group.body,/<span>Thought \(×2\)<\/span>/);
   assert.match(group.body,/data-t3-thought-at="2000"/);
   assert.ok(group.body.indexOf('First summary')<group.body.indexOf('Second summary'));
   const identity=group.id;
   state=applyThreadItem(state,normalizeV2StreamItem({kind:'event',sequence:2,event:{type:'turn-item.updated',payload:{id:'two',runId:'run',ordinal:2,type:'reasoning',text:'**Second summary extended**',streaming:false,startedAt:at(3),updatedAt:at(5)}}})).state;
   assert.equal(read().length,1);assert.match(read()[0].body,/Second summary extended/);
   assert.equal(read()[0].id,identity);
-  for(const mode of ['keep','collapse','remove'] as const)assert.match(renderInlineTurn(state,'run','thread','running',mode),/2 thoughts/);
+  for(const mode of ['keep','collapse','remove'] as const)assert.match(renderInlineTurn(state,'run','thread','running',mode),/Thought \(×2\)/);
   assert.equal(turnPhase(state,'run'),'running');
 });
 
@@ -65,13 +65,13 @@ test('canonical ordinals order same-time thoughts and tools inside one batch',()
     {id:'tool',type:'command_execution',input:'pwd',ordinal:2,startedAt:at(2)}]);
   const groups=responseToolGroups(state,['run']);
   assert.equal(groups.length,1);const body=renderResponseToolGroup(groups[0]);
-  assert.ok(body.indexOf('<p>First</p>')<body.indexOf('data-t3-tool-id=')&&body.indexOf('data-t3-tool-id=')<body.indexOf('<p>Second</p>'));
+  assert.ok(body.indexOf('title="First"')<body.indexOf('data-t3-tool-id=')&&body.indexOf('data-t3-tool-id=')<body.indexOf('title="Second"'));
 });
 
 test('compaction replaces its own display row and cannot complete an app run',()=>{
   let state=fixture([{id:'compact',type:'compaction',status:'running',startedAt:at(5)}]);
   const live=renderInlineTurn(state,'run','thread','running','collapse');
-  assert.match(live,/data-t3-tool-icon="minimize-2"/);assert.match(live,/Compacting context/);assert.doesNotMatch(live,/Running compaction|<hr|Thinking/);
+  assert.match(live,/data-t3-tool-icon="minimize-2"/);assert.match(live,/Compacting for/);assert.doesNotMatch(live,/Running compaction|<hr|Thinking/);
   state=applyThreadItem(state,normalizeV2StreamItem({kind:'event',sequence:2,event:{type:'turn-item.updated',payload:{id:'compact',runId:'run',ordinal:1,type:'compaction',status:'completed',startedAt:at(5),updatedAt:at(6)}}})).state;
   const finished=renderInlineTurn(state,'run','thread','running','collapse');
   assert.equal((finished.match(/Context compacted/g)??[]).length,1);assert.doesNotMatch(finished,/Compacting context|Running compaction/);
@@ -82,11 +82,11 @@ test('terminal replies and Stop clear compaction activity when its terminal reco
   const state=fixture([{id:'compact',type:'compaction',status:'running',startedAt:at(5)}]);
   for(const mode of ['remove','keep','collapse'] as const){
     for(const phase of ['complete','interrupted','cancelled','error'] as const){
-      assert.doesNotMatch(renderInlineTurn(state,'run','thread',phase,mode),/inline-spinner|Compacting context/);
+      assert.doesNotMatch(renderInlineTurn(state,'run','thread',phase,mode),/inline-spinner|Compacting for/);
     }
     const live=renderInlineTurn(state,'run','thread','running',mode);
     const stopped=stoppedResponseBody(live);
-    assert.doesNotMatch(stopped,/inline-spinner|Compacting context/);
+    assert.doesNotMatch(stopped,/inline-spinner|Compacting for/);
     assert.match(stopped,/Context compaction stopped/);
     const example='```html\n'+live+'\n```';assert.equal(stoppedResponseBody(example),example);
   }
@@ -96,7 +96,7 @@ test('compaction retained from an earlier turn cannot animate in the current tur
   const state=fixture([{id:'compact',type:'compaction',status:'running',startedAt:at(5)}]);
   const older={...state,activities:state.activities.map(activity=>({...activity,turnId:'older'}))};
   const [history]=responseEmissions(older,['older','run'],text=>text,'run');
-  assert.equal(history.active,false);assert.match(history.body,/Context compaction/);assert.doesNotMatch(history.body,/inline-spinner|Compacting context/);
+  assert.equal(history.active,false);assert.match(history.body,/Context compaction/);assert.doesNotMatch(history.body,/inline-spinner|Compacting for/);
 });
 
 test('unrelated run emissions are excluded and completed errors are visible without live controls',()=>{
@@ -144,7 +144,7 @@ test('live canonical error updates replace their existing row without completing
   assert.equal(body.split('>Provider error<').length-1,1);assert.doesNotMatch(body,/Original failure/);assert.match(body,/Updated failure\./);
   assert.equal(turnPhase(state,'run'),'running');
 });
-test('Tasks stays first at the same depth inside history and does not swallow adjacent prose',()=>{
+test('Tasks stays at timeline depth and does not swallow adjacent prose',()=>{
  const state=fixture([{id:'plan',type:'todo_list',startedAt:at(5),steps:[{step:'Check display',status:'in_progress'}]}]);
  state.messages.push({id:'after',role:'assistant',turnId:'run',text:'Following commentary.',streaming:false,createdAt:at(6)});
  const body=renderInlineTurn(state,'run','thread','running','collapse'),tree:any=unified().use(remarkParse).parse(body);
@@ -153,6 +153,14 @@ test('Tasks stays first at the same depth inside history and does not swallow ad
  const history=quotes.find(quote=>text(quote.children[0]).startsWith('[!t3-progress]'));
  const tasks=history.children.find((node:any)=>node.type==='html'&&node.value.includes('data-t3-tasks-id'));
  assert.ok(tasks);assert.match(tasks.value,/Check display/);assert.doesNotMatch(tasks.value,/Checking\.|Following commentary/);
- assert.equal(history.children[1],tasks);assert.ok(body.indexOf('Check display')<body.indexOf('Checking.'));
+ assert.ok(history.children.indexOf(tasks)>1);assert.ok(body.indexOf('Checking.')<body.indexOf('Check display')&&body.indexOf('Check display')<body.indexOf('Following commentary.'));
  assert.equal(state.messages.find(message=>message.id==='prose')?.text,'Checking.');
+});
+
+test('v2 compaction keeps token counts and completed timing while live time is client-local',()=>{
+ const state=fixture([{id:'compact',type:'compaction',status:'completed',startedAt:at(1),completedAt:at(5),beforeTokenCount:128000,afterTokenCount:32000}]);
+ const body=responseEmissions(state,['run'],text=>text)[0].body;
+ assert.match(body,/Context compacted 128K → 32K tokens/);
+ const item=state.activities.find(activity=>activity.kind==='context-compaction');
+ assert.equal(item?.payload?.completedAt,at(5));assert.equal(item?.payload?.beforeTokenCount,128000);
 });
