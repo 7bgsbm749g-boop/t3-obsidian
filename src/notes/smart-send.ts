@@ -1,3 +1,5 @@
+import {unified} from 'unified';
+import remarkParse from 'remark-parse';
 import {isRecord,entries} from '../shared/values';
 import {Buffer} from 'buffer/';
 import {contentHash} from '../responses/completion';
@@ -98,7 +100,7 @@ function matchingLines(before:string,after:string):Array<[number,number]>{
   }
   const out:Array<[number,number]>=[];let at=ends.at(-1);while(at!==undefined){const node=nodes[at];out.push([node.a,node.b]);at=node.prev;}return out.reverse();
 }
-function textCoverage(before:string,after:string,covered:Span[]){
+function textCoverage(before:string,after:string,covered:Span[],paragraphs=false){
   if(before===after)return covered;
   const a=lines(before),b=lines(after),out:Span[]=[],unchanged:Array<[number,number,number]>=[];
   let l=0,r=0;
@@ -106,7 +108,10 @@ function textCoverage(before:string,after:string,covered:Span[]){
     const endA=a[i]?.from??before.length,endB=b[j]?.from??after.length;
     let prefix=0;while(l+prefix<endA&&r+prefix<endB&&before[l+prefix]===after[r+prefix])prefix++;
     if(prefix)unchanged.push([l,l+prefix,r]);
-    let suffix=0;while(endA-suffix>l+prefix&&endB-suffix>r+prefix&&before[endA-suffix-1]===after[endB-suffix-1])suffix++;
+    // A trailing period cannot attach generated coverage to a later fresh
+    // paragraph after the recorded final paragraph was edited.
+    const extraParagraph=paragraphs&&(after.slice(r,endB).match(/\n\s*\n/g)?.length??0)>(before.slice(l,endA).match(/\n\s*\n/g)?.length??0);
+    let suffix=0;while(!extraParagraph&&endA-suffix>l+prefix&&endB-suffix>r+prefix&&before[endA-suffix-1]===after[endB-suffix-1])suffix++;
     if(suffix)unchanged.push([endA-suffix,endA,endB-suffix]);
     if(i<a.length&&j<b.length){unchanged.push([a[i].from,a[i].to,b[j].from]);l=a[i].to;r=b[j].to;}
   }
@@ -189,16 +194,19 @@ export async function sourceProjection(data:SmartSendData,noteId:string,document
     const found=uniqueTextOffset(current.text,original.text),range=found>=0?[found,found+original.text.length] as Span:
       editedResponseRange(current.text,original.text,{...record,before:markdownText(record.before).text,after:markdownText(record.after).text});
     if(!range)continue;
-    const [left,right]=range;
-    const raw=current.map([range],true);if(!raw.length)continue;
+        const raw=current.map([range],true);if(!raw.length)continue;
     known.push([raw[0][0],raw.at(-1)![1]]);
-    const matched=current.map(textCoverage(original.text,current.text.slice(left,right),[[0,original.text.length]]).map(([from,to])=>[left+from,left+to] as Span),true);
-    // Keep container line endings when removing text from a reformatted reply.
-    for(const [from,to] of matched)for(const match of document.slice(from,to).matchAll(/[^\r\n]+/g))removed.push([from+match.index,from+match.index+match[0].length]);
+    const [left,right]=range;
+    const matched=current.map(textCoverage(original.text,current.text.slice(left,right),[[0,original.text.length]],true).map(([from,to])=>[left+from,left+to] as Span),true);
+    // Keep edits to an existing generated paragraph/container local. Entirely
+    // fresh paragraphs remain deliberate source, including between replies.
+    for(const block of unified().use(remarkParse).parse(document).children){
+      const from=block.position?.start.offset,to=block.position?.end.offset;
+      if(from===undefined||to===undefined||!matched.some(([start,end])=>start<to&&end>from&&!!document.slice(Math.max(start,from),Math.min(end,to)).trim()))continue;
+      removed.push([Math.max(from,raw[0][0]),Math.min(to,raw.at(-1)![1])]);
+    }
   }
-  // A known edited response is handled by its recorded text, so additions
-  // inside its completed history remain ordinary source. Legacy histories
-  // without a rendered response record retain their generated-callout rule.
+  // Legacy histories without a rendered response record remain generated.
   for(const block of streamBlocks(document))if(!known.some(([from,to])=>from<block.to&&to>block.from))removed.push([block.from,block.to]);
   // Removing generated prose must not leave empty emphasis or callout syntax
   // that a later comparison would interpret as newly typed literal text.
@@ -231,7 +239,18 @@ export async function prepareSmartSend(data:SmartSendData,path:string,destinatio
   const identities=noteIdentities(data,noteId),heads=Object.entries(data.heads).filter(([,h])=>identities.has(h.noteId)&&h.destination===destination);
   let covered:Span[]=[];for(const [,head] of heads)covered.push(...mappedCoverage(await unpackText(head.source),current,head.covered));covered=union(covered);
   const requested:Span[]=scope?projection.segments.flatMap(segment=>{const from=Math.max(scope[0],segment.rawFrom),to=Math.min(scope[1],segment.rawTo);return to>from?[[segment.from+from-segment.rawFrom,segment.from+to-segment.rawFrom] as Span]:[];}):[[0,current.length]];
-  const added=subtractSpans(requested,covered),view=markdownText(current);
+  let added=subtractSpans(requested,covered);
+  // A fresh Markdown block has no previously sent prose. Keep a paragraph,
+  // list or code example whole instead of extracting word-level edits.
+  if(!scope&&heads.length){
+    const blocks=unified().use(remarkParse).parse(current).children;
+    added=blocks.flatMap(block=>{
+      const from=block.position?.start.offset,to=block.position?.end.offset;
+      if(from===undefined||to===undefined||covered.some(([left,right])=>left<to&&right>from&&!!current.slice(Math.max(left,from),Math.min(right,to)).trim()))return [];
+      return [[from,to] as Span];
+    });
+  }
+  const view=markdownText(current);
   const text=view.render(view.map(added));
   const capture:SmartCapture={noteId,source:await packText(current),covered:union([...covered,...added]),parents:heads.map(([id])=>id),bindings:[...new Set(heads.flatMap(([,h])=>h.bindings??[]))]};
   // Retain exact source coordinates before the generated-response projection

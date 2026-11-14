@@ -78,26 +78,27 @@ test('first send includes the requested source and confirmed repeats have no pay
 });
 test('preparation and failures never mark text as sent; confirmation uses the captured version',async()=>{
   const data=fresh();const pending=await prepareSmartSend(data,path,destination,'First request.');assert.equal((await prepareSmartSend(data,path,destination,'First request.')).text,'First request.');
-  confirmSmartSend(data,'accepted',destination,pending.capture);assert.equal((await prepareSmartSend(data,path,destination,'First request.\nLater typing.')).text.trim(),'Later typing.');
+  confirmSmartSend(data,'accepted',destination,pending.capture);assert.equal((await prepareSmartSend(data,path,destination,'First request.\n\nLater typing.')).text.trim(),'Later typing.');
 });
 test('added text is sent in current note order; deletions and blank changes send nothing',async()=>{
   const {data}=await send(fresh(),'First\n\nMiddle\n\nLast');
   assert.equal((await prepareSmartSend(data,path,destination,'First\n\nLast')).text,'');
-  assert.equal((await prepareSmartSend(data,path,destination,'Top\nFirst\nMiddle\nAdded here\nLast\nBottom')).text.trim(),'Top\n\nAdded here\n\nBottom');
+  assert.equal((await prepareSmartSend(data,path,destination,'Top\n\nFirst\n\nMiddle\n\nAdded here\n\nLast\n\nBottom')).text.trim(),'Top\n\nAdded here\n\nBottom');
   assert.equal((await prepareSmartSend(data,path,destination,'First\n\n\nMiddle\n\nLast\n')).text,'');
 });
-test('typing on an existing line sends the added characters; replacement has no change label',async()=>{
+test('edits to sent paragraphs stay local while a fresh paragraph sends whole',async()=>{
   const {data}=await send(fresh(),'Build a timer.');
-  assert.equal((await prepareSmartSend(data,path,destination,'Build a blue timer.')).text,'blue ');
-  const next=await send(data,'Build a blue timer.',undefined,'two');assert.equal(next.text,'blue ');
-  assert.equal((await prepareSmartSend(data,path,destination,'Build a red timer.')).text,'red');
+  assert.equal((await prepareSmartSend(data,path,destination,'Build a blue timer.')).text,'');
+  const next=await send(data,'Build a blue timer.',undefined,'two');assert.equal(next.text,'');
+  assert.equal((await prepareSmartSend(data,path,destination,'Build a red timer.')).text,'');
+  assert.equal((await prepareSmartSend(data,path,destination,'Build a blue timer.\n\nA new question.')).text,'A new question.');
 });
 test('selection coverage never marks unselected source as sent',async()=>{
   const {data,text}=await send(fresh(),'First line\nSecond line',[0,5]);assert.equal(text,'First');
-  assert.equal((await prepareSmartSend(data,path,destination,'First line\nSecond line')).text,' line\nSecond line');
+  assert.equal((await prepareSmartSend(data,path,destination,'First line\nSecond line')).text,'');
 });
 test('repeated lines retain occurrence counts and appending another occurrence is new',async()=>{
-  const {data}=await send(fresh(),'same\nsame');assert.equal((await prepareSmartSend(data,path,destination,'same\nsame\nsame')).text.trim(),'same');
+  const {data}=await send(fresh(),'same\nsame');assert.equal((await prepareSmartSend(data,path,destination,'same\nsame\n\nsame')).text.trim(),'same');
 });
 test('response records exclude all threads, generated history and final prose without note markers',async()=>{
   const data=fresh(),body='> Agent reply.\n\nFinal response.',document=`User request.\n\n${body}\n\nUser addition.`;
@@ -118,7 +119,7 @@ test('imported replies and their tracking receipts stay out of Smart Send withou
   assert.equal(findRunImport(document,importSource,'prompt')?.runId,'run');
   confirmSmartSend(data,'sent',destination,plan.capture);
   assert.equal((await prepareSmartSend(data,path,destination,document)).text,'');
-  assert.equal((await prepareSmartSend(data,path,destination,document+'\nOnly this addition.')).text.trim(),'Only this addition.');
+  assert.equal((await prepareSmartSend(data,path,destination,document+'\n\nOnly this addition.')).text.trim(),'Only this addition.');
 });
 test('import receipts alone cannot enable a send, and scoped sends retain raw note offsets around receipts',async()=>{
   const data=fresh();
@@ -146,17 +147,24 @@ test('ordinary quotes and fenced examples remain source; active response bodies 
   const data=fresh(),id='11111111-1111-4111-8111-111111111111',anchor=responseAnchor(id),document=`> My quote\n\n${anchor}\n\n\`\`\`md\n${anchor}\n\`\`\``;
   const source=await sourceProjection(data,smartNote(data,path),document);assert.match(source.text,/> My quote/);assert.equal(source.text.split('data-t3-response').length,2);
 });
-test('edits inside a saved reply retain user additions and exclude unchanged agent lines',async()=>{
+test('edits inside a saved reply stay local',async()=>{
   const data=fresh();await rememberResponse(data,path,'reply','Agent first.\nAgent last.','Before\n','\nAfter',7);
   const result=await prepareSmartSend(data,path,destination,'Before\nAgent first.\nUser insertion.\nAgent last.\nAfter');
-  assert.match(result.text,/User insertion/);assert.doesNotMatch(result.text,/Agent first|Agent last/);
+  assert.doesNotMatch(result.text,/User insertion/);assert.doesNotMatch(result.text,/Agent first|Agent last/);
 });
-test('typing inside a completed recorded progress box remains new source',async()=>{
+test('typing inside a completed recorded progress box stays local',async()=>{
   const data=fresh(),header='> [!t3-progress]- **Agent · Completed** <span class="send-to-t3-fold-key" data-t3-fold="thread:complete"></span>';
   const body=header+'\n>\n> Agent work.\n\nFinal.';
   await rememberResponse(data,path,'reply',body,'Before\n','\nAfter',7);
   const result=await prepareSmartSend(data,path,destination,'Before\n'+body.replace('> Agent work.','> Agent work.\n> User addition.')+'\nAfter');
-  assert.match(result.text,/User addition/);assert.doesNotMatch(result.text,/Agent work|Completed|Final\./);
+  assert.doesNotMatch(result.text,/User addition/);assert.doesNotMatch(result.text,/Agent work|Completed|Final\./);
+});
+test('editing the last reply paragraph cannot consume a fresh paragraph after it',async()=>{
+ const data=fresh(),body='Agent opening sentence.\n\nAgent ending sentence.';
+ await rememberResponse(data,path,'reply',body,'','',0);
+ const document='Agent opening sentence.\n\nAgent ending (amended).\n\nA fresh question.';
+ const plan=await prepareSmartSend(data,path,destination,document);
+ assert.equal(plan.text.trim(),'A fresh question.');
 });
 test('editing a saved answer excludes its original text when its saved separator repeats',async()=>{
   const before='My original question.\n\n',opening='The saved answer starts with these explicit rules.\n\n',ending='The final paragraph explains the remaining behavior in enough detail to identify the end of this saved response.\n';
