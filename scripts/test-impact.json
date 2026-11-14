@@ -52,7 +52,8 @@
       "agent/mcp_server.py",
       "scripts/connect_commands.py",
       "skills/obsidian-t3/SKILL.md",
-      "LICENSE"
+      "LICENSE",
+      "skills/taskflow/SKILL.md"
     ],
     "src/app/main.ts": [
       "styles.css"
@@ -131,6 +132,9 @@
     ],
     "tests/diagnostic-archive.test.ts": [
       "tests/native/stream-memory-lab.ts"
+    ],
+    "tests/taskflow.test.ts": [
+      "tests/native/taskflow-lab.ts"
     ]
   }
 }

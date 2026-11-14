@@ -36,6 +36,19 @@ class SkillInstallationTests(unittest.TestCase):
             self.assertTrue(installer.install(home, source, backups)['ok'])
             self.assertEqual(list(backups.iterdir()), archived)
 
+    def test_taskflow_has_its_own_discovery_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / 'taskflow'
+            source.mkdir()
+            (source / 'SKILL.md').write_text('task status workflow')
+            home = root / 'home'
+            result = installer.install(home, source, root / 'backups', name='taskflow')
+            self.assertTrue(result['ok'])
+            for target in installer.destinations(home, 'taskflow'):
+                self.assertEqual((target / 'SKILL.md').read_text(), 'task status workflow')
+                self.assertFalse(target.with_name('obsidian-t3').exists())
+
     def test_unrelated_folder_link_is_refused_before_other_installations_change(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

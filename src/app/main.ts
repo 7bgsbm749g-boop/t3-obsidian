@@ -49,6 +49,7 @@ import {T3HttpError} from '../conversations/thread-access-cache';
 import {mergeSharedSettings} from '../storage/shared-settings';
 import {noteThreadTitle,threadTitleGeneration,type ThreadTitleGeneration} from '../conversations/thread-title';
 import {ResponseLocationModal} from '../responses/response-location-ui';
+import {associatedTaskIds,isTaskFlowCommand,executeTaskFlowCommand} from '../notes/taskflow';
 import {obsidianFooter} from '../notes/obsidian-prompt';
 import {isNoteContextCommand,noteContext,mergeNoteContexts,contextBindingIds,type NoteContextRecord} from '../notes/note-context';
 import {isResponseCommand,validateResponseCommand} from '../responses/response-command';
@@ -834,6 +835,7 @@ export default class SendToT3 extends Plugin {
 
   async executeAgentCommand(raw:unknown,route?:CommandRoute){
     const input=validateAgentCommand(raw);
+    if(isTaskFlowCommand(input))return executeTaskFlowCommand(input,(this.app as App & {plugins?:{plugins?:Record<string,{api?:Parameters<typeof executeTaskFlowCommand>[1]}>}}).plugins?.plugins?.['task-flow']?.api);
     if(isNoteEditCommand(input)){if(!route)throw Error('Use the authenticated T3 Connect edit route.');return this.checkedEdits().execute(input,route);}
     if(isNoteContextCommand(input)){
       const latest=await this.loadSettings();
@@ -2118,7 +2120,10 @@ export default class SendToT3 extends Plugin {
     return root.replace(/[\\/]+$/,'')+separator+path.replace(/[\\/]+/g,separator);
   }
   private messageFooter(destination?:string):string {
-    return obsidianFooter(this.app.vault.getName(),destination);
+    const file=destination?this.app.vault.getFileByPath?.(destination):undefined;
+    const flow=(this.app as App & {plugins?:{plugins?:Record<string,{settings?:{autoAssociateTasks?:boolean}}>}}).plugins?.plugins?.['task-flow'];
+    const ids=flow?.settings?.autoAssociateTasks===false?[]:associatedTaskIds(file?this.app.metadataCache?.getFileCache(file)?.frontmatter:undefined);
+    return obsidianFooter(this.app.vault.getName(),destination,ids);
   }
   private async prepareImages(markdown:string,sourcePath:string,resolveReferences=false,snapshot?:string){
     let definitions='';
