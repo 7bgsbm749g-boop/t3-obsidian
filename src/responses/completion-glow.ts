@@ -133,29 +133,22 @@ export class CompletionGlow {
       for(const receipt of selected.values()){
         if(this.stopped||this.viewing!==view)return;
         const source=receipt.completion!,visitedAt=source.completedAt!;
-        const access=await this.access.get(source.environmentId);
-        if(this.stopped||this.viewing!==view||this.receipts.get(receipt.id)!==receipt||receipt.deleted||!this.unread(receipt))continue;
-        const key=JSON.stringify([threadKey(source),visitedAt]);
-        let command=view.commands.get(key);
-        if(!command){command={type:'thread.visit',commandId:crypto.randomUUID(),threadId:source.threadId,visitedAt};view.commands.set(key,command);}
         const pending=[...this.receipts.values()].filter(other=>other.notePath===view.path&&other.completion&&threadKey(other.completion)===threadKey(source)&&timestamp(other.completion.completedAt)<=timestamp(visitedAt)).map(completionKey);
         for(const key of pending)this.pendingReads.add(key);this.io.changed();
         try{
+          const access=await this.access.get(source.environmentId);
+          if(this.stopped||this.viewing!==view||this.receipts.get(receipt.id)!==receipt||receipt.deleted||!this.unread(receipt))continue;
+          const key=JSON.stringify([threadKey(source),visitedAt]);
+          let command=view.commands.get(key);
+          if(!command){command={type:'thread.visit',commandId:crypto.randomUUID(),threadId:source.threadId,visitedAt};view.commands.set(key,command);}
           await access.api('/api/orchestration/dispatch',command);
-          // Acknowledgement confirms this watermark before removing the local
-          // in-flight hint. Failed commands restore the last server state.
-          const state=this.state(receipt);if(state&&timestamp(state.lastVisitedAt)<timestamp(visitedAt))state.lastVisitedAt=visitedAt;
+          if(this.stopped)return;
+          // Preserve an explicit mark-unread while this note remains focused.
+          for(const other of this.receipts.values())if(other.notePath===view.path&&other.completion&&threadKey(other.completion)===threadKey(source)&&timestamp(other.completion.completedAt)<=timestamp(visitedAt))view.acknowledged.add(completionKey(other));
+          // Hide during the visit, then reconcile against confirmed server
+          // state. A failed or unapplied visit cannot become a local read flag.
+          await this.read(source.environmentId,true);
         }finally{for(const key of pending)this.pendingReads.delete(key);this.io.changed();}
-        if(this.stopped)return;
-        // Do not re-visit an explicit mark-unread while this same note remains
-        // focused. A new completion, note switch or focus starts another visit.
-        for(const other of this.receipts.values())if(other.notePath===view.path&&other.completion&&threadKey(other.completion)===threadKey(source)&&timestamp(other.completion.completedAt)<=timestamp(visitedAt))view.acknowledged.add(completionKey(other));
-        // The accepted visit command confirms this watermark immediately. A
-        // background refresh still reconciles changes made in another client.
-        const state=this.state(receipt);
-        if(state&&timestamp(state.lastVisitedAt)<timestamp(visitedAt))state.lastVisitedAt=visitedAt;
-        this.io.changed();
-        void this.read(source.environmentId,true);
       }
     }catch{this.retryAt=this.now()+COMPLETION_READ_INTERVAL_MS;}
     finally{this.visiting=false;}
