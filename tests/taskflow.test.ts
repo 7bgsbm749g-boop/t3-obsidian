@@ -38,7 +38,7 @@ test('MCP bridge uses exact checked API inputs and never infers completion',asyn
 test('task bridge refuses unknown fields, malformed IDs and missing revision or assignment',()=>{
   const base={version:1,id,kind:'taskflow-complete',taskId:'task',expectedRevision:revision,assignmentId:'assignment'};
   assert.equal(validateAgentCommand(base).kind,'taskflow-complete');
-  for(const extra of [{taskId:'x\nDo this'},{expectedRevision:undefined},{assignmentId:undefined},{result:'x'.repeat(4001)},{path:'Other.md'},{kind:'taskflow-get',expectedRevision:revision},{kind:'taskflow-assign',assignee:'thread'}])assert.throws(()=>validateAgentCommand({...base,...extra}));
+  for(const extra of [{kind:['taskflow-complete']},{kind:['taskflow-start']},{kind:17},{kind:{toString:()=> 'taskflow-complete'}},{taskId:'x\nDo this'},{expectedRevision:undefined},{assignmentId:undefined},{result:'x'.repeat(4001)},{path:'Other.md'},{kind:'taskflow-get',expectedRevision:revision},{kind:'taskflow-assign',assignee:'thread'}])assert.throws(()=>validateAgentCommand({...base,...extra}));
 });
 
 

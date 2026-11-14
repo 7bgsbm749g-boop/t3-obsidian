@@ -1,4 +1,4 @@
-import {Plugin,MarkdownView} from 'obsidian';
+import {Plugin,MarkdownView,type TFile} from 'obsidian';
 import {existsSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 
@@ -6,7 +6,8 @@ import {join} from 'node:path';
 export default class TaskflowLab extends Plugin {
   async onload(){this.app.workspace.onLayoutReady(()=>{void this.run();});}
   private async run(){
-    const result:{ok:boolean;checks:string[];error?:string}={ok:false,checks:[]};
+    const result:{ok:boolean;checks:string[];error?:string;cleanup?:{remaining:string[];errors:string[]}}={ok:false,checks:[]};
+    const owned:TFile[]=[];
     const root=(this.app.vault.adapter as unknown as {getBasePath():string}).getBasePath();
     if(!existsSync(join(root,'..','ISOLATED-NATIVE-LAB')))throw Error('Refuse a vault without the isolated test marker.');
     const check=(value:unknown,message:string)=>{if(!value)throw Error(message);result.checks.push(message);};
@@ -17,7 +18,9 @@ export default class TaskflowLab extends Plugin {
       const flow=manager.plugins['task-flow'],t3=manager.plugins['t-three-code'];
       await flow.api.ready;
       const target=await this.app.vault.create('Design.md','---\naliases: [Spec]\nother: preserved\n---\n# Design\n\nKeep this body.\n');
+      owned.push(target);
       const source=await this.app.vault.create('Tasks.md','- [ ] Implement [[Design|spec]]\n');
+      owned.push(source);
       const ids=()=>this.app.metadataCache.getFileCache(target)?.frontmatter?.['taskflow-task-ids'];
       await wait(async()=>Array.isArray(ids())&&ids().length===1);
       const taskId=ids()[0];check(typeof taskId==='string','linked note automatically has one task ID');
@@ -41,10 +44,19 @@ export default class TaskflowLab extends Plugin {
       await wait(async()=>!ids());check((await flow.api.get({taskId})).state==='completed','disabling association preserves completed task status');
       await this.app.workspace.getLeaf(false).openFile(target);
       const view=this.app.workspace.getActiveViewOfType(MarkdownView);check(!!view,'native source editor opens associated note');
-      await this.app.vault.trash(source,true);await this.app.vault.trash(target,true);
-      check(!this.app.vault.getFileByPath('Tasks.md')&&!this.app.vault.getFileByPath('Design.md'),'synthetic notes cleaned from isolated vault');
       result.ok=true;
-    }catch(error){result.error=error instanceof Error?error.stack:String(error);}
+    }catch(error){
+      result.error=error instanceof Error?error.stack:String(error);
+      const notes=await Promise.all(owned.map(async file=>({path:file.path,text:await this.app.vault.read(file).catch(()=>null)})));
+      writeFileSync(join(root,'..','native-failure.json'),JSON.stringify({...result,notes},null,2));
+    }finally{
+      const errors:string[]=[];
+      for(const file of owned)try{if(this.app.vault.getFileByPath(file.path)===file)await this.app.vault.trash(file,true);}catch(error){errors.push(String(error));}
+      const remaining=owned.filter(file=>this.app.vault.getFileByPath(file.path)===file).map(file=>file.path);
+      result.cleanup={remaining,errors};
+      if(remaining.length||errors.length){result.ok=false;result.error??='Could not clean up owned fixture notes.';}
+      else result.checks.push('synthetic notes cleaned from isolated vault');
+    }
     writeFileSync(join(root,'..','native-result.json'),JSON.stringify(result,null,2));
     // This lab owns its isolated application process and profile.
     (this.app as any).quit?.();

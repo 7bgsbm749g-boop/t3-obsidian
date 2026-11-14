@@ -11,7 +11,7 @@ export interface TaskFlowCommand {
   taskId:string; expectedRevision?:string; assignmentId?:string; assignee?:string; result?:string;
 }
 const KINDS=['taskflow-get','taskflow-assign','taskflow-unassign','taskflow-start','taskflow-complete'];
-export function isTaskFlowCommand(value:unknown):value is TaskFlowCommand {return isRecord(value)&&KINDS.includes(String(value.kind));}
+export function isTaskFlowCommand(value:unknown):value is TaskFlowCommand {return isRecord(value)&&typeof value.kind==='string'&&KINDS.includes(value.kind);}
 export function validateTaskFlowCommand(value:unknown):TaskFlowCommand {
   if(!isRecord(value)||value.version!==1||typeof value.id!=='string'||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.id)||!isTaskFlowCommand(value)||typeof value.taskId!=='string'||!/^[\w-]{1,256}$/.test(value.taskId))throw Error('Invalid Taskflow command.');
   const keys=['version','id','kind','taskId'];
