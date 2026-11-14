@@ -287,3 +287,10 @@ test('a title-only event replaces the prepared header without requiring answer t
   const restored=applyThreadItem(initial,{kind:'snapshot',snapshot:{thread:{title:'Generated canonical title',messages:[],activities:[]}}}).state;
   assert.match(renderInlineTurn(restored,'','thread'),/^\*\*Generated canonical title · Working/);
 });
+
+
+test('saved collapsed runs retain the exact application run ID for the context menu',()=>{
+ const state:any={messages:[{id:'answer',role:'assistant',text:'Done.',turnId:'run:exact:17',streaming:false}],activities:[],latestTurn:{turnId:'run:exact:17',state:'completed'}};
+ const result=renderInlineTurn(state,'run:exact:17','thread','complete','collapse');
+ assert.match(result,/data-t3-run-id="run:exact:17"/);assert.match(result,/Done\./);
+});

@@ -12,7 +12,7 @@ export type ProjectAvailability='checking'|'available'|'offline'|'unverified';
 interface SourceState {source:ProjectSource;failures:number;nextAttempt:number;availability:ProjectAvailability;error?:string}
 export function projectFingerprint(projects:Project[]):string {
   // This suppresses unchanged writes/notifications, not network reads.
-  return Array.from(sha256(JSON.stringify([...projects].sort((a,b)=>a.id.localeCompare(b.id)).map(p=>[p.id,p.title,p.workspaceRoot,p.connectionId??'',p.connectionName??''])))).map(v=>v.toString(16).padStart(2,'0')).join('');
+  return Array.from(sha256(JSON.stringify([...projects].sort((a,b)=>a.id.localeCompare(b.id)).map(p=>[p.id,p.title,p.workspaceRoot,p.connectionId??'',p.connectionName??'',p.environmentId??'',p.repositoryIdentity??null])))).map(v=>v.toString(16).padStart(2,'0')).join('');
 }
 
 /** Device-local catalog and bounded, coalesced discovery. No sending or routing. */

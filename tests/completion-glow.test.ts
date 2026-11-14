@@ -131,3 +131,9 @@ test('folder moves preserve source identity and deletion cannot relight a recrea
   h.glow.relocate('App','Renamed');h.glow.observe([response()]);assert.deepEqual(unread(h.glow),['Renamed/Nested/Note.md','Application/Note.md']);
   assert.equal(h.glow.project(new Map(),()=>false).size,0);h.glow.relocate('Renamed');h.glow.observe([response()]);assert.deepEqual(unread(h.glow),['Application/Note.md']);h.glow.dispose();
 });
+
+test('an explicit click acknowledges an already focused note without dwell or a timer tick',async()=>{
+ const h=fixture();h.glow.observe([response()]);await h.glow.refresh();
+ h.glow.view('App/Nested/Note.md',0);h.glow.view('App/Nested/Note.md',1,true);await drain();
+ assert.equal(h.visits.length,1);assert.deepEqual(unread(h.glow),[]);h.glow.dispose();
+});

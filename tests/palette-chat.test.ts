@@ -43,8 +43,8 @@ test('the first palette row follows selection and typed input in all four states
   modal.onOpen();
   assert.equal(suggest(modal,'')[0].item.name,'T3 Code');
   selection='Selected paragraph';
-  assert.equal(suggest(modal,'')[0].item.name,'Ask T3 Code');
-  assert.equal(suggest(modal,'Why?')[0].item.name,'Ask T3 Code: “Why?”');
+  assert.equal(suggest(modal,'')[0].item.name,'Ask Agent');
+  assert.equal(suggest(modal,'Why?')[0].item.name,'Ask Agent: “Why?”');
   const selectedRow=suggest(modal,'Why?')[0];
   modal.selectSuggestion(selectedRow,{});
   assert.deepEqual(sent,[{query:'Why?',selection:'Selected paragraph'}]);
@@ -60,7 +60,7 @@ test('palette focus and close cannot change the source selection or position cap
   prototype.onOpen=function(){selection='';context={note:'Other.md',start:0,end:0};return 'opened';};
   const hook=installPaletteChat(app,(query,selected,choose,source)=>{sent.push({query,selected,choose,source});},{captureSource:()=>{captures++;return {selection,context};}});
   modal.onOpen();
-  assert.equal(suggest(modal,'Why')[0].item.name,'Ask T3 Code: “Why”');
+  assert.equal(suggest(modal,'Why')[0].item.name,'Ask Agent: “Why”');
   const row=suggest(modal,'Why?')[0];
   modal.selectSuggestion(row,{ctrlKey:true});
   assert.equal(captures,1);

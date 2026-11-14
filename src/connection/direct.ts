@@ -9,7 +9,7 @@ import {sha256} from '@noble/hashes/sha2';
 import {proofKey,proof} from './dpop';
 import type {Connection,Request} from '../app/bridge';
 import type {InlineStartRequest} from '../conversations/inline-thread';
-import {existingThreadTurn} from '../conversations/thread-target';
+import {existingThreadTurn,threadIsActive} from '../conversations/thread-target';
 import {readNewThreadDefaults} from '../conversations/model-defaults';
 import {T3HttpError} from '../conversations/thread-access-cache';
 import {t3Api,abortableRead,requestAborted,type AbortableT3Api,type T3RequestOptions} from './t3-api';
@@ -153,6 +153,7 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
  if(!r.directPlan){
   if(r.threadId){
    const thread=readMetadataSnapshot(await api('threads/'+encodeURIComponent(r.threadId)+'?controlOnly=true')).thread;
+   if(r.queueSend&&threadIsActive(thread))throw Error('This thread is still running. Wait for it to finish or choose New thread for the Ask Queue.');
    const turn=existingThreadTurn(thread,{threadId:r.threadId,projectId:r.project.id},commandId(r.id,'turn'),{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})});
    r.directPlan={protocolVersion:2,hash,environmentId:r.connection.environmentId!,phase:'created',create:null,turn,...(thread.session?.status==='running'&&thread.session.activeTurnId?{observedActiveTurnId:thread.session.activeTurnId}:{})};
   }else{

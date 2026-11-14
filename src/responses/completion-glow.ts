@@ -26,6 +26,7 @@ export class CompletionGlow {
   private environments=new Map<string,EnvironmentRead>();
   private access:ThreadAccessCache;
   private visiting=false;
+  private pendingReads=new Set<string>();
   private retryAt=0;
   private stopped=false;
   constructor(saved:unknown,private save:(receipts:CompletionReceipt[])=>void,private io:CompletionGlowIO,private now=Date.now){
@@ -112,11 +113,11 @@ export class CompletionGlow {
     for(const environmentId of environments){if(this.stopped)return;await this.read(environmentId,force);}
   }
   /** Only a focused, visible note counts; background tabs never acknowledge. */
-  view(path:string|undefined,now=this.now()):void {
+  view(path:string|undefined,now=this.now(),immediate=false):void {
     if(this.stopped)return;
     if(!path){this.viewing=undefined;return;}
-    if(this.viewing?.path!==path){this.viewing={path,since:now,acknowledged:new Set(),commands:new Map()};return;}
-    if(now-this.viewing.since<750)return;
+    if(this.viewing?.path!==path)this.viewing={path,since:now,acknowledged:new Set(),commands:new Map()};
+    if(!immediate&&now-this.viewing.since<750)return;
     if(!this.visiting&&this.now()>=this.retryAt)void this.visit(this.viewing);
   }
   private async visit(view:Viewing){
@@ -132,26 +133,29 @@ export class CompletionGlow {
       for(const receipt of selected.values()){
         if(this.stopped||this.viewing!==view)return;
         const source=receipt.completion!,visitedAt=source.completedAt!;
-        const access=await this.access.get(source.environmentId);
-        if(this.stopped||this.viewing!==view||this.receipts.get(receipt.id)!==receipt||receipt.deleted||!this.unread(receipt))continue;
-        const key=JSON.stringify([threadKey(source),visitedAt]);
-        let command=view.commands.get(key);
-        if(!command){command={type:'thread.visit',commandId:crypto.randomUUID(),threadId:source.threadId,visitedAt};view.commands.set(key,command);}
-        await access.api('/api/orchestration/dispatch',command);
-        if(this.stopped)return;
-        // Do not re-visit an explicit mark-unread while this same note remains
-        // focused. A new completion, note switch or focus starts another visit.
-        for(const other of this.receipts.values())if(other.notePath===view.path&&other.completion&&threadKey(other.completion)===threadKey(source)&&timestamp(other.completion.completedAt)<=timestamp(visitedAt))view.acknowledged.add(completionKey(other));
-        // Dispatch acknowledgement is not read-state evidence. Re-read after
-        // any older in-flight read; only confirmed server state clears a glow.
-        await this.read(source.environmentId,true);
+        const pending=[...this.receipts.values()].filter(other=>other.notePath===view.path&&other.completion&&threadKey(other.completion)===threadKey(source)&&timestamp(other.completion.completedAt)<=timestamp(visitedAt)).map(completionKey);
+        for(const key of pending)this.pendingReads.add(key);this.io.changed();
+        try{
+          const access=await this.access.get(source.environmentId);
+          if(this.stopped||this.viewing!==view||this.receipts.get(receipt.id)!==receipt||receipt.deleted||!this.unread(receipt))continue;
+          const key=JSON.stringify([threadKey(source),visitedAt]);
+          let command=view.commands.get(key);
+          if(!command){command={type:'thread.visit',commandId:crypto.randomUUID(),threadId:source.threadId,visitedAt};view.commands.set(key,command);}
+          await access.api('/api/orchestration/dispatch',command);
+          if(this.stopped)return;
+          // Preserve an explicit mark-unread while this note remains focused.
+          for(const other of this.receipts.values())if(other.notePath===view.path&&other.completion&&threadKey(other.completion)===threadKey(source)&&timestamp(other.completion.completedAt)<=timestamp(visitedAt))view.acknowledged.add(completionKey(other));
+          // Hide during the visit, then reconcile against confirmed server
+          // state. A failed or unapplied visit cannot become a local read flag.
+          await this.read(source.environmentId,true);
+        }finally{for(const key of pending)this.pendingReads.delete(key);this.io.changed();}
       }
     }catch{this.retryAt=this.now()+COMPLETION_READ_INTERVAL_MS;}
     finally{this.visiting=false;}
   }
   project(notes:Map<string,NoteIndicator>,exists:(path:string)=>boolean):Map<string,NoteIndicator> {
     const result=new Map(notes);
-    for(const receipt of this.receipts.values())if(this.unread(receipt)&&exists(receipt.notePath)){
+    for(const receipt of this.receipts.values())if(this.unread(receipt)&&!this.pendingReads.has(completionKey(receipt))&&exists(receipt.notePath)){
       const note=result.get(receipt.notePath)??{active:0,input:0,complete:1,total:1};
       result.set(receipt.notePath,{...note,unread:(note.unread??0)+1});
     }

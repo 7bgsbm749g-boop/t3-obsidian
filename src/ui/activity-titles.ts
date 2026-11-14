@@ -25,7 +25,10 @@ export function activityLeafPath(leaf:ActivityLeaf):string|undefined {
 }
 /** Bind by the leaf's file path, never its possibly duplicate display title. */
 export function decorateActivityTabs(tabs:ActivityTab[],notes:Map<string,NoteIndicator>):void {
-  for(const tab of tabs)setActiveTitle(tab.title,!!tab.path&&!!notes.get(tab.path)?.active);
+  for(const tab of tabs){
+    const note=tab.path?notes.get(tab.path):undefined;
+    setActiveTitle(tab.title,!!note?.active);setCompletionTitle(tab.title,!!note?.unread);
+  }
 }
 
 /** Mobile Tab Bar owns separate labels. Its public leaf order keeps duplicate
@@ -38,10 +41,16 @@ export function decorateMobileActivityTabs(root:ParentNode,paths:Array<string|un
   };
   for(const [name,offset] of [['previous',-1],['current',0],['next',1]] as const){
     const path=adjacent(offset);
-    for(const title of Array.from(root.querySelectorAll<HTMLElement>(`.mtb-title-${name}`)))setActiveTitle(title,!!path&&!!notes.get(path)?.active);
+    for(const title of Array.from(root.querySelectorAll<HTMLElement>(`.mtb-title-${name}`))){setActiveTitle(title,!!path&&!!notes.get(path)?.active);setCompletionTitle(title,!!path&&!!notes.get(path)?.unread);}
   }
   for(const row of Array.from(root.querySelectorAll<HTMLElement>('.mtb-tab-row'))){
     const path=/^\d+ · (.+)$/.exec(row.querySelector('.mtb-tab-detail')?.textContent??'')?.[1];
-    setActiveTitle(row.querySelector('.mtb-tab-name'),!!path&&!!notes.get(path)?.active);
+    setActiveTitle(row.querySelector('.mtb-tab-name'),!!path&&!!notes.get(path)?.active);setCompletionTitle(row.querySelector('.mtb-tab-name'),!!path&&!!notes.get(path)?.unread);
   }
+}
+
+function setCompletionTitle(element:HTMLElement|null,unread:boolean){
+  if(!element)return;
+  if(unread)element.setAttribute('data-t3-completion-glow','note');
+  else element.removeAttribute('data-t3-completion-glow');
 }

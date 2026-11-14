@@ -17,7 +17,12 @@ for(const file of files){
    if(node.expression.kind===ts.SyntaxKind.ImportKeyword&&ts.isStringLiteral(node.arguments[0])&&/^(?:node:)?(?:fs(?:\/promises)?|child_process|http|https|net|tls)$/.test(node.arguments[0].text))throw Error(`Retired native file/process/server capability in ${where}`);
    if(ts.isPropertyAccessExpression(node.expression)&&['getFiles','getMarkdownFiles','getAllLoadedFiles'].includes(node.expression.name.text))throw Error(`Vault enumeration is retired: ${where}`);
   }
-  if(ts.isPropertyAccessExpression(node)&&['clipboard','clipboardData'].includes(node.name.text))throw Error(`Custom clipboard access is retired: ${where}`);
+  if(ts.isPropertyAccessExpression(node)&&['clipboard','clipboardData'].includes(node.name.text)){
+   // Explicitly requested Copy run ID only: no clipboard reads, note copy
+   // controls, native bridges, or other clipboard capabilities are allowed.
+   const runIdWrite=file===join(root,'src/responses/run-id.ts')&&node.name.text==='clipboard'&&node.expression.getText(source)==='win.navigator'&&ts.isPropertyAccessExpression(node.parent)&&node.parent.name.text==='writeText';
+   if(!runIdWrite)throw Error(`Custom clipboard access is retired: ${where}`);
+  }
   if(ts.isClassDeclaration(node)&&node.heritageClauses?.some(clause=>clause.types.some(type=>type.expression.getText(source)==='PluginSettingTab'))&&node.members.some(member=>ts.isMethodDeclaration(member)&&member.name.getText(source)==='display'))throw Error(`Legacy settings renderer is retired: ${where}`);
   ts.forEachChild(node,check);
  }

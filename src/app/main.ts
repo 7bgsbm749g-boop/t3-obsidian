@@ -1,3 +1,5 @@
+import {savedSelectionAnchor} from '../notes/selection-insertion';
+import {queuedEditIndicator} from '../notes/queued-edit-indicator';
 import {savedResponseProof} from '../responses/saved-response-proof';
 import {RouteStatus} from '../connection/route-status';
 import {readImportThreads,readImportRuns,readImportRun,readImportPreview,importHistoryState} from '../conversations/import-source';
@@ -102,12 +104,15 @@ import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,typ
 import {loadFolderLinkChanges,mergeFolderLinkChanges,applyFolderLinkChanges,changedFolderLinks,mergeLegacyFolderLinks,type FolderLinkChange} from '../projects/folder-link-sync';
 import {installPaletteChat,type PaletteChatController} from '../conversations/palette-chat';
 import {SendGesture} from '../responses/send-gesture';
+import {loadAskQueue,relocateQueuedAsks,type QueuedAsk} from '../conversations/ask-queue';
+import {AskQueueModal} from '../conversations/ask-queue-ui';
 import {AskComposer,openChatFlow,openNoteSendFlow,type ChatHost,type ChatDestination} from '../conversations/chat-ui';
 import {selectionRange} from '../conversations/inline-steering';
 import {projectThreads,type ThreadChoice} from '../conversations/thread-target';
 import {assertThreadNoteMode,oneToOneNoteThreads,threadNoteMode,type ThreadNoteMode,type ModeThread} from '../conversations/thread-note-mode';
 import {lastUsedNoteThread,loadNoteThreads,mergeNoteThreads,mutateNoteThreads,previousNoteThreads,bindNoteThreadIds,resolveNoteThreadPaths,type NoteThread} from '../notes/note-threads';
 import {noteIndicators} from '../responses/explorer-responses';
+import {projectGroups,groupedProjectLabel,projectRepositoryKey} from '../projects/project-groups';
 import {CompletionGlow} from '../responses/completion-glow';
 import {folderNotePath,type FolderNotesSettings} from '../projects/folder-note-adapter';
 import {installFolderIndicators,type FolderIndicatorController} from '../projects/folder-indicator';
@@ -138,7 +143,7 @@ import {approvalTargets,parseApprovalUrl,clearApprovalControls,type ApprovalTarg
 import {settlementState,type ThreadSettlementJob} from '../conversations/thread-settlement';
 import {ThreadSettlementEvents} from '../conversations/thread-settlement-events';
 import {ThreadVisibility,threadHiding} from '../conversations/thread-visibility';
-type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;canonicalAnchor?:SelectionAnchor;insertion?:CursorInsertion;referenceSelection?:boolean;initialQuestion?:string;responseId?:string;snapshot?:string;smartDocument?:string;smartScope?:Span;smartQuestion?:string};
+type EditorChatContext={onSent?:()=>void;queueSend?:boolean;editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;canonicalAnchor?:SelectionAnchor;insertion?:CursorInsertion;referenceSelection?:boolean;initialQuestion?:string;responseId?:string;snapshot?:string;smartDocument?:string;smartScope?:Span;smartQuestion?:string};
 type SteeringSource={document:string;ranges:Span[]};
 type PaletteActionContext={file:TFile;editor?:EditorChatContext;insertion:CursorInsertion|null};
 const NEW_FOLDER_PROJECT='folder:new';
@@ -320,23 +325,27 @@ export default class SendToT3 extends Plugin {
     if(typeof this.register==='function'&&MarkdownView?.prototype)this.register(nativeResponses(this.app).installLoading(MarkdownView.prototype));
     if(typeof this.registerDomEvent==='function')this.register(watchWorkspaceDocuments(this.app,root=>{
       const review=(event:Event)=>{const detail=(event as CustomEvent<unknown>).detail;if(isRecord(detail)&&typeof detail.bindingId==='string')new ResponseLocationModal(this.app,detail.bindingId,command=>this.executeAgentCommand(command)).open();};
-      const toggle=(event:Event)=>{
-        const details=event.target as HTMLDetailsElement;if(!details?.matches?.('details[data-t3-tool-ref]')||!details.open)return;
+      const mount=(details:HTMLDetailsElement)=>{
+        if(!details?.matches?.('details[data-t3-tool-ref]')||!details.open)return;
         const ref=details.getAttribute('data-t3-tool-ref')!,old=this.toolRenderings.get(details);if(old?.ref===ref)return;
         if(old){old.dispose();this.removeChild(old.child);this.toolRenderings.delete(details);}
         const child=new MarkdownRenderChild(details);this.addChild(child);
         const dispose=mountToolGroups(details,value=>nativeResponses(this.app).toolGroup(details,value),(html,target)=>MarkdownRenderer.render(this.app,details.classList.contains('send-to-t3-response-history')?nativeResponses(this.app).renderToolBody(details,html):html,target,this.app.workspace.getActiveFile()?.path??'',child),error=>new Notice(`T3 Code: ${message(error)}`));
         child.register(dispose);this.toolRenderings.set(details,{ref,child,dispose});
       };
+      const toggle=(event:Event)=>mount(event.target as HTMLDetailsElement);
       const openHistories=()=>{
         if(this.stopped)return;
         for(const details of Array.from(root.querySelectorAll<HTMLDetailsElement>('details.send-to-t3-response-history[data-t3-tool-ref]:not([open])'))){
           const fold=details.closest('.callout[data-callout="t3-progress"]');if(fold&&!fold.classList.contains('is-collapsed'))details.open=true;
         }
+        // Restored open widgets need not emit a new toggle event. Mount them
+        // after insertion too, before their first visible expansion.
+        for(const details of Array.from(root.querySelectorAll<HTMLDetailsElement>('details[data-t3-tool-ref][open]')))mount(details);
       };
       root.addEventListener('t3-review-response-location',review);root.addEventListener('toggle',toggle,true);
       const observer=new MutationObserver((records=[])=>{for(const [details,rendering] of this.toolRenderings)if(!details.isConnected){rendering.dispose();this.removeChild(rendering.child);this.toolRenderings.delete(details);}if(records.some(record=>record.type==='childList'||(record.target as Element).matches?.('.callout[data-callout="t3-progress"]')))openHistories();});
-      observer.observe(root,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});
+      observer.observe(root,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});queueMicrotask(openHistories);
       return ()=>{root.removeEventListener('t3-review-response-location',review);root.removeEventListener('toggle',toggle,true);observer.disconnect();for(const [details,rendering] of this.toolRenderings)if(details.ownerDocument===root){rendering.dispose();this.removeChild(rendering.child);this.toolRenderings.delete(details);}};
     }));
     const data = await this.loadSettings();
@@ -396,7 +405,9 @@ export default class SendToT3 extends Plugin {
       if(!checking)void this.openManualAction(file,'',editor.getSelection(),{editor,view},this.commandSendSelector(view)).catch(error=>new Notice(`T3 Code: ${message(error)}`,10000));
       return true;
     }});
-    this.addCommand({id:'ask-agent',name:'Ask agent…',editorCheckCallback:(checking,editor,view)=>{if(this.stopped||this.busy||!view.file)return false;if(!checking)this.openAsk(view.file,editor.getSelection(),{editor,view});return true;}});
+    this.addCommand({id:'ask-queue',name:'Review Ask Queue…',editorCallback:(_editor,view)=>{if(view.file)this.openAskQueue(view.file);}});
+    this.addCommand({id:'queue-selection',name:'Add selection to Ask Queue…',editorCheckCallback:(checking,editor,view)=>{if(!view.file||!editor.getSelection().trim())return false;if(!checking)this.openAsk(view.file,editor.getSelection(),{editor,view});return true;}});
+    this.addCommand({id:'ask-agent',name:'Ask Agent…',editorCheckCallback:(checking,editor,view)=>{if(this.stopped||this.busy||!view.file)return false;if(!checking)this.openAsk(view.file,editor.getSelection(),{editor,view});return true;}});
     this.addCommand({id:'send-or-ask-choose',name:'Send or ask: choose destination…',editorCheckCallback:(checking,editor,view)=>{
       const file=view.file;
       if(this.stopped||this.busy||this.defaultSending||!file||file.extension.toLowerCase()!=='md')return false;
@@ -612,6 +623,9 @@ export default class SendToT3 extends Plugin {
             tabs.push({path:activityLeafPath(leaf as typeof leaf&ActivityLeaf),title:header?.querySelector<HTMLElement>('.workspace-tab-header-inner-title')??null});
           });
           decorateActivityTabs(tabs,notes);
+          const pending=responseBindingRequests(this.settings.responseBindings??{}).filter(request=>request.localStage&&!this.deviceInline?.responseStatus(request.id)?.finalSaved);
+          for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file)queuedEditIndicator(view,pending.filter(request=>request.notePath===view.file!.path).length);}
+
           const mobile=(this.app as App&{plugins?:{plugins?:Record<string,{
             tabs?:()=>ActivityLeaf[];
             activeTab?:(tabs:ActivityLeaf[])=>ActivityLeaf|null;
@@ -624,6 +638,11 @@ export default class SendToT3 extends Plugin {
         this.registerEvent(this.app.workspace.on('layout-change',()=>this.folderIndicators?.refresh()));
         this.registerEvent(this.app.workspace.on('file-open',()=>this.folderIndicators?.refresh()));
         this.registerEvent(this.app.workspace.on('active-leaf-change',()=>this.folderIndicators?.refresh()));
+        this.registerDomEvent(document,'click',event=>{
+          const target=event.target as Element|null;
+          if(!target?.closest('.nav-file-title, .workspace-tab-header'))return;
+          queueMicrotask(()=>{const view=this.app.workspace.getActiveViewOfType(MarkdownView);if(view?.file&&document.hasFocus()&&document.visibilityState==='visible'){this.completionGlow?.view(view.file.path,Date.now(),true);this.folderIndicators?.refresh();}});
+        });
         this.registerDomEvent(document,'visibilitychange',()=>{this.completionGlow?.view(undefined);this.folderIndicators?.refresh();});
         this.registerDomEvent(window,'blur',()=>this.completionGlow?.view(undefined));
         this.registerDomEvent(window,'focus',()=>{this.folderIndicators?.refresh();void this.completionGlow?.refresh(true);});
@@ -692,6 +711,10 @@ export default class SendToT3 extends Plugin {
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{void this.relocateNoteThreads(oldPath,file.path,file instanceof TFolder).catch(error=>new Notice(`T3 thread history: ${message(error)}`,10000));}));
       this.registerEvent(this.app.vault.on('delete',file=>{void this.relocateNoteThreads(file.path,undefined,file instanceof TFolder).catch(error=>new Notice(`T3 thread history: ${message(error)}`,10000));}));
     }
+    if(typeof this.app.vault?.on==='function'){
+      this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.app.saveLocalStorage(this.askQueueKey(),relocateQueuedAsks(loadAskQueue(this.app.loadLocalStorage(this.askQueueKey())),oldPath,file.path))));
+      this.registerEvent(this.app.vault.on('delete',file=>this.app.saveLocalStorage(this.askQueueKey(),relocateQueuedAsks(loadAskQueue(this.app.loadLocalStorage(this.askQueueKey())),file.path))));
+    }
     this.registerEvent(this.app.workspace.on('file-menu',(menu,file,source) => {
       if(file instanceof TFolder){
         const folder=this.folderForMenu(file);
@@ -701,7 +724,16 @@ export default class SendToT3 extends Plugin {
           const submenu=(item as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();
           if(!submenu){item.onClick(()=>new FolderLinkProjectModal(this.app,this,folder).open());return;}
           const projects=this.projects();
-          for(const project of projects)submenu.addItem(i=>i.setTitle(`Link to ${this.projectChoiceLabel(project)}`).onClick(()=>void this.linkFolder(folder,project,false)));
+          for(const group of projectGroups(projects)){
+            submenu.addItem(i=>i.setTitle(group.label).setIsLabel(true));
+            const shown=new Set<string>();
+            for(const project of group.projects){const key=projectRepositoryKey(project);if(group.shared&&key&&shown.has(key))continue;if(key)shown.add(key);submenu.addItem(i=>{
+              i.setTitle(project.title);
+              if(group.shared){const targets=(i as MenuItem&{setSubmenu?:()=>Menu}).setSubmenu?.();if(targets){for(const member of group.projects.filter(member=>projectRepositoryKey(member)===key))targets.addItem(target=>target.setTitle(member.connectionName??'This machine').onClick(()=>void this.linkFolder(folder,member,false)));return;}}
+              i.onClick(()=>void this.linkFolder(folder,project,false));
+            });}
+            submenu.addSeparator();
+          }
           submenu.addSeparator();
           submenu.addItem(i=>i.setTitle('Create T3 project…').onClick(()=>void this.createFolderProject(folder)));
           submenu.addItem(i=>i.setTitle('Unlink').setIcon('unlink').setDisabled(!this.settings.folderLinks.some(link=>link.folderPath===folder.path)).onClick(async()=>{
@@ -717,7 +749,7 @@ export default class SendToT3 extends Plugin {
         item.setTitle('Send to agent').setIcon('send');
         item.setDisabled(this.busy||this.defaultSending).onClick(event=>this.openNoteSend(file,Boolean(event?.ctrlKey)));
       });
-      menu.addItem(item=>item.setTitle('Ask agent…').setIcon('message-circle').setDisabled(this.busy||this.defaultSending).onClick(()=>this.openAsk(file)));
+      menu.addItem(item=>item.setTitle('Ask Agent…').setIcon('message-circle').setDisabled(this.busy||this.defaultSending).onClick(()=>this.openAsk(file)));
       if(Platform.isMobile)menu.addItem(item=>item.setTitle('Send to agent: choose destination…').setIcon('send').setDisabled(this.busy||this.defaultSending).onClick(()=>this.openNoteSend(file,true)));
     }));
     this.registerEvent(this.app.workspace.on('editor-menu',(menu,editor,view)=>{
@@ -742,10 +774,10 @@ export default class SendToT3 extends Plugin {
         if(failed){
           menu.addItem(item=>item.setTitle('Continue T3 response'+suffix).setIcon('rotate-cw').setDisabled(this.busy).onClick(()=>this.continueInline(id,file.path).catch(error=>new Notice(`T3: ${message(error)}`,10000))));
           menu.addItem(item=>item.setTitle('Attach latest T3 continuation'+suffix).setIcon('link').setDisabled(this.busy).onClick(()=>{void this.attachInline(id,file.path).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));
-        }else {if(captured)menu.addItem(item=>item.setTitle('Ask T3 in this response'+suffix).setIcon('message-circle').onClick(event=>this.openEditorChat(selection,file,{editor,view,...captured,responseId:id},Boolean(event?.ctrlKey))));}
+        }else {if(captured)menu.addItem(item=>item.setTitle('Ask Agent in this response'+suffix).setIcon('message-circle').onClick(event=>this.openEditorChat(selection,file,{editor,view,...captured,responseId:id},Boolean(event?.ctrlKey))));}
         menu.addItem(item=>item.setTitle('Stop T3 response'+suffix).setIcon('square').onClick(()=>{void this.inlineChat!.stopAt(id,editor,view).catch(error=>new Notice(`T3: ${message(error)}`,10000));}));
       }
-      menu.addItem(item=>item.setTitle('Ask agent…').setIcon('message-circle').setDisabled(this.busy||this.defaultSending).onClick(()=>this.openAsk(file,selection,{editor,view,...captured})));
+      menu.addItem(item=>item.setTitle('Ask Agent…').setIcon('message-circle').setDisabled(this.busy||this.defaultSending).onClick(()=>this.openAsk(file,selection,{editor,view,...captured})));
       if(!captured)return;
       menu.addItem(item=>item.setTitle('Send to agent').setIcon('message-circle').setDisabled(this.busy||this.defaultSending).onClick(event=>void this.openManualAction(file,'',selection,{editor,view,...captured},Boolean(event?.ctrlKey))));
       if(Platform.isMobile)menu.addItem(item=>item.setTitle('Send to agent: choose destination…').setIcon('message-circle').setDisabled(this.busy||this.defaultSending).onClick(()=>void this.openManualAction(file,'',selection,{editor,view,...captured},true)));
@@ -1149,7 +1181,24 @@ export default class SendToT3 extends Plugin {
     if(captured&&selection.trim()&&!captured.anchor)captured={...captured,anchor:captureEditorSelection(captured.editor)};
     if(captured&&!captured.anchor)captured={...captured,insertion:captured.insertion??captureCursorInsertion(captured.editor.getValue(),captured.editor.posToOffset(captured.editor.getCursor()))};
     const context=captured?this.canonicalChatContext(captured):undefined;
-    new AskComposer(this.app,file.path,this.localDraft(),text=>this.app.saveLocalStorage(this.chatDraftKey,text),(question,selected)=>this.openManualAction(file,question,selection,context,choose||selected)).open();
+    new AskComposer(this.app,file.path,this.localDraft(),text=>this.app.saveLocalStorage(this.chatDraftKey,text),(question,selected)=>this.openManualAction(file,question,selection,context,choose||selected),question=>this.queueAsk(file,context?.canonicalAnchor?.text??selection,question)).open();
+  }
+  private askQueueKey(){return `ask-queue:${this.settings.vaultId}`;}
+  private queueAsk(file:TFile,selection:string,question:string){
+    const items=loadAskQueue(this.app.loadLocalStorage(this.askQueueKey()));
+    if(items.length>=32)throw Error('The Ask Queue is full. Send or remove some questions first.');
+    items.push({id:randomId(),notePath:file.path,selection,question});this.app.saveLocalStorage(this.askQueueKey(),items);
+    new Notice(`Added to Ask Queue (${items.filter(item=>item.notePath===file.path).length}). Use Review Ask Queue to send.`);
+  }
+  private openAskQueue(file:TFile){
+    const key=this.askQueueKey(),items=loadAskQueue(this.app.loadLocalStorage(key)).filter(item=>item.notePath===file.path);
+    const originalIds=new Set(items.map(item=>item.id));
+    const save=(updated:QueuedAsk[])=>this.app.saveLocalStorage(key,[...loadAskQueue(this.app.loadLocalStorage(key)).filter(item=>!originalIds.has(item.id)),...updated]);
+    new AskQueueModal(this.app,items,save,async(prompt,ids)=>{
+      const view=await this.editorForNoteSend(file);if(!view)throw Error('Open this note in the editor before sending.');
+      const sent=new Map(items.filter(item=>ids.includes(item.id)).map(item=>[item.id,JSON.stringify(item)]));
+      await this.openChatWithNote(this.noteContext(file),prompt,{view,editor:view.editor,queueSend:true,onSent:()=>this.app.saveLocalStorage(key,loadAskQueue(this.app.loadLocalStorage(key)).filter(item=>sent.get(item.id)!==JSON.stringify(item)))},true,true);
+    }).open();
   }
   private previousNoteThread(path:string,threadId:string){return previousNoteThreads(this.noteThreadRelations(),path).find(entry=>entry.threadId===threadId);}
   private projectForNoteThread(entry:NoteThread):Project{
@@ -1452,7 +1501,7 @@ export default class SendToT3 extends Plugin {
     const active=this.app.workspace.getActiveViewOfType(MarkdownView);
     const view=captured?.view??(active?.file?.path===file.path?active:undefined);
     const editor=captured?.editor??view?.editor;
-    if(captured&&view?.file?.path!==file.path)throw Error('The original note is no longer open. Reopen it before asking T3.');
+    if(captured&&view?.file?.path!==file.path)throw Error('The original note is no longer open. Reopen it before asking the agent.');
     const selected=selection.trim();
     let context:EditorChatContext|undefined;
     if(view?.file?.path===file.path&&editor){
@@ -1490,9 +1539,10 @@ export default class SendToT3 extends Plugin {
     const view=context?.view??this.app.workspace?.getLeavesOfType?.('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.file?.path===path);
     if(!view?.editor||view.file?.path!==path)return ()=>{};
     const document=view.editor.getValue();
-    if(context&&inlineSteeringTarget(document,context.editor.posToOffset(context.editor.getCursor()),context.responseId))return ()=>{};
+    if(context&&!context.queueSend&&inlineSteeringTarget(document,context.editor.posToOffset(context.editor.getCursor()),context.responseId))return ()=>{};
     let offset=endInsertionOffset(document);
-    if(context?.anchor)offset=insertionOffset(document,context.anchor);
+    if(context?.queueSend)offset=endInsertionOffset(document);
+    else if(context?.anchor){const anchor=savedSelectionAnchor(document,context.canonicalAnchor??context.anchor,context.snapshot);offset=anchor?insertionOffset(document,anchor):context.insertion?resolveCursorInsertion(document,context.insertion):endInsertionOffset(document);}
     else if(context?.insertion)offset=resolveCursorInsertion(document,context.insertion);
     else if(insertion){
       const adapter=nativeResponses(this.app).view(view as MarkdownView);
@@ -1504,7 +1554,7 @@ export default class SendToT3 extends Plugin {
   private canonicalChatContext(context:EditorChatContext):EditorChatContext {
     if(!context.anchor||context.canonicalAnchor&&context.snapshot!==undefined)return context;
     const display=context.editor.getValue(),range=selectionRange(display,context.anchor);
-    if(!range)throw Error('The selected text changed. Select it again before asking T3.');
+    if(!range)throw Error('The selected text changed. Select it again before asking the agent.');
     const adapter=nativeResponses(this.app).view(context.view as MarkdownView),mapped=adapter?.canonicalSelection(range.from,range.to);
     const snapshot=mapped?.document??context.snapshot??display;
     const canonicalAnchor=mapped?selectionAnchor(snapshot,mapped.text,mapped.start,mapped.end):context.anchor;
@@ -1621,9 +1671,13 @@ export default class SendToT3 extends Plugin {
     new ExistingThreadModal(this.app,threads,thread=>this.sendResolvedChat(prompt,note,inline,answerOnly,{threadId:thread.id,expectedProjectKey:projectKey(project),projectOverrideKey:overrideKey,jobOptions:resolve?.()}),'Ask in an existing thread','No existing threads in this project. Use New thread.',back).open();
   }
   private async sendResolvedChat(prompt:string,note:{path:string;absolutePath?:string}|undefined,context:EditorChatContext|undefined,answerOnly:boolean,options:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions}){
+    await this.performResolvedChat(prompt,note,context,answerOnly,options);context?.onSent?.();
+  }
+  private async performResolvedChat(prompt:string,note:{path:string;absolutePath?:string}|undefined,context:EditorChatContext|undefined,answerOnly:boolean,options:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions}){
+    if(context?.queueSend&&options.responseId)throw Error('This thread is still running. Wait for it to finish or choose New thread for the Ask Queue.');
     const jobOptions=options.jobOptions??resolveJobOptions(this.settings.inlineStreaming);
     // Steering extends the existing response, even when this draft says Off.
-    const activeId=options.responseId??(!options.threadId&&context?inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId):undefined);
+    const activeId=context?.queueSend?undefined:options.responseId??(!options.threadId&&context?inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId):undefined);
     if(context&&note&&activeId&&!options.newThread)return this.sendInlineSteering(activeId,prompt,note,context,options);
     if(jobOptions.inline.enabled&&note&&(context||typeof this.app.workspace.getLeaf==='function')){
       if(!context){const file=this.app.vault.getFileByPath(note.path);if(!file)throw Error('The original note is unavailable.');const view=await this.editorForNoteSend(file);if(!view)throw Error('A Markdown editor is required for inline streaming.');context={view,editor:view.editor};}
@@ -1633,8 +1687,8 @@ export default class SendToT3 extends Plugin {
   }
   private async sendInlineChat(prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions}){
     const manager=this.inlineChat;if(!manager)throw Error('Inline T3 response is unavailable. Reload the plugin.');
-    if(context.view.file?.path!==note.path)throw Error('The original note is no longer open. Reopen it before asking T3.');
-    const activeId=inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId);
+    if(context.view.file?.path!==note.path)throw Error('The original note is no longer open. Reopen it before asking the agent.');
+    const activeId=context.queueSend?undefined:inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId);
     if(activeId&&!options?.newThread&&!options?.threadId)return this.sendInlineSteering(activeId,prompt,note,context,options);
     const jobOptions=options?.jobOptions??resolveJobOptions(this.settings.inlineStreaming);
     const requestId=randomId(),initialInput=context.initialQuestion?{messageId:commandId(requestId,'message'),text:context.initialQuestion}:undefined;
@@ -1647,7 +1701,8 @@ export default class SendToT3 extends Plugin {
         // The pending indicator never enters image or prompt snapshots.
         if(request.inlineSteering)return;
 
-        job=context.anchor&&!context.referenceSelection&&!activeId?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path,initialInput,request.title,jobOptions):context.insertion?manager.reserveAtCursor(context.editor,context.view,context.insertion,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
+        const selected=context.anchor?savedSelectionAnchor(context.editor.getValue(),context.canonicalAnchor??context.anchor,context.snapshot):undefined;
+        job=context.queueSend?manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions):selected?manager.reserve(context.editor,context.view,selected,requestId,note.path,initialInput,request.title,jobOptions):context.insertion?manager.reserveAtCursor(context.editor,context.view,context.insertion,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
         this.sendPreviews.hide(context.view as MarkdownView);
         await manager.prepare(job,request);
       }});delivered=true;if(job)manager.start(job);
@@ -2210,8 +2265,8 @@ export default class SendToT3 extends Plugin {
       }
       if(this.stopped)throw Error('The plugin was disabled before sending.');
       const title=await this.requestTitle(connection,project,threadId,note?.path);
-      request={...(this.settings.hideObsidianThreads===true&&!threadId?{hideObsidianThread:true}:{}),...(smartCapture?{smartSend:smartCapture}:{}),...(options?.jobOptions?{jobOptions:options.jobOptions}:{}),id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
-      if(note&&!options?.barePrompt)await this.prepareNoteSteering(request,note.path,preparedInput,options?.sourceContext,options?.responseId,steeringSource);
+      request={...(options?.sourceContext?.queueSend?{queueSend:true}:{}),...(this.settings.hideObsidianThreads===true&&!threadId?{hideObsidianThread:true}:{}),...(smartCapture?{smartSend:smartCapture}:{}),...(options?.jobOptions?{jobOptions:options.jobOptions}:{}),id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
+      if(note&&!options?.barePrompt&&!options?.sourceContext?.queueSend)await this.prepareNoteSteering(request,note.path,preparedInput,options?.sourceContext,options?.responseId,steeringSource);
       await options?.onPrepared?.(request,preparedInput);
       logEvent('request.prepared',{requestId:request.id,threadId:request.threadId,projectId:request.project.id,notePath:note?.path,promptHash:contentHash(request.prompt),promptLength:request.prompt.length});
       this.settings.pending.push(request);
@@ -2241,7 +2296,7 @@ export default class SendToT3 extends Plugin {
       const score=this.connectionScore(c);
       if(!catalog.has(key)||score>catalog.get(key)!.score)catalog.set(key,{project,score});
     }
-    return [...catalog.values()].map(entry=>entry.project);
+    return projectGroups([...catalog.values()].map(entry=>({...entry.project,environmentId:this.settings.paired.find(connection=>connection.id===entry.project.connectionId)?.environmentId}))).flatMap(group=>group.projects);
   }
   private connectionScore(connection?:PairedConnection){
     const session=connection&&this.pairedSessions[connection.id];
@@ -2399,7 +2454,7 @@ export default class SendToT3 extends Plugin {
   projectChoiceLabel(project:Project){
     const c=project.connectionId?this.settings.paired.find(c=>c.id===project.connectionId):undefined;
     const status=this.projectDiscovery?.status(this.sourceKey(c));
-    return projectLabel(project)+(status==='offline'?' · Offline (cached)':status==='unverified'||status==='checking'?' · Cached; checking connection':'');
+    return groupedProjectLabel(project,this.projects())+(status==='offline'?' · Offline (cached)':status==='unverified'||status==='checking'?' · Cached; checking connection':'');
   }
   private syncProjectSources(){
     if(!this.projectDiscovery)return;
@@ -2929,7 +2984,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
-  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){for(const leaf of this.app.workspace.getLeavesOfType?.('markdown')??[])queuedEditIndicator(leaf.view as MarkdownView,0);this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async setThreadHiding(enabled:boolean){this.settings.hideObsidianThreads=enabled;await this.save();await this.syncThreadVisibility();}
   private syncThreadVisibility(force=false):Promise<void>{
     if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve();
@@ -3017,7 +3072,7 @@ class FolderLinkProjectModal extends FuzzySuggestModal<FolderLinkChoice>{
   onOpen(){void super.onOpen?.();this.unwatch=this.plugin.watchProjects(()=>this.inputEl?.dispatchEvent(new Event('input')));}
   onClose(){this.unwatch?.();super.onClose?.();}
   getItems(){return [...this.plugin.projects(),{create:true as const,title:'Create T3 project…'}];}
-  getItemText(choice:FolderLinkChoice){return 'create' in choice?choice.title:`Link to ${this.plugin.projectChoiceLabel(choice)}`;}
+  getItemText(choice:FolderLinkChoice){return 'create' in choice?choice.title:this.plugin.projectChoiceLabel(choice);}
   onChooseItem(choice:FolderLinkChoice){if('create' in choice)void this.plugin.createFolderProject(this.folder);else void this.plugin.linkFolder(this.folder,choice,false);}
 }
 class FolderLinkModal extends Modal{

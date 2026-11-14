@@ -122,3 +122,18 @@ anchor or a completion hint alone is insufficient. Pending checked note
 proposals are excluded because an output receipt does not prove their edits
 were saved. Compatible surrounding user edits and durable frozen replies remain
 available. Reviewed recovery uses the current note checksum and the same proof.
+
+## Why an agent edit waits
+
+An agent submits a checked proposal against a specific note checksum. For a
+streaming reply, the proposal waits for the reply's final save, including Stop.
+That save merges the proposal with compatible user edits and the completed
+reply. Conflicting changes preserve both versions and block the save.
+
+User typing goes through the editor's mapped transactions. A remote whole-note
+proposal is not an editor transaction and must not overwrite a changing reply.
+The **Note edit waiting for final save** status makes this delay visible without
+putting the status in the note or prompt. The current API attaches a whole-note
+proposal to the final save. Applying compatible edits outside the protected
+reply sooner may be possible through the native editor port, with additional
+race and recovery checks. Queueing is a conservative choice in the current API.
