@@ -79,8 +79,9 @@ async function folderMenuHarness(initial?:any){
     addSettingTab(){}registerEvent(){}addCommand(){}register(_cleanup:()=>void){}
   }
   class MenuItem {
-    title='';disabled=false;submenu?:Menu;callback:(event?:{ctrlKey?:boolean})=>any=()=>{};
+    title='';disabled=false;label=false;submenu?:Menu;callback:(event?:{ctrlKey?:boolean})=>any=()=>{};
     setTitle(title:string){this.title=title;return this;}
+    setIsLabel(value:boolean){this.label=value;return this;}
     setIcon(_icon:string){return this;}
     setDisabled(value:boolean){this.disabled=value;return this;}
     setSubmenu(){return this.submenu=new Menu();}
@@ -104,7 +105,8 @@ async function folderMenuHarness(initial?:any){
   const open=async()=>{
     const menu=new Menu();fileMenu(menu,folder,'file-explorer-context-menu');
     const entry=menu.items.find(item=>item.title==='Link to T3 Code');assert.ok(entry?.submenu);
-    const target=entry.submenu.items.find(item=>item.title.startsWith('Link to Writing · Laptop'));assert.ok(target);
+    assert.ok(entry.submenu.items.some(item=>item.label&&item.title==='Laptop'));
+    const target=entry.submenu.items.find(item=>item.title==='Writing');assert.ok(target);
     await target.callback();return modals.at(-1);
   };
   const setting=(modal:Modal,name:string)=>{const all=(el:Element):Setting[]=>[...el.settings,...el.children.flatMap(all)];const item=all(modal.contentEl).find(item=>item.name===name);assert.ok(item);return item as Setting;};
