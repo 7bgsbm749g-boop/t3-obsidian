@@ -4,6 +4,7 @@ import {ThreadAccessCache} from '../conversations/thread-access-cache';
 import type {ThreadAccess,ThreadAccessCloseReason} from '../conversations/thread-stream';
 import type {CodebaseIO,CodebaseScope,CodebaseEntry} from './codebase-core';
 import {relativeCodebasePath,catalogCodebases} from './codebase-core';
+import {validFilesystemScope} from './codebase-links';
 
 export interface CodebaseTiming {operation:string;milliseconds:number}
 export interface CodebaseTransport extends CodebaseIO {timings:CodebaseTiming[]}
@@ -40,9 +41,13 @@ export function codebaseTransport(createAccess:(environmentId:string,reason?:Thr
     catalogPending.set(environmentId,work);try{return await work;}finally{if(catalogPending.get(environmentId)===work)catalogPending.delete(environmentId);}
   }
   async function verify(scope:CodebaseScope,fresh=false,allowMissing=false){const shell=await catalog(scope.environmentId,fresh),project=records(shell.projects).find(p=>p.id===scope.projectId&&!p.deletedAt),thread=scope.threadId?records(shell.threads).find(t=>t.id===scope.threadId&&t.projectId===scope.projectId&&!t.deletedAt):undefined;if(!project&&allowMissing)return undefined;const known=catalogCodebases(scope.environmentId,shell).some(value=>value.projectId===scope.projectId&&value.threadId===scope.threadId&&value.root===scope.root);if(!project||!known||scope.threadId&&!thread)throw Error('The project workspace changed or is unavailable. Refresh project locations before opening files.');return project;}
-  async function call(scope:CodebaseScope,tag:string,payload:unknown){return measured(tag,async()=>{const [socket]=await Promise.all([connection(scope.environmentId),verify(scope,tag==='projects.writeFile')]);const value=await active(socket.rpc.call(tag,payload));if(!isRecord(value))throw Error('T3 returned an invalid project file response.');return value;});}
+  async function call(scope:CodebaseScope,tag:string,payload:unknown){return measured(tag,async()=>{
+    if(scope.filesystem&&!validFilesystemScope(scope))throw Error('Invalid machine file location.');
+    const [socket]=await Promise.all([connection(scope.environmentId),scope.filesystem?Promise.resolve():verify(scope,tag==='projects.writeFile')]);
+    const value=await active(socket.rpc.call(tag,payload));if(!isRecord(value))throw Error('T3 returned an invalid project file response.');return value;
+  });}
   async function projectCommand(scope:CodebaseScope,change:{title:string}|{deleted:true}){
-    if(scope.threadId)throw Error('Choose the project root to change a project.');
+    if(scope.threadId||scope.filesystem)throw Error('Choose the project root to change a project.');
     const current=await verify(scope,true,'deleted' in change);
     if('deleted' in change&&!current||'title' in change&&current?.title===change.title)return;
     if(stopped)throw Error('The project connection is stopped.');

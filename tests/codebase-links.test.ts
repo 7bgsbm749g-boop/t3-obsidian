@@ -1,15 +1,32 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {projectLink,projectMarkdownLink,projectPathRoutes} from '../src/projects/codebase-links';
+import {filesystemReference,relativeFilesystemReference,projectLink,projectMarkdownLink,projectPathRoutes} from '../src/projects/codebase-links';
 import {replyReferences} from '../src/responses/reply-assets';
 const main={environmentId:'a',projectId:'p',title:'Project',root:'/home/ubuntu/projects/code'};
 const worktree={...main,root:'/home/ubuntu/worktrees/code',threadId:'thread'};
+test('machine file references separate absolute parents from names without accepting traversal or network paths',()=>{
+ for(const [value,root,path] of [['/srv/reports/a%20b.md:4#Heading','/srv/reports','a b.md'],['/srv/a%23b%3Fc%25d/report.md','/srv/a#b?c%d','report.md'],['file:///C:/Reports/a.md','C:/Reports','a.md'],['/report.md','/','report.md'],['C:/report.md','C:/','report.md']]){
+  const reference=filesystemReference(value,'env')!;assert.ok(reference);assert.equal(reference.scope.root,root);assert.equal(reference.path,path);assert.equal(reference.scope.filesystem,true);
+  assert.deepEqual(projectPathRoutes(value,[reference.scope]).matches,[reference]);
+ }
+ for(const value of ['relative/file.md','https://example.com/file.md','file://host/file.md','//host/share/file.md','/../secret','/a/./b','/a//b','/a/%00','/a/%zz','/directory/','C:/../secret','/srv/a:b.md'])assert.equal(filesystemReference(value,'env'),undefined,value);
+});
 test('copied project Markdown links round-trip exact paths without using wiki syntax',()=>{
  for(const scope of [main,worktree,{...main,root:'C:\\Projects\\Code'}]){
   const path='docs/a [b] (c)#d?e%.md',name='a [b] (c)#d?e%.md',markdown=projectMarkdownLink(scope,path,name),references=replyReferences(markdown);
   assert.equal(markdown.startsWith('[['),false);assert.equal(references.length,1);assert.equal(references[0].label,name);
   assert.deepEqual(projectPathRoutes(references[0].source,[scope]).matches,[{scope,path}]);
  }
+});
+
+test('relative filesystem links cross cwd parents while retaining machine and exact decoded names',()=>{
+ for(const [absolute,relative,root,path] of [['/srv/reports/report.md','../other.md:4#Heading','/srv','other.md'],['C:/Reports/Nested/report.md','..\\other.md','C:/Reports','other.md'],['/srv/a%23b%3Fc%25d/report.md','../a%23b%3Fc%25d/other%20file.md','/srv/a#b?c%d','other file.md'],['/srv/reports/report.md','other.md','/srv/reports','other.md']]){
+  const source=filesystemReference(absolute,'env')!,target=relativeFilesystemReference(relative,source.scope,source.path)!;
+  assert.ok(target);assert.equal(target.scope.environmentId,'env');assert.equal(target.scope.root,root);assert.equal(target.path,path);
+ }
+ const source=filesystemReference('/report.md','env')!;
+ for(const link of ['../other.md','//host/share.md','/other.md','https://example.com/file.md','a//file.md','a/%00.md'])assert.equal(relativeFilesystemReference(link,source.scope,source.path),undefined,link);
+ assert.equal(relativeFilesystemReference('../other.md',main,'report.md'),undefined,'Project scopes keep their workspace boundary');
 });
 test('exact absolute paths, slashless Obsidian paths and file URLs resolve without rewriting',()=>{
  for(const value of ['/home/ubuntu/projects/code/docs/a.md','home/ubuntu/projects/code/docs/a.md','file:///home/ubuntu/projects/code/docs/a.md','sandbox:/home/ubuntu/projects/code/docs/a.md'])assert.deepEqual(projectPathRoutes(value,[main,worktree]).matches,[{scope:main,path:'docs/a.md'}]);

@@ -1,4 +1,38 @@
 import {relativeCodebasePath,type CodebaseScope} from './codebase-core';
+import {hasControlCharacters} from '../shared/values';
+
+/** A file's parent is an RPC cwd, not a registered project or a folder link. */
+export function filesystemReference(value:string,environmentId:string){
+  const parsed=projectLink(value);if(!parsed)return undefined;
+  const path=parsed.path;
+  if(!/^(?:\/(?!\/)|[a-z]:\/)/i.test(path)||hasControlCharacters(path))return undefined;
+  const parts=path.replace(/^[a-z]:\//i,'/').slice(1).split('/');
+  if(parts.some(part=>!part||part==='.'||part==='..'))return undefined;
+  const slash=path.lastIndexOf('/'),parent=path.slice(0,slash),root=!parent?'/':/^[a-z]:$/i.test(parent)?parent+'/':parent,name=path.slice(slash+1);
+  const scope:CodebaseScope={environmentId,projectId:'',title:root,root,filesystem:true};
+  try{return {scope,path:relativeCodebasePath(name)};}catch{return undefined;}
+}
+
+export function validFilesystemScope(scope:CodebaseScope){
+  const target=encodeURI(scope.root.replace(/\/?$/,'/')+'identity').replace(/[?#]/g,value=>encodeURIComponent(value));
+  return scope.filesystem===true&&scope.projectId===''&&!scope.threadId&&filesystemReference(target,scope.environmentId)?.scope.root===scope.root;
+}
+
+/** A filesystem cwd is not a boundary for links from a native file view. */
+export function relativeFilesystemReference(value:string,scope:CodebaseScope,sourcePath:string){
+  const link=projectLink(value);
+  if(!validFilesystemScope(scope)||!link?.path||/^(?:\/|[a-z]:)/i.test(link.path))return;
+  try{relativeCodebasePath(sourcePath);}catch{return;}
+  const source=scope.root.replace(/\/$/,'')+'/'+sourcePath,prefix=/^[a-z]:\//i.exec(source)?.[0]??'/';
+  const parts=source.slice(prefix.length).split('/').slice(0,-1);
+  for(const part of link.path.split('/')){
+    if(part==='.')continue;
+    if(part==='..'){if(!parts.length)return;parts.pop();}
+    else{if(!part)return;parts.push(part);}
+  }
+  const target=encodeURI(prefix+parts.join('/')).replace(/[?#]/g,value=>encodeURIComponent(value));
+  return filesystemReference(target,scope.environmentId);
+}
 
 export function projectMarkdownLink(scope:CodebaseScope,path:string,name:string){
   const target=encodeURI(scope.root.replace(/\\/g,'/').replace(/\/$/,'')+'/'+path).replace(/[?#]/g,value=>encodeURIComponent(value));
@@ -19,12 +53,13 @@ export function projectLink(value:string){
   if(line)path=path.slice(0,line.index);
   return {path,subpath,line:line?Math.max(0,Number(line[1])-1):undefined,column:line?.[2]?Math.max(0,Number(line[2])-1):undefined};
 }
-function normalized(path:string){return path.replace(/\\/g,'/').replace(/\/$/,'');}
+function normalized(path:string){const clean=path.replace(/\\/g,'/');return /^(?:\/|[a-z]:\/)$/i.test(clean)?clean:clean.replace(/\/$/,'');}
+function directoryPrefix(root:string){return root.endsWith('/')?root:root+'/';}
 export function projectPathRoutes(value:string,scopes:CodebaseScope[]){
-  const link=projectLink(value);if(!link){const raw=value.replace(/^sandbox:/,'').replace(/^file:\/\/(?:localhost)?/i,'').replace(/\\/g,'/').replace(/(?:%[0-9a-f]{2})+/gi,encoded=>{try{return decodeURIComponent(encoded);}catch{return encoded;}});const owned=scopes.some(scope=>{let root=normalized(scope.root),path=root.startsWith('/')&&!raw.startsWith('/')?'/'+raw:raw;if(/^[a-z]:\//i.test(root)){root=root.toLowerCase();path=path.toLowerCase();}return path===root||path.startsWith(root+'/');});return {owned,matches:[] as {scope:CodebaseScope;path:string}[]};}
+  const link=projectLink(value);if(!link){const raw=value.replace(/^sandbox:/,'').replace(/^file:\/\/(?:localhost)?/i,'').replace(/\\/g,'/').replace(/(?:%[0-9a-f]{2})+/gi,encoded=>{try{return decodeURIComponent(encoded);}catch{return encoded;}});const owned=scopes.some(scope=>{let root=normalized(scope.root),path=root.startsWith('/')&&!raw.startsWith('/')?'/'+raw:raw;if(/^[a-z]:\//i.test(root)){root=root.toLowerCase();path=path.toLowerCase();}return path===root||path.startsWith(directoryPrefix(root));});return {owned,matches:[] as {scope:CodebaseScope;path:string}[]};}
   const matches:{scope:CodebaseScope;path:string}[]=[],roots:{scope:CodebaseScope;root:string;value:string}[]=[];
-  for(const scope of scopes){let root=normalized(scope.root),path=link.path;if(root.startsWith('/')&&!path.startsWith('/'))path='/'+path;const windows=/^[a-z]:\//i.test(root),compareRoot=windows?root.toLowerCase():root,comparePath=windows?path.toLowerCase():path;if(comparePath===compareRoot||comparePath.startsWith(compareRoot+'/'))roots.push({scope,root,value:path});}
+  for(const scope of scopes){let root=normalized(scope.root),path=link.path;if(root.startsWith('/')&&!path.startsWith('/'))path='/'+path;const windows=/^[a-z]:\//i.test(root),compareRoot=windows?root.toLowerCase():root,comparePath=windows?path.toLowerCase():path;if(comparePath===compareRoot||comparePath.startsWith(directoryPrefix(compareRoot)))roots.push({scope,root,value:path});}
   const longest=new Map<string,number>();for(const r of roots)longest.set(r.scope.environmentId,Math.max(longest.get(r.scope.environmentId)??0,r.root.length));
-  for(const {scope,root,value} of roots.filter(r=>r.root.length===longest.get(r.scope.environmentId)))try{const path=value.slice(root.length+1);relativeCodebasePath(path);matches.push({scope,path});}catch{/* Owned invalid paths cannot create vault notes. */}
+  for(const {scope,root,value} of roots.filter(r=>r.root.length===longest.get(r.scope.environmentId)))try{const path=value.slice(directoryPrefix(root).length);relativeCodebasePath(path);matches.push({scope,path});}catch{/* Owned invalid paths cannot create vault notes. */}
   return {owned:roots.length>0,matches,link};
 }

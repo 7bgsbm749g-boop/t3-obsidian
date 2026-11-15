@@ -26,6 +26,7 @@ function createClock(owner?:TimerWindow):RuntimeClock{
       return fallback.setTimeout(callback,milliseconds);
     },
     clearTimeout(handle){
+      if(handle===undefined)return;
       if(timeoutWindow&&typeof handle==='number')timeoutWindow.clearTimeout(handle);
       else fallback.clearTimeout?.(handle);
     },
@@ -35,6 +36,7 @@ function createClock(owner?:TimerWindow):RuntimeClock{
       return fallback.setInterval(callback,milliseconds);
     },
     clearInterval(handle){
+      if(handle===undefined)return;
       if(intervalWindow&&typeof handle==='number')intervalWindow.clearInterval(handle);
       else fallback.clearInterval?.(handle);
     },

@@ -2,7 +2,7 @@ import {hasControlCharacters,isRecord,records} from '../shared/values';
 import type {FolderLink} from './folder-link';
 import {folderLinkForPath} from './folder-link';
 export const CODEBASE_PREFIX='__t3_codebase__/';
-export interface CodebaseScope {environmentId:string;projectId:string;title:string;root:string;threadId?:string}
+export interface CodebaseScope {environmentId:string;projectId:string;title:string;root:string;threadId?:string;filesystem?:true}
 export interface CodebaseEntry {path:string;kind:'file'|'directory'}
 export interface CodebaseProjectChange {title?:string;deleted?:boolean}
 export function changeCodebaseProjectLinks(links:FolderLink[],scope:CodebaseScope,change:CodebaseProjectChange,environment:(link:FolderLink)=>string|undefined):FolderLink[]{
@@ -37,7 +37,7 @@ export function relativeCodebasePath(path:string):string {
   if(!path||path.startsWith('/')||path.includes('\\')||hasControlCharacters(path)||path.split('/').some(p=>!p||p==='.'||p==='..')||/^[a-z]:/i.test(path))throw Error('Invalid project file path.');
   return path;
 }
-export function scopeKey(scope:CodebaseScope){return [scope.environmentId,scope.projectId,scope.threadId??'main'].map(encodeURIComponent).join('/');}
+export function scopeKey(scope:CodebaseScope){return [scope.environmentId,scope.filesystem?'@filesystem':scope.projectId,scope.threadId??'main'].map(encodeURIComponent).join('/');}
 // A changed workspace is a new native file identity. Late autosaves from its
 // old native editor must never resolve to a file in the new workspace.
 export function virtualPath(scope:CodebaseScope,path:string){return CODEBASE_PREFIX+scopeKey(scope)+'/'+encodeURIComponent(scope.root)+'/'+relativeCodebasePath(path);}
