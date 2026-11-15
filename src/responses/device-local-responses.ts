@@ -62,7 +62,7 @@ export class DeviceResponseManager {
   private stops:Set<string>;
   constructor(readonly actor:string,private vaultId:string,private io:DeviceResponseIO){const stopped=io.loadStops?.();this.stops=new Set(Array.isArray(stopped)?stopped:[]);}
   private manager(){if(!this.local){if(!this.io.localFinalNotes)throw Error('Local reply saving is unavailable.');this.local=new LocalResponseManager(this.io.completionActor??this.actor,this.vaultId,this.io,this.io.localFinalNotes);}return this.local;}
-  register(request:ResponseRequest,importedSnapshot?:ThreadSnapshot){if(this.stopped||!request.localOnly)throw Error('Legacy reply creation was retired.');return this.manager().register(request,false,importedSnapshot);}
+  register(request:ResponseRequest,importedSnapshot?:ThreadSnapshot,unsentMessageId?:string){if(this.stopped||!request.localOnly)throw Error('Legacy reply creation was retired.');return this.manager().register(request,false,importedSnapshot,unsentMessageId);}
   delivered(_host:ResponseStorageTarget,id:string,delivery:InlineStartRequest){this.local?.delivered(id,delivery);return Promise.resolve();}
   stopLocally(id:string){this.stops.add(id);this.io.saveStops?.([...this.stops]);this.local?.stopLocally(id);}
   failResponse(_host:ResponseStorageTarget,id:string){return this.local?.cancel(id)??Promise.resolve();}

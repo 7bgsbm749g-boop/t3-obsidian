@@ -32,6 +32,7 @@ type RecoveryNote={requests:ResponseRequest[];version:number;pending:boolean;ret
  * any remote writer. Identical device final writes converge through Sync. */
 export class LocalResponseManager {
   private jobs=new Map<string,Runtime>();
+  private unsentMessages=new Map<string,string>();
   private migrations=new Map<string,Promise<void>>();
   private documents=new Map<string,NoteCache[]>();
   private recoveryStored?:readonly ResponseRequest[];
@@ -69,6 +70,7 @@ export class LocalResponseManager {
     const retained=this.jobs.get(request.id);
     if(retained?.done){if(localFinalIdentity(retained.request)===localFinalIdentity(request))return retained;retained.preview.dispose();this.jobs.delete(request.id);}
     const old=this.jobs.get(request.id);if(old){
+      old.preview.pendingSend?.(this.unsentMessages.get(request.id));
       old.detached=false;
       if(JSON.stringify(compactResponseBinding(old.request))!==JSON.stringify(compactResponseBinding(request))){
         const changed=localFinalIdentity(old.request)!==localFinalIdentity(request);
@@ -94,6 +96,7 @@ export class LocalResponseManager {
         this.finish(runtime);
       }
     },issue=>{if(!this.closed&&!runtime.done&&!runtime.stopped)this.io.localConnection?.(request.id,issue);});
+    runtime.preview.pendingSend?.(this.unsentMessages.get(request.id));
     this.jobs.set(request.id,runtime);
     if(diagnosticEnabled('response.recovery.adopted'))logEvent('response.recovery.adopted',{bindingId:request.id,noteAlias:contentHash(request.notePath),environmentId:request.threadEnvironmentId,projectId:request.projectId,threadId:request.threadId,messageId:request.localMessageId??request.messageId,open:this.io.isOpen(request.notePath)});
     void Promise.resolve(this.io.receiveCoordinated?.(record)).catch(error=>logFailure('response.local.adopt',error,{bindingId:request.id}));
@@ -112,8 +115,11 @@ export class LocalResponseManager {
     }).catch(error=>logFailure('response.local.final-restore',error,{bindingId:request.id})).finally(()=>{runtime.restoring=false;if(runtime.watchWanted)this.watch(runtime,true);this.finish(runtime);});
     return runtime;
   }
-  async register(request:ResponseRequest,explicitLocation=false,importedSnapshot?:ThreadSnapshot){
+  async register(request:ResponseRequest,explicitLocation=false,importedSnapshot?:ThreadSnapshot,unsentMessageId?:string){
     if(this.closed||request.vaultId!==this.vaultId)throw Error('This response belongs to another vault.');
+    // Set before storage can notify recovery readers. Absence of this local
+    // proof always retains full recovery, including saved or uncertain sends.
+    if(unsentMessageId===request.messageId)this.unsentMessages.set(request.id,unsentMessageId);else this.unsentMessages.delete(request.id);
     const current=await this.io.readNote(request.notePath);if(current===undefined)throw Error('The response note is unavailable.');
     if(!localResponseRange(current,request.id,[request]))throw Error('The response block changed before registration.');
     if(!this.io.saveLocalBinding)throw Error('Shared response storage is unavailable.');
@@ -129,7 +135,7 @@ export class LocalResponseManager {
     this.documents.set(request.notePath,[{document:after,bindings:localResponseBindings(after,this.stored()),references:new Map(responseIds(after).map(id=>[id,this.index(this.stored()).get(id)]))}]);
     const runtime=this.adopt(request);if(importedSnapshot)runtime.preview.seedImport?.(importedSnapshot);this.watch(runtime,true);
   }
-  delivered(id:string,delivery:InlineStartRequest){this.jobs.get(id)?.preview.delivery(delivery);}
+  delivered(id:string,delivery:InlineStartRequest){if(this.unsentMessages.get(id)===delivery.messageId)this.unsentMessages.delete(id);this.jobs.get(id)?.preview.delivery(delivery);}
   resume(){
     if(this.closed)return;
     const documents=this.io.openedNotes?.()??[],locations=new Map<string,ResponseRequest[]>(),stored=this.stored(),byId=this.index(stored),blocked=new Set<string>(),paneCounts=new Map<string,number>();
@@ -418,5 +424,5 @@ export class LocalResponseManager {
   deleted(path:string){for(const [notePath,note] of this.recoveryNotes)if(notePath===path||notePath.startsWith(path+'/')){note.version++;note.pending=false;}for(const runtime of this.jobs.values())if(runtime.request.notePath===path||runtime.request.notePath.startsWith(path+'/'))this.stopLocally(runtime.request.id);}
   responses(){return [...this.jobs.values()].filter(runtime=>!runtime.stopped&&!runtime.detached&&(!runtime.done||runtime.update?.completionVerified&&runtime.update.phase==='complete')).map(runtime=>({id:runtime.request.id,notePath:runtime.request.notePath,epoch:1,revision:1,completionId:JSON.stringify([runtime.update?.messageId??runtime.request.localMessageId??runtime.request.messageId,runtime.update?.turnId??'']),completion:completionSource(runtime.request,runtime.update?.turnId?runtime.update.checkpoint?.turns?.[runtime.update.turnId]??(runtime.request.importTurn?.turnId===runtime.update.turnId?runtime.request.importTurn:undefined):undefined),active:!runtime.update?.completionVerified&&runtime.update?.phase!=='error',input:!!runtime.update?.questionsPending||!runtime.update?.completionVerified&&!!runtime.update?.questionActivities?.length,complete:!!runtime.update?.completionVerified&&!runtime.update.questionsPending&&runtime.update.phase==='complete'}));}
   health(){return {...this.sources.status(),attachments:this.jobs.size,saveQueued:[...this.finalQueues.values()].reduce((n,queue)=>n+queue.size,0),saveWorkers:this.finalWorkers.size,pending:[...this.jobs.values()].filter(runtime=>!runtime.done).map(runtime=>({bindingId:runtime.request.id,reason:this.saveResult(runtime)})).slice(0,64)};}
-  dispose(){this.closed=true;this.sources.dispose();for(const resolve of this.finalWaiters.values())resolve();this.finalWaiters.clear();for(const runtime of this.jobs.values())runtime.preview.dispose();this.jobs.clear();}
+  dispose(){this.closed=true;this.sources.dispose();for(const resolve of this.finalWaiters.values())resolve();this.finalWaiters.clear();for(const runtime of this.jobs.values())runtime.preview.dispose();this.jobs.clear();this.unsentMessages.clear();}
 }

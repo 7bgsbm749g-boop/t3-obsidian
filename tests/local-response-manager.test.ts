@@ -610,3 +610,17 @@ test('an immediate checked retry queued while the previous worker exits cannot b
   assert.notEqual(result,'stranded');assert.deepEqual(result,{saved:true},JSON.stringify({attempts,writes:h.writes(),status:h.manager.status(h.binding.id),runtime:{pending:runtime.pendingSave,detached:runtime.detached,done:runtime.done,work:!!runtime.work},queue:[...(h.manager as any).finalQueues.values()].map((q:any)=>q.size)}));assert.equal(attempts,2);assert.equal(h.writes(),1);assert.match(h.read(),/Incoming ordinary edit/);
  }finally{clearTimeout(timer);h.manager.dispose();}
 });
+
+
+test('unsent evidence reaches adoption before a settings notification and is never persisted',async()=>{
+ const h=fixture(),hints:Array<string|undefined>=[];
+ const manager=new LocalResponseManager('test','vault',h.io,h.notes,undefined,()=>({
+  pendingSend:(id?:string)=>hints.push(id),tick:()=>{},update:()=>{},delivery:()=>{},reconnect:()=>{},suspend:()=>{},dispose:()=>{},
+ }) as any);
+ const save=h.io.saveLocalBinding;h.io.saveLocalBinding=async(request:ResponseRequest)=>{await save(request);manager.resume();};
+ await manager.register(h.binding,false,undefined,h.binding.messageId);await drain();
+ assert.ok(hints.length);assert.ok(hints.every(id=>id===h.binding.messageId));
+ assert.deepEqual(responseBindingRequests(h.records())[0],h.binding);
+ manager.delivered(h.binding.id,{messageId:h.binding.messageId,requestedAt:h.binding.createdAt,sequence:5});
+ await manager.register(h.binding);assert.equal(hints.at(-1),undefined);manager.dispose();h.manager.dispose();
+});

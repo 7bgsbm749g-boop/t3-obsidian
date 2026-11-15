@@ -2915,7 +2915,9 @@ export default class SendToT3 extends Plugin {
     }
     if(request.inlineHost&&[2,3,4].includes(request.inlineHost.version)){
       if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');
-      for(const binding of request.inlineBindings??[request.inlineHost])await this.deviceInline.register(binding);
+      // No mutation can precede the durable command plan. A saved plan may
+      // have been sent despite a lost acknowledgement: keep its recovery.
+      for(const binding of request.inlineBindings??[request.inlineHost])await this.deviceInline.register(binding,undefined,request.directPlan?undefined:binding.messageId);
     }else if(request.inlineHost)throw Error('This legacy reply was cancelled. Create a new local reply.');
     // The watcher must acknowledge these exact identities before T3 can expose
     // the new message. Synced settings can arrive after the canonical run.
