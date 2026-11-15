@@ -463,7 +463,7 @@ test('locally proven unsent adoption marks pending status before storage-trigger
  const {PendingThreadError}=await import('../src/conversations/thread-stream');
  const h=fixture(false),issues:any[]=[],wakes:string[]=[];let callbacks!:ThreadStreamCallbacks;
  const preview=new DirectInlinePreview(h.record,async()=>{throw Error('No transport');},()=>{},(_id,_access,cb)=>{callbacks=cb;return {stop(){},refresh(_read,message){wakes.push(message!);}};},h.clock,issue=>issues.push(issue));
- preview.pendingSend('prompt');preview.tick(true);callbacks.reconnecting(new PendingThreadError('thread'));assert.deepEqual(issues,[]);
+ preview.pendingSend('prompt');preview.tick(true);callbacks.reconnecting(new PendingThreadError('thread'));assert.equal(issues.length,0);
  callbacks.reconnecting(Error('Offline'));assert.equal(issues.at(-1)?.kind,'reconnecting');
  preview.pendingSend();preview.accepted('prompt');assert.deepEqual(wakes,['prompt']);assert.equal(issues.at(-1)?.kind,'reconnecting','acceptance keeps an actual offline error until data arrives');
  callbacks.item(h.snapshot());assert.equal(issues.at(-1),undefined);preview.dispose();h.preview.dispose();
