@@ -12,6 +12,29 @@ with patch.dict('sys.modules', {'maintainer_config': maintainer_config}):
 
 
 class SkillInstallationTests(unittest.TestCase):
+    def test_only_links_to_the_removed_bundled_taskflow_skill_are_cleaned(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home, source, independent = root / 'home', root / 'repo/skills/obsidian-t3', root / 'taskflow/skills/taskflow'
+            source.mkdir(parents=True)
+            (source / 'SKILL.md').write_text('Obsidian skill')
+            independent.mkdir(parents=True)
+            (independent / 'SKILL.md').write_text('Independent Taskflow skill')
+            installer.install(home, source)
+            obsolete = home / '.agents/skills/taskflow'
+            obsolete.symlink_to(source.parent / 'taskflow', target_is_directory=True)
+            own = home / '.codex/skills/taskflow'
+            own.symlink_to(independent, target_is_directory=True)
+            custom = home / '.claude/skills/taskflow'
+            custom.mkdir(parents=True)
+            (custom / 'SKILL.md').write_text('User skill')
+            self.assertFalse(installer.install(home, source, check=True)['ok'])
+            self.assertTrue(obsolete.is_symlink(), 'check must not remove a link')
+            self.assertTrue(installer.install(home, source)['ok'])
+            self.assertFalse(obsolete.is_symlink())
+            self.assertEqual(own.resolve(), independent)
+            self.assertEqual((custom / 'SKILL.md').read_text(), 'User skill')
+
     def test_directory_links_expose_regular_manifest_and_preserve_previous_installation(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -35,19 +58,6 @@ class SkillInstallationTests(unittest.TestCase):
             self.assertTrue(installer.install(home, source, backups, check=True)['ok'])
             self.assertTrue(installer.install(home, source, backups)['ok'])
             self.assertEqual(list(backups.iterdir()), archived)
-
-    def test_taskflow_has_its_own_discovery_directory(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = root / 'taskflow'
-            source.mkdir()
-            (source / 'SKILL.md').write_text('task status workflow')
-            home = root / 'home'
-            result = installer.install(home, source, root / 'backups', name='taskflow')
-            self.assertTrue(result['ok'])
-            for target in installer.destinations(home, 'taskflow'):
-                self.assertEqual((target / 'SKILL.md').read_text(), 'task status workflow')
-                self.assertFalse(target.with_name('obsidian-t3').exists())
 
     def test_unrelated_folder_link_is_refused_before_other_installations_change(self):
         with tempfile.TemporaryDirectory() as temporary:

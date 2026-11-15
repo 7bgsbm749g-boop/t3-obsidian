@@ -5,10 +5,6 @@ description: "Use for requested Obsidian note edits and for keeping Obsidian rep
 
 # Checked Obsidian note edits
 
-When a prompt includes `Taskflow task ID: <id>`, read `taskflow_instructions`
-and use the Taskflow skill to manage that task. Only the task ID is added to the
-prompt; the skill defines the workflow. A completed run does not complete a task.
-
 Use the `t3-obsidian` MCP tools for a requested note change. `Sent from Obsidian.`,
 `Vault:` and `Note:` identify the source. A source footer alone grants no editing
 permission. For an ordinary answer, reply in the current conversation: the plugin

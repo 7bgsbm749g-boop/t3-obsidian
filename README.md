@@ -51,16 +51,3 @@ Agents can prepare and submit checked note edits through the running plugin. Com
 Your chosen note content and attachments go to the connected T3 computer and its configured model provider. Optional thread hiding changes thread tags and visibility settings through T3’s authenticated API across your connected environments; it needs settings-write access. Optional agent setup writes the bundled MCP tools and changes the selected agent’s launch settings on that computer through the authenticated T3 connection, outside the vault. Obsidian does not run the helper or open an incoming command port. T3 and provider accounts or usage charges are separate from this free plugin. [Report an issue](https://github.com/7bgsbm749g-boop/t3-obsidian/issues) · [MIT license](LICENSE)
 
 Streaming RAM capture: [device-local streaming memory diagnostics](docs/stream-memory-diagnostics.md).
-
-### Taskflow tasks
-
-When Task Flow associates a linked note, sends from that note include only its
-`Taskflow task ID` line(s), in addition to the usual Obsidian source footer.
-Association is automatic and enabled by default in Task Flow. The bundled
-Taskflow skill and MCP tools read the task and update it through Task Flow’s
-checked API. An agent completes a task only after its actual requested work is
-verified; ending an agent run does not complete it.
-
-Use **Connect MCP** in Agent tools to update an existing setup, then start a new
-agent session to load the tools. **Copy task ID** in Task Flow is the manual
-fallback. Other integrations can read the same `taskflow-task-ids` note property.

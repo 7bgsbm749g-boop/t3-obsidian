@@ -14,19 +14,19 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / 'skills' / 'obsidian-t3'
 
 
-def destinations(home, name='obsidian-t3'):
+def destinations(home):
     roots = [home / '.agents' / 'skills', home / '.codex' / 'skills']
     for detected, skills in [(home / '.claude', home / '.claude' / 'skills'),
                              (home / '.config' / 'opencode', home / '.config' / 'opencode' / 'skills')]:
         if detected.is_dir():
             roots.append(skills)
-    return [root / name for root in roots]
+    return [root / 'obsidian-t3' for root in roots]
 
 
-def install(home, source=SOURCE, backups=None, check=False, name='obsidian-t3'):
+def install(home, source=SOURCE, backups=None, check=False):
     source = source.resolve(strict=True)
     digest = hashlib.sha256((source / 'SKILL.md').read_bytes()).hexdigest()
-    targets = destinations(home, name)
+    targets = destinations(home)
     # Link the folder: Codex follows skill-directory links, but skips linked
     # SKILL.md files inside otherwise ordinary directories.
     for target in targets:
@@ -35,12 +35,20 @@ def install(home, source=SOURCE, backups=None, check=False, name='obsidian-t3'):
         if target.exists() and not target.is_dir():
             raise ValueError(f'Refusing an unrelated skill file: {target}')
     results = []
+    former_taskflow = source.parent / 'taskflow'
+    obsolete = [target.with_name('taskflow') for target in targets
+                if target.with_name('taskflow').is_symlink()
+                and target.with_name('taskflow').resolve() == former_taskflow.resolve()
+                and not former_taskflow.exists()]
+    if not check:
+        for target in obsolete:
+            target.unlink()
     for target in targets:
         current = target.is_symlink() and target.resolve() == source
         if not check and not current:
             target.parent.mkdir(parents=True, exist_ok=True)
             backup = None
-            temporary = target.with_name('.' + name + '.' + uuid.uuid4().hex)
+            temporary = target.with_name('.obsidian-t3.' + uuid.uuid4().hex)
             try:
                 temporary.symlink_to(source, target_is_directory=True)
                 if target.exists():
@@ -57,16 +65,18 @@ def install(home, source=SOURCE, backups=None, check=False, name='obsidian-t3'):
                 temporary.unlink(missing_ok=True)
             current = True
         results.append({'path': str(target), 'current': current})
-    return {'source': str(source / 'SKILL.md'), 'sha256': digest, 'installations': results, 'ok': all(item['current'] for item in results)}
+    return {'source': str(source / 'SKILL.md'), 'sha256': digest, 'installations': results,
+            'obsoleteTaskflowLinks': [str(target) for target in obsolete] if check else [],
+            'ok': all(item['current'] for item in results) and (not check or not obsolete)}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check', action='store_true', help='Verify links without changing files')
     args = parser.parse_args()
-    results = [install(Path.home(), source=source, check=args.check, name=source.name) for source in (SOURCE, ROOT / 'skills' / 'taskflow')]
-    print(json.dumps(results, indent=2))
-    raise SystemExit(0 if all(result['ok'] for result in results) else 1)
+    result = install(Path.home(), check=args.check)
+    print(json.dumps(result, indent=2))
+    raise SystemExit(0 if result['ok'] else 1)
 
 
 if __name__ == '__main__':
