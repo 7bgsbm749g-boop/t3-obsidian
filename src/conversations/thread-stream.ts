@@ -31,13 +31,15 @@ export function needsInlineHistory(state:InlineThreadState,targets:InlineHistory
 }
 
 /** Recent polling stays small. A stranded response can request the complete
- * canonical transcript, including prompts older than the polling window. */
+ * canonical transcript, including prompts older than the polling window.
+ * Active reads defer optional historical display details even on that fallback;
+ * explicit history/import reads retain the full detail path. */
 export async function readInlineSnapshot(access:ThreadAccess,threadId:string,projectId?:string,targets?:InlineHistoryTargets|(()=>InlineHistoryTargets),full=false,importOnly=false,importRunId?:string,signal?:AbortSignal):Promise<ThreadSnapshot> {
   const currentTargets=()=>typeof targets==='function'?targets():targets,version=currentTargets()?.recoveryVersion;
   const current=()=>version===undefined||currentTargets()?.recoveryVersion===version;
   const read=async(all:boolean)=>{
     requestAborted(signal);const started=Date.now();
-    const raw=await abortableRead(access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true${all?'':'&turnLimit=20'}${importOnly?'&importRuns=true':''}${importRunId?'&importRunId='+encodeURIComponent(importRunId):''}`,undefined,{signal,...(all&&typeof targets==='function'?{continueHistory:current}:{})}),signal).catch((error:unknown)=>{if(error instanceof T3HttpError&&error.status===404)throw new PendingThreadError(threadId);throw error;});
+    const raw=await abortableRead(access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true${all?'':'&turnLimit=20'}${importOnly?'&importRuns=true':''}${importRunId?'&importRunId='+encodeURIComponent(importRunId):''}`,undefined,{signal,...(!full&&!importOnly&&!importRunId?{deferHistoricalDetails:currentTargets()??{messageIds:[],turnIds:[]}}:{}),...(all&&typeof targets==='function'?{continueHistory:current}:{})}),signal).catch((error:unknown)=>{if(error instanceof T3HttpError&&error.status===404)throw new PendingThreadError(threadId);throw error;});
     requestAborted(signal);
     const snapshot=readThreadSnapshot(normalizeV2Snapshot(raw));
     if(snapshot?.thread?.id!==threadId||projectId&&snapshot.thread.projectId!==projectId)throw Error('Waiting for the requested T3 thread.');
@@ -143,7 +145,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
         if(polling){if(force)pollAgain=true;return;}
         polling=true;const beforeActivity=activityVersion;
         try{
-          const snapshot=historyTargets?await readInlineSnapshot(ready,threadId,undefined,historyTargets):readThreadSnapshot(normalizeV2Snapshot(await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true&turnLimit=20`)));
+          const snapshot=await readInlineSnapshot(ready,threadId,undefined,historyTargets);
           if(!stopped&&!ended&&access===ready&&snapshot?.thread){
             // The global snapshot cursor can advance for unrelated threads.
             // Keep only a small digest; still deliver every canonical snapshot

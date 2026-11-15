@@ -8,7 +8,7 @@ import {htmlRenderFromToolItem} from '../responses/html-results';
 
 interface Attachment {id:string;dataUrl?:string;type?:string;name?:string;mimeType?:string;sizeBytes?:number}
 
-export interface T3RequestOptions {beforeThreadCreate?:()=>void|Promise<void>;signal?:AbortSignal;compactImport?:boolean;continueHistory?:()=>boolean;onImportSnapshot?:(snapshot:import('./wire-types').ThreadSnapshot)=>void}
+export interface T3RequestOptions {beforeThreadCreate?:()=>void|Promise<void>;signal?:AbortSignal;compactImport?:boolean;deferHistoricalDetails?:{messageIds:string[];turnIds:string[]};continueHistory?:()=>boolean;onImportSnapshot?:(snapshot:import('./wire-types').ThreadSnapshot)=>void}
 export type AbortableT3Api=(path:string,payload?:unknown,options?:T3RequestOptions)=>Promise<unknown>;
 
 export function cancelledRequest(message='Request cancelled.'):Error{return typeof DOMException==='function'?new DOMException(message,'AbortError'):Object.assign(Error(message),{name:'AbortError'});}
@@ -43,11 +43,11 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
     return {...message,attachments:message.attachments.map(a=>typeof a.dataUrl==='string'?attachments[index++]:a),
       ...(message.context?.records?{context:{...message.context,records:message.context.records.map(r=>({...r,...(typeof r.attachmentId==='string'&&ids.has(r.attachmentId)?{attachmentId:ids.get(r.attachmentId)}:{})}))}}:{})};
   }
-  async function senderMessages(snapshot:WireSnapshot){
+  async function senderMessages(snapshot:WireSnapshot,refresh=true){
     const messages=snapshot.projection.messages;
     const ids=[...new Set<string>(messages.filter(m=>m.createdBy==='agent'&&uuid.test(m.senderThreadId??'')).map(m=>m.senderThreadId!))].slice(-256);
     const age=Date.now()-senderRefresh;
-    if(ids.length&&(age>=30_000||age>=1000&&ids.some(id=>!senderTitles.has(id)))){
+    if(refresh&&ids.length&&(age>=30_000||age>=1000&&ids.some(id=>!senderTitles.has(id)))){
       senderRefresh=Date.now();
       try{
         // Shell metadata resolves exact IDs without reading other conversations.
@@ -63,16 +63,27 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
         }
       }catch{/* Missing sender metadata must not block reply recovery. */}
     }
-    return messages.map(m=>m.createdBy==='agent'&&uuid.test(m.senderThreadId??'')?{...m,senderThreadTitle:senderTitles.get(m.senderThreadId!)}:m);
+    return messages.map(m=>m.createdBy==='agent'&&uuid.test(m.senderThreadId??'')?{...m,senderThreadTitle:senderTitles.get(m.senderThreadId!)??m.senderThreadTitle}:m);
   }
-  async function hydrate(snapshot:WireSnapshot|import('./wire-readers').MetadataSnapshot){
+  async function hydrate(snapshot:WireSnapshot|import('./wire-readers').MetadataSnapshot,deferred?:T3RequestOptions['deferHistoricalDetails']){
     if(!('projection' in snapshot)||!snapshot.projection)return snapshot;
-    const messages=await senderMessages(snapshot);
+    const messages=await senderMessages(snapshot,!deferred);
     const items=snapshot.projection.turnItems??[];
     const omitted=items.filter(i=>i.outputOmitted===true);
     // Handoff results can precede a long resumed run. Retain their lifecycle
     // proof independently of the recent tool-detail window.
-    const needed=[...new Map([...omitted.slice(-40),...omitted.filter(item=>/(?:^|[._])t3_worktree_handoff$/.test(item.toolName??'')).slice(-32)].map(item=>[item.id,item])).values()];
+    // Only known terminal historical runs have optional display output. Keep
+    // current/queued/unknown runs and exact response targets authoritative,
+    // including an old binding recovered beyond the bounded polling window.
+    const p=snapshot.projection,runs=[...p.runs].sort((a,b)=>a.ordinal-b.ordinal);
+    const current=runs.filter(run=>run.status!=='queued').at(-1)??runs.at(-1);
+    const required=new Set([current?.id,p.thread.activeRunId,p.thread.latestRunId,...deferred?.turnIds??[]]);
+    for(const run of runs)if(run.userMessageId&&deferred?.messageIds.includes(run.userMessageId))required.add(run.id);
+    for(const message of p.messages)if(deferred?.messageIds.includes(message.id)&&message.runId)required.add(message.runId);
+    const historical=new Set(deferred?runs.filter(run=>!required.has(run.id)&&['completed','failed','interrupted','cancelled','rolled_back','expired'].includes(run.status)).map(run=>run.id):[]);
+    // HTML references contribute to saved replies. Handoff output supplies
+    // continuation ownership. Neither is optional historical display detail.
+    const needed=[...new Map([...omitted.slice(-40).filter(item=>!historical.has(item.runId??'')||/^(?:(?:mcp__t3[-_]code__|t3[-_]code[.]))?html_render$/.test(item.toolName??'')),...omitted.filter(item=>/(?:^|[._])t3_worktree_handoff$/.test(item.toolName??'')).slice(-32)].map(item=>[item.id,item])).values()];
     const hydrated=new Map<string,WireTurnItem>();let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined;
     try{
       for(const item of needed){
@@ -196,7 +207,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
         normalized.thread.hasPendingApprovals||=pending.some(item=>!['user_input','user-input'].includes(item.kind));
         return normalized;
       }
-      if(!snapshot?.projection||path.includes('turnLimit=')&&!importRunId)return normalizeV2Snapshot(await hydrate(snapshot));
+      if(!snapshot?.projection||path.includes('turnLimit=')&&!importRunId)return normalizeV2Snapshot(await hydrate(snapshot,options?.deferHistoricalDetails));
       // Full recovery follows opaque cursors rather than asking for one
       // unbounded HTTP body. Keep the initial control-plane watermark so live
       // events committed during pagination still replay after this snapshot.
@@ -225,7 +236,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
         if(importOnly&&options?.onImportSnapshot&&more&&page.items.some(row=>row.item.type==='user_message'))options.onImportSnapshot(importedSnapshot());
       }
       if(importOnly)return importedSnapshot();
-      return normalizeV2Snapshot(await hydrate(recoveredSnapshot()));
+      return normalizeV2Snapshot(await hydrate(recoveredSnapshot(),options?.deferHistoricalDetails));
     }
     return normalizeV2Snapshot(await request(path,payload));
   };
