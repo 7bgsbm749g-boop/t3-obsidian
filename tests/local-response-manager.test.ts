@@ -638,7 +638,7 @@ test('a proven fresh send skips old receipts after durable registration, includi
 });
 for(const mode of ['retry','stored','resume','continuation','import','wrong-message'] as const)test(`fresh optimization retains receipt recovery for ${mode}`,async()=>{
  const binding=request();if(mode==='continuation')binding.localMessageId='next-message';
- if(mode==='import')binding.importTurn={turnId:'imported'} as any;
+ if(mode==='import')binding.importTurn={turnId:'imported',messageId:binding.messageId,state:'running',requestedAt:binding.createdAt};
  const h=fixture(binding,undefined,(mode==='stored'||mode==='resume')?updateResponseBindingData({},binding,'test'):{});let reads=0;
  h.io.loadLocalFinal=async()=>{reads++;};h.io.loadLocalCompletion=async()=>{reads++;return {saved:true};};
  if(mode==='resume'){await recover(h);}else await h.manager.register(binding,false,undefined,mode==='wrong-message'?'wrong':binding.messageId,{freshIdentity:mode!=='retry',explicitSend:true});
