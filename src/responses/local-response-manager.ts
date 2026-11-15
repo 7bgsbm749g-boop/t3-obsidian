@@ -264,6 +264,9 @@ export class LocalResponseManager {
     runtime.attemptRevision=revision;runtime.pendingSave='saving';
     runtime.work=new Promise<void>(resolve=>this.finalWaiters.set(runtime,resolve));
     const queue=this.finalQueues.get(path)??new Set<Runtime>();queue.add(runtime);this.finalQueues.set(path,queue);
+    this.drainFinalQueue(path,queue);
+  }
+  private drainFinalQueue(path:string,queue:Set<Runtime>){
     if(this.finalWorkers.has(path))return;
     const work=Promise.resolve().then(async()=>{
       while(queue.size&&!this.closed){
@@ -272,7 +275,13 @@ export class LocalResponseManager {
         catch(error){for(const item of batch){item.pendingSave='save-error';logFailure('response.save.failed',error,{bindingId:item.request.id});this.io.completionFailed?.(error,item.request.id);}}
         finally{for(const item of batch){item.work=undefined;this.finalWaiters.get(item)?.();this.finalWaiters.delete(item);}}
       }
-    }).finally(()=>{this.finalWorkers.delete(path);this.finalQueues.delete(path);});
+    }).finally(()=>{
+      this.finalWorkers.delete(path);
+      // A waiter can enqueue a checked retry after the loop observes an empty
+      // queue but before this worker releases its registry entry. Keep it live.
+      if(queue.size&&!this.closed)this.drainFinalQueue(path,queue);
+      else if(this.finalQueues.get(path)===queue)this.finalQueues.delete(path);
+    });
     this.finalWorkers.set(path,work);
   }
   private writeNote<T>(path:string,operation:()=>Promise<T>):Promise<T>{

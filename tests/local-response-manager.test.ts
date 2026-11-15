@@ -594,3 +594,19 @@ test('completion receipts use the exact rewritten or stopped body recorded for p
   const expected=stopped?'Frozen saved reference':'Rewritten saved reference';assert.equal(savedBody,expected);assert.equal(h.records()[h.binding.id].completion?.outputHash,contentHash(expected));assert.equal(await savedResponseProof(h.binding,h.read(),h.records(),data),true);h.manager.dispose();
  }
 });
+
+test('an immediate checked retry queued while the previous worker exits cannot be stranded',async()=>{
+ const h=fixture();await h.manager.register(h.binding);await drain();const compare=h.notes.compareAndSet;let attempts=0;
+ h.notes.compareAndSet=async(...args)=>{if(++attempts===1){h.write(h.read().replace('Before','Incoming ordinary edit'));return false;}return compare(...args);};
+ let timer:ReturnType<typeof setTimeout>|undefined;
+ try{
+  h.emit();
+  // Deliver the native-change event on the microtask between draining the last
+  // batch and releasing its worker, rather than after an arbitrary timer.
+  const runtime=(h.manager as any).jobs.get(h.binding.id),waiters=(h.manager as any).finalWaiters,release=waiters.get(runtime);
+  assert.equal(typeof release,'function');waiters.set(runtime,()=>{queueMicrotask(()=>{h.manager.changed(h.binding.notePath);release();});});
+  const checked=async()=>{await h.manager.waitForSave(h.binding.id);await drain();return h.manager.waitForSave(h.binding.id);};
+  const result=await Promise.race([checked(),new Promise<'stranded'>(resolve=>{timer=setTimeout(()=>resolve('stranded'),2000);})]);
+  assert.notEqual(result,'stranded');assert.deepEqual(result,{saved:true},JSON.stringify({attempts,writes:h.writes(),status:h.manager.status(h.binding.id),runtime:{pending:runtime.pendingSave,detached:runtime.detached,done:runtime.done,work:!!runtime.work},queue:[...(h.manager as any).finalQueues.values()].map((q:any)=>q.size)}));assert.equal(attempts,2);assert.equal(h.writes(),1);assert.match(h.read(),/Incoming ordinary edit/);
+ }finally{clearTimeout(timer);h.manager.dispose();}
+});
