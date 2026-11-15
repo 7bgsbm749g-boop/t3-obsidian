@@ -53,7 +53,9 @@ test('dispatch suppresses history only before a durable plan and releases that p
   const h=await fixture(),hints:unknown[]=[],attempts:string[]=[];
   h.binding.messageId=commandId(h.request.id,'message');if('mismatchedBinding' in saved)h.binding.threadId='other-thread';
   h.plugin.deviceInline={register:async(_binding:unknown,_snapshot:unknown,unsent:unknown)=>hints.push(unsent),attempted:(id:string)=>attempts.push(id)};
-  await assert.rejects(h.plugin.dispatch({...h.request,...saved},true),/Direct request storage is unavailable/);
+  const dispatched=h.plugin.dispatch({...h.request,...saved},true);
+  if('acceptedThreadId' in saved)assert.equal(await dispatched,source.threadId);
+  else await assert.rejects(dispatched,/Direct request storage is unavailable/);
   assert.deepEqual(hints,[Object.keys(saved).length?undefined:h.binding.messageId]);
   assert.deepEqual(attempts,[h.binding.id],'An unconfirmed attempt must restore genuine recovery');
  }
