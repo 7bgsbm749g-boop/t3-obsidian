@@ -228,8 +228,9 @@ async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
       new SendDestinationModal(app,host,prompt).open();return;
     }
     const finishPreparing=host.beginPreparing?.();
-    const finishPreview=host.getDefaultThread(key)||host.steering?host.beginSend?.(resolveJobOptions(host.getInlineDefaults?.()??{enabled:false})):undefined;
+    let finishPreview:(()=>void)|undefined;
     try{
+      finishPreview=host.getDefaultThread(key)||host.steering?host.beginSend?.(resolveJobOptions(host.getInlineDefaults?.()??{enabled:false})):undefined;
       const options=resolveJobOptions(host.getInlineDefaults?.()??{enabled:false});
       const resolve=()=>options;
       if(!host.getDefaultThread(key)&&!host.steering){

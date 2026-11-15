@@ -192,3 +192,11 @@ test('first-send chooser has no Preparing until explicit submission and clears i
  assert.deepEqual(h.preparing,[]);await h.modals[0].choose('new');
  assert.deepEqual(h.preparing,['show','clear']);assert.deepEqual(h.previews,[]);assert.equal(h.sent[0].target,'new');
 });
+
+
+test('a preview setup error also releases Preparing',async()=>{
+ const h=await fixture(undefined,false,false,false);h.modal.close();
+ (h.host as any).beginSend=()=>{throw Error('Selection changed');};
+ await h.exports.openNoteSendFlow({},h.host);
+ assert.deepEqual(h.preparing,['show','clear']);assert.equal(h.sent.length,0);
+});
