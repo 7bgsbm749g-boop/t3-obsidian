@@ -9,13 +9,13 @@ const bundled=build({entryPoints:['src/projects/codebase-native.ts'],bundle:true
 async function fixture(){
   class Base{}class File{constructor(public vault:any,public path:string){}}
   let environments=['env'],catalogs=0,resources=0,opened:any,postprocess:any,extension:any,saved:any,remote='remote';const nativeLinks:string[]=[],local=new Map<string,any>(),physical={path:'Assets/chart.png'};
-  const app:any={loadLocalStorage:(key:string)=>local.get(key),saveLocalStorage:(key:string,value:any)=>local.set(key,value),vault:{configDir:'.obsidian',adapter:{read:async()=>{throw Error('missing');},getResourcePath:()=> 'capacitor://localhost/_capacitor_file_/private/vault'},getFileByPath:(path:string)=>path===physical.path?physical:null,getAbstractFileByPath:()=>null,read:async()=> 'physical',getFiles:()=>[physical]},metadataCache:{getFirstLinkpathDest:(path:string)=>path===physical.path?physical:null,getCache:()=>null},workspace:{openLinkText:async()=>{},on:()=>({}),onLayoutReady:()=>{},getLeavesOfType:()=>[],getLeaf:()=>({})}};
+  const app:any={loadLocalStorage:(key:string)=>local.get(key),saveLocalStorage:(key:string,value:any)=>local.set(key,value),vault:{configDir:'.obsidian',adapter:{read:async()=>{throw Error('missing');},getResourcePath:()=> 'capacitor://localhost/_capacitor_file_/private/vault'},getFileByPath:(path:string)=>path===physical.path?physical:null,getAbstractFileByPath:()=>null,read:async()=> 'physical',getFiles:()=>[physical]},metadataCache:{getFirstLinkpathDest:(path:string)=>path.replace(/^\//,'')===physical.path?physical:null,getCache:()=>null},workspace:{openLinkText:async()=>{},on:()=>({}),onLayoutReady:()=>{},getLeavesOfType:()=>[],getLeaf:()=>({})}};
   const plugin={registerView:()=>{},registerInterval:()=>{},registerEditorSuggest:()=>{},registerEditorExtension:(value:any)=>{extension=value;},registerEvent:()=>{},addCommand:()=>{},registerMarkdownPostProcessor:(handler:any)=>{postprocess=handler;}};
   app.workspace.openLinkText=async(link:string)=>{nativeLinks.push(link);};
   const io:any={catalog:async(environmentId:string)=>{catalogs++;return [scope,workspace].map(value=>({...value,environmentId}));},resource:async()=>{resources++;return {url:'https://signed.example/api/assets/chart',expiresAt:Date.now()+300000};},read:async()=>remote,write:async(_scope:any,_path:string,text:string)=>{remote=text;}};
   const module={exports:{} as any};runInNewContext((await bundled).outputFiles[0].text,{module,exports:module.exports,require:()=>({EditorSuggest:Base,ItemView:Base,MarkdownView:Base,FuzzySuggestModal:Base,TFile:File,TFolder:File,Notice:MockNotice,editorLivePreviewField:'live-preview',Keymap:{isModifier:(event:any,key:string)=>{assert.equal(key,'Mod');return !!(event.ctrlKey||event.metaKey);}}}),window:{setInterval:()=>0},document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},TextEncoder,URL,setTimeout,clearTimeout,performance,queueMicrotask});
   const bridge=new module.exports.CodebaseBridge(app,plugin,io,()=>[],'passthrough',{environments:()=>environments,load:()=>saved,save:async(state:any)=>{saved=JSON.parse(JSON.stringify(state));}});await bridge.install();bridge.open=async(item:any)=>{opened=item;};
-  function image(src:string){const attrs:Record<string,string>={src,alt:'chart'};return {attrs,getAttribute:(key:string)=>attrs[key]??null,setAttribute:(key:string,value:string)=>{attrs[key]=value;},closest:()=>null};}
+  function image(src:string){const attrs:Record<string,string>={src,alt:'chart'};return {attrs,getAttribute:(key:string)=>attrs[key]??null,setAttribute:(key:string,value:string)=>{attrs[key]=value;},removeAttribute:(key:string)=>{delete attrs[key];},closest:()=>null};}
   const render=async(img:any)=>postprocess({querySelectorAll:(selector:string)=>selector==='img'?[img]:[]},{sourcePath:'Unlinked/Note.md'});
   return {bridge,app,io,image,render,physical,nativeLinks,get extension(){return extension;},get opened(){return opened;},get saved(){return saved;},get catalogs(){return catalogs;},get resources(){return resources;},setEnvironments:(value:string[])=>{environments=value;},disconnect:()=>{environments=[];}};
 }
@@ -163,6 +163,61 @@ test('filesystem file links and media resolve parent directories on their source
     f.setEnvironments(['other']);await f.app.workspace.openLinkText('../offline.md',source,false);
     assert.equal(f.opened,opened,'A relative file cannot switch to a connected machine');assert.deepEqual(f.nativeLinks,[]);assert.deepEqual(f.app.vault.getFiles(),[f.physical]);
   }finally{f.bridge.dispose();}}
+});
+
+test('filesystem wiki basenames keep registered Markdown files and saved choices',async()=>{
+  const f=await fixture();try{
+    await f.app.workspace.openLinkText('/srv/reports/report.md','Unlinked/Note.md',false);const source=f.opened.file.path;
+    await f.app.workspace.openLinkText('/srv/reports/other.md','Other.md',false);const other=f.opened;
+    assert.equal(f.app.metadataCache.getFirstLinkpathDest('other#Heading',source),other.file);
+    await f.app.workspace.openLinkText('other#Heading',source,false);assert.equal(f.opened,other);
+    await f.app.workspace.openLinkText('/srv/archive/other.md','Archive.md',false);const archive=f.opened;
+    f.bridge.choices[JSON.stringify([source,'other'])]=archive.file.path;
+    await f.app.workspace.openLinkText('other',source,false);assert.equal(f.opened,archive,'Keep an explicit saved basename choice');
+    f.setEnvironments(['other']);const previous=f.opened;
+    await f.app.workspace.openLinkText('other',source,false);assert.equal(f.opened,previous);assert.deepEqual(f.nativeLinks,[]);
+  }finally{f.bridge.dispose();}
+});
+
+test('pending unscoped ownership prevents vault copies from replacing remote files and media',async()=>{
+  const f=await fixture();try{
+    f.physical.path='machine/scratch/chart.png';await f.bridge.discoverWorkspaces();
+    assert.equal(f.app.metadataCache.getFirstLinkpathDest('/machine/scratch/chart.png','Unlinked/Note.md'),null,'Pending routing must not return a physical vault copy');
+    const image=f.image('capacitor://localhost/_capacitor_file_/private/vault/machine/scratch/chart.png');
+    await f.bridge.renderMedia({querySelectorAll:(selector:string)=>selector==='img'?[image]:[]},'Unlinked/Note.md',()=>'/machine/scratch/chart.png');
+    assert.equal(image.attrs.src,'https://signed.example/api/assets/chart');assert.equal(f.resources,1);
+    assert.deepEqual(f.app.vault.getFiles(),[f.physical]);
+  }finally{f.bridge.dispose();}
+});
+
+test('ambiguous owned media hides a stale vault copy until its machine is chosen',async()=>{
+  const f=await fixture();try{
+    f.setEnvironments(['env','other']);f.physical.path='machine/scratch/chart.png';f.io.catalog=async(environmentId:string)=>environmentId==='env'?[scope]:[];
+    const image=f.image('capacitor://localhost/_capacitor_file_/private/vault/machine/scratch/chart.png');
+    await f.bridge.renderMedia({querySelectorAll:(selector:string)=>selector==='img'?[image]:[]},'Unlinked/Note.md',()=>'/machine/scratch/chart.png');
+    assert.equal(image.attrs.src,undefined);assert.equal(f.resources,0);assert.deepEqual(f.nativeLinks,[]);
+  }finally{f.bridge.dispose();}
+});
+
+test('native vault wiki images keep their physical copy when a project has the same path',async()=>{
+  const f=await fixture();try{
+    f.physical.path='machine/scratch/chart.png';await f.bridge.discoverWorkspaces();
+    f.app.metadataCache.getCache=()=>({embeds:[{original:'![[machine/scratch/chart.png]]',link:'machine/scratch/chart.png'}]});
+    const src='capacitor://localhost/_capacitor_file_/private/vault/machine/scratch/chart.png',image=f.image(src);
+    await f.render(image);assert.equal(image.attrs.src,src);assert.equal(f.resources,0);
+  }finally{f.bridge.dispose();}
+});
+
+test('retained filesystem source identities do not expose a vault copy while offline',async()=>{
+  const first=await fixture(),restored=await fixture();try{
+    await first.app.workspace.openLinkText('/srv/reports/report.md','Unlinked/Note.md',false);const source=first.opened.file.path;
+    await first.app.workspace.openLinkText('/srv/reports/other.md','Other.md',false);await first.bridge.persist();
+    restored.setEnvironments(['other']);restored.bridge.adopt(first.saved);restored.physical.path='other';
+    assert.equal(restored.app.metadataCache.getFirstLinkpathDest('other',source),null);
+    restored.physical.path='srv/elsewhere/chart.png';assert.equal(restored.app.metadataCache.getFirstLinkpathDest('/srv/elsewhere/chart.png',source),null);
+    restored.physical.path='other';
+    await restored.app.workspace.openLinkText('other',source,false);assert.equal(restored.opened,undefined);assert.deepEqual(restored.nativeLinks,[]);
+  }finally{first.bridge.dispose();restored.bridge.dispose();}
 });
 
 test('a previous file from another note cannot silently select the machine for an unscoped path',async()=>{

@@ -26,6 +26,7 @@ export interface CodebaseStorage {environments?():string[];load():CodebaseState|
 const MEDIA=/\.(?:png|jpe?g|gif|webp|svg|bmp|avif|pdf|mp[34]|wav|m4a|3gp|flac|ogg|oga|opus|webm|ogv|mov|mkv)$/i;
 export interface RegisteredFile {scope:CodebaseScope;path:string;file:TFile;document:CodebaseDocument;resource?:{url:string;expiresAt:number};preparing?:Promise<void>;text?:string}
 export interface SavedReference {scope:CodebaseScope;path:string;note:string;name:string}
+interface FileRoute {owned:boolean;items:RegisteredFile[];discover?:boolean}
 class FileChoice extends FuzzySuggestModal<RegisteredFile>{
   private settled=false;
   constructor(app:App,private items:RegisteredFile[],private finish:(file:RegisteredFile|undefined)=>void,private title:(scope:CodebaseScope)=>string=scope=>scope.title){super(app);this.setPlaceholder('Choose the project file');}
@@ -156,7 +157,7 @@ export class CodebaseBridge {
       let route=this.pathRoute(link,source);
       const tracked=route.owned||!physicalLink(link.split('#')[0],source)&&(this.absoluteReference(link)||this.files.has(source)||!!this.resolve(link,source)||this.candidates(link,source).length>0);
       const open=async()=>{
-        if(!route.owned&&this.absoluteReference(link)){const discovered=await this.discoverWorkspaces();route=this.pathRoute(link,source,true);if(!route.owned&&!discovered){new Notice('File locations are unavailable. No vault note was created.');return;}}
+        if(route.discover||!route.owned&&this.absoluteReference(link)){const discovered=await this.discoverWorkspaces();route=this.pathRoute(link,source,true);if(!route.owned&&!discovered){new Notice('File locations are unavailable. No vault note was created.');return;}}
         if(route.owned){const item=route.items.length===1?route.items[0]:route.items.length?await this.choose(route.items,link,source):undefined;if(!item){new Notice('The project file is unavailable or its location is ambiguous.');return;}try{this.choices[JSON.stringify([source,link.split('#')[0]])]=item.file.path;this.pin(item,source);const parsed=projectLink(link)!;return await this.open(item,workspace.getLeaf(newLeaf),{...state,eState:{...state?.eState,...(parsed.line===undefined?{}:{line:parsed.line,startLoc:{line:parsed.line,col:parsed.column??0},endLoc:{line:parsed.line,col:parsed.column??0},cursor:{from:{line:parsed.line,ch:parsed.column??0},to:{line:parsed.line,ch:parsed.column??0}}})}},parsed.subpath);}catch(error){new Notice(`The project file is unavailable: ${error instanceof Error?toError(error).message:String(error)}`,10000);return;}}
         if(physicalLink(link.split('#')[0],source))return original(link,source,newLeaf,state);
         if(this.absoluteReference(link)&&(this.environmentIds().length||this.sourceOrigins.has(source))){new Notice('This file is unavailable on its connected machine.');return;}
@@ -401,7 +402,7 @@ export class CodebaseBridge {
       const source=sourceFor(anchor),route=this.pathRoute(link,source),absolute=this.absoluteReference(link);
       if(!route.owned&&(!absolute||!this.io.workspaces&&!this.io.catalog||!this.environmentIds().length))return;
       event.preventDefault();event.stopImmediatePropagation();
-      const open=async()=>{const discovered=route.owned||await this.discoverWorkspaces();if(this.stopped)return;if(this.pathRoute(link,source,true).owned)await this.app.workspace.openLinkText(link,source,event.ctrlKey||event.metaKey);else if(!discovered||this.sourceOrigins.has(source)||this.files.has(source)){new Notice('File locations are unavailable.');}else{replay.add(anchor);anchor.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:event.ctrlKey,metaKey:event.metaKey,shiftKey:event.shiftKey,altKey:event.altKey}));}};
+      const open=async()=>{const discovered=route.owned&&!route.discover||await this.discoverWorkspaces();if(this.stopped)return;if(this.pathRoute(link,source,true).owned)await this.app.workspace.openLinkText(link,source,event.ctrlKey||event.metaKey);else if(!discovered||this.sourceOrigins.has(source)||this.files.has(source)){new Notice('File locations are unavailable.');}else{replay.add(anchor);anchor.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,ctrlKey:event.ctrlKey,metaKey:event.metaKey,shiftKey:event.shiftKey,altKey:event.altKey}));}};
       void this.withFileOpeningNotice(link,source,open).catch(error=>new Notice(String(error),10000));
     };
     root.addEventListener('click',click,true);
@@ -425,13 +426,19 @@ export class CodebaseBridge {
     for(const image of Array.from(el.querySelectorAll('img'))){
       if(this.stopped||!current())return;
       const rendered=image.getAttribute('src')??'',native=nativeMediaSource(rendered,this.app.vault.adapter.getResourcePath?.(''));
-      if(native?.vaultRelative&&this.physicalFileLookup?.(native.vaultRelative))continue;
       const parent=image.closest?.('.internal-embed[src], .internal-embed[data-src]'),parentLink=parent?.getAttribute('src')??parent?.getAttribute('data-src');
       if(!native&&!parentLink)continue; // Signed resources and ordinary web images need no work.
       const originalLink=parentLink?undefined:original?.(image),link=parentLink??originalLink??native?.link;if(!link)continue;
+      if(native?.vaultRelative&&this.physicalFileLookup?.(native.vaultRelative)){
+        if(!originalLink&&this.vaultWikiLink(link,source)||!this.pathRoute(link,source).owned)continue;
+        // A physical copy is not the owned remote image, including while
+        // discovery or a machine choice is pending. Keep its native alt text.
+        image.removeAttribute('src');
+      }
+      const expectedSource=image.getAttribute('src')??'';
       try{
         const item=await this.prepareRenderedEmbed(link,source);
-        if(!item||this.stopped||!current()||!this.allowed(item.scope)||!item.resource||(image.getAttribute('src')??'')!==rendered)continue;
+        if(!item||this.stopped||!current()||!this.allowed(item.scope)||!item.resource||(image.getAttribute('src')??'')!==expectedSource)continue;
         if(parentLink&&(parent?.getAttribute('src')??parent?.getAttribute('data-src'))!==parentLink)continue;
         if(!parentLink&&originalLink!==undefined&&original?.(image)!==originalLink)continue;
         if(image.getAttribute('src')!==item.resource.url)image.setAttribute('src',item.resource.url);
@@ -445,16 +452,22 @@ export class CodebaseBridge {
     // Live Preview can dispatch a click before its edited link is cached.
     if(this.wikiGesture.owns(source))return true;
     const path=name.split('#')[0];
-    return this.app.metadataCache.getCache?.(source)?.links?.some(link=>link.original.startsWith('[[')&&link.link.split('#')[0]===path)??false;
+    const cache=this.app.metadataCache.getCache?.(source);
+    return [...cache?.links??[],...cache?.embeds??[]].some(link=>(link.original.startsWith('[[')||link.original.startsWith('![['))&&link.link.split('#')[0]===path);
   }
   private routeScopes(linked=this.scopes()){const scopes=[...linked,...this.knownScopes.values(),...linked.flatMap(scope=>this.browse.workspaces(scope)),...[...this.workspaceScopes.values()].flatMap(r=>r.value)];return [...new Map(scopes.map(s=>[virtualPath(s,'identity'),s])).values()];}
-  private pathRoute(name:string,source:string,filesystem=false){
+  private pathRoute(name:string,source:string,filesystem=false):FileRoute{
     if(name.startsWith('T3 Code Attachments/')||name.startsWith('T3%20Code%20Attachments/')){
       const alias=projectLink(name)?.path??name.split('#')[0];
       if(this.vaultAliases[alias]&&!this.physicalFileLookup?.(alias)){const item=this.vaultAlias(alias);return {owned:true,items:item?[item]:[] as RegisteredFile[]};}
     }
-    const sourceItem=this.files.get(source),relative=projectLink(name);
+    const sourceItem=this.files.get(source)??this.records.get(source),relative=projectLink(name);
     if(sourceItem?.scope.filesystem&&relative?.path&&!/^(?:\/|[a-z]:\/)/i.test(relative.path)&&!name.startsWith(CODEBASE_PREFIX)){
+      const remembered=this.choices[JSON.stringify([source,relative.path])],chosen=remembered?this.files.get(remembered)??this.records.get(remembered):undefined;
+      if(remembered)return {owned:true,items:chosen&&chosen.scope.environmentId===sourceItem.scope.environmentId&&this.allowed(chosen.scope)?[this.register(chosen.scope,chosen.path)]:[]};
+      const matches=this.candidates(relative.path,source).filter(item=>item.scope.environmentId===sourceItem.scope.environmentId);
+      const siblings=matches.filter(item=>virtualPath(item.scope,'identity')===virtualPath(sourceItem.scope,'identity'));
+      if(matches.length)return {owned:true,items:siblings.length?siblings:matches};
       const reference=relativeFilesystemReference(name,sourceItem.scope,sourceItem.path);
       return {owned:true,items:reference&&this.allowed(reference.scope)?[this.register(reference.scope,reference.path)]:[] as RegisteredFile[]};
     }
@@ -466,7 +479,7 @@ export class CodebaseBridge {
     if(remembered&&!chosen)return {owned:true,items:[] as RegisteredFile[]};
     if(chosen&&!allowed(chosen.scope)&&projectPathRoutes(name,[chosen.scope]).owned)return {owned:true,items:[] as RegisteredFile[]};
     const origins=[...this.sourceOrigins.get(source)?.values()??[]],originKeys=new Set(origins.map(origin=>JSON.stringify(origin))),origin=originKeys.size===1?origins[0]:undefined;
-    const sourceScope=this.files.get(source)?.scope,link=this.links().filter(l=>source===l.folderPath||source.startsWith(l.folderPath+'/')).sort((a,b)=>b.folderPath.length-a.folderPath.length)[0],collision=(this.automaticChoices.get(JSON.stringify([source,parsed?.path??name]))?.size??0)>1,context=sourceScope??(collision?undefined:origin??(originKeys.size>1?undefined:link));
+    const sourceScope=sourceItem?.scope,link=this.links().filter(l=>source===l.folderPath||source.startsWith(l.folderPath+'/')).sort((a,b)=>b.folderPath.length-a.folderPath.length)[0],collision=(this.automaticChoices.get(JSON.stringify([source,parsed?.path??name]))?.size??0)>1,context=sourceScope??(collision?undefined:origin??(originKeys.size>1?undefined:link));
     if(collision&&!chosen&&!sourceScope){
       // Recorded response targets have equal priority across machines, even
       // when only one target belongs to a registered project. Missing targets
@@ -485,7 +498,7 @@ export class CodebaseBridge {
       // Discover all eligible machines before a project can claim an
       // unscoped absolute path. Each machine contributes its project match
       // or a filesystem target, so a project cannot hide another machine.
-      if(!filesystem)return {owned:false,items:[] as RegisteredFile[]};
+      if(!filesystem)return {owned:true,items:[],discover:true};
       const connected=this.environmentIds(),environments=origins.length?[...new Set(origins.map(value=>value.environmentId))]:connected;
       if(environments.some(environmentId=>!connected.includes(environmentId)))return {owned:true,items:[] as RegisteredFile[]};
       const items=environments.flatMap(environmentId=>{
@@ -500,7 +513,8 @@ export class CodebaseBridge {
     for(const candidates of preferred){const route=projectPathRoutes(name,candidates);if(route.owned)return {owned:true,items:route.matches.map(r=>this.register(r.scope,r.path))};}
     const ownershipScopes=context?scopes.filter(scope=>scope.environmentId===context.environmentId):origins.length?scopes.filter(scope=>origins.some(origin=>origin.environmentId===scope.environmentId)):scopes;
     const owned=projectPathRoutes(name,ownershipScopes.filter(scope=>context||!scope.filesystem)).owned;
-    if(!owned&&filesystem&&this.storage?.environments&&parsed&&/^(?:\/|[a-z]:\/)/i.test(parsed.path)){
+    if(!owned&&this.storage?.environments&&parsed&&/^(?:\/|[a-z]:\/)/i.test(parsed.path)){
+      if(!filesystem)return {owned:true,items:[],discover:true};
       // The sending machine owns response paths. Never try another machine
       // when that source is offline; an unscoped link keeps the native chooser.
       const environments=sourceScope?[sourceScope.environmentId]:origins.length?[...new Set(origins.map(value=>value.environmentId))]:link?.environmentId?[link.environmentId]:this.environmentIds();

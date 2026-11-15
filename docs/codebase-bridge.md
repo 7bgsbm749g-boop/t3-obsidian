@@ -6,6 +6,8 @@ Saved choices keep their original machine after restart, including while it is d
 
 Unscoped absolute paths collect a project or filesystem candidate from each eligible machine before selection. Relative links and media in filesystem-backed files resolve from the absolute source directory on that same machine, including `../` targets; registered projects retain their workspace boundary.
 
+Pending machine discovery retains remote ownership so native lookup cannot substitute a vault copy. A copied image is hidden until its remote target is available or chosen; genuine vault wiki images remain native. Filesystem views retain registered Markdown basename matching and saved link choices before resolving an exact relative filename.
+
 The plugin owns this bridge. T3 is unchanged. Project bytes remain in the project workspace, outside the vault. Obsidian's native MarkdownView, image viewer and PDF viewer operate on virtual TFile identities through a scoped storage adapter.
 
 ## Storage boundary
