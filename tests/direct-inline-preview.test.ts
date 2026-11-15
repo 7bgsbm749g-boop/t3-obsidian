@@ -342,7 +342,8 @@ test('host checkpoint import preserves newer device prose and cannot advance the
 });
 test('an exact delivery receipt binds a null-turn prompt without waiting for the host receipt write',()=>{
   const h=fixture();h.preview.tick(true);const snapshot=h.snapshot() as any;snapshot.snapshot.thread.messages[0].turnId=null;delete snapshot.snapshot.thread.latestTurn.messageId;snapshot.snapshot.thread.latestTurn.requestedAt=h.record.request.createdAt;
-  h.item(snapshot);h.preview.delivery({messageId:'prompt',requestedAt:h.record.request.createdAt,sequence:1,turnId:'turn'});
+  h.item(snapshot);h.preview.accepted('prompt');assert.doesNotMatch(h.updates.at(-1)?.body??'',/First paragraph/);
+  h.preview.delivery({messageId:'prompt',requestedAt:h.record.request.createdAt,sequence:1,turnId:'turn'});
   assert.match(h.updates.at(-1)!.body,/First paragraph/);h.preview.dispose();
 });
 test('stop and completed host records close the direct stream without producing a new save',()=>{
@@ -439,4 +440,31 @@ test('fresh unsent proof invalidates a history search started by an earlier reco
  assert.deepEqual(h.streams[0].targets().messageIds,[]);
  const reserved=h.streams[0].targets().recoveryVersion;h.preview.pendingSend('prompt');
  assert.equal(h.streams[0].targets().recoveryVersion,reserved,'Repeated adoption must not keep canceling a needed old read');h.preview.dispose();
+});
+
+test('pending creation suppresses only an exact missing snapshot; acceptance wakes without clearing real errors',async()=>{
+ const {PendingThreadError}=await import('../src/conversations/thread-stream');
+ const {SignInRequiredError}=await import('../src/connection/sign-in-state');
+ const h=fixture(false);const issues:any[]=[],wakes:number[]=[];let callbacks!:ThreadStreamCallbacks;
+ const preview=new DirectInlinePreview(h.record,async()=>{throw Error('No transport');},()=>{},(_id,_access,cb)=>{callbacks=cb;return {stop(){},refresh(){wakes.push(1);}};},h.clock,issue=>issues.push(issue));
+ preview.sending(h.record.request.messageId);preview.tick(true);
+ callbacks.reconnecting(new PendingThreadError('thread'));assert.equal(issues.length,0);
+ callbacks.reconnecting(new PendingThreadError('another-thread'));assert.equal(issues.at(-1).kind,'reconnecting');
+ preview.accepted('wrong-message');assert.equal(wakes.length,0);
+ preview.delivery({messageId:'prompt',requestedAt:h.record.request.createdAt,sequence:2});assert.equal(wakes.length,1);assert.equal(issues.at(-1).kind,'reconnecting');
+ callbacks.item(h.snapshot());assert.equal(issues.at(-1),undefined);
+ callbacks.reconnecting(new PendingThreadError('thread'));assert.equal(issues.at(-1).kind,'reconnecting','After exact observation a 404 is no longer pending');
+ callbacks.reconnecting(new SignInRequiredError());assert.equal(issues.at(-1).kind,'sign-in-required');preview.accepted('prompt');assert.equal(wakes.length,1);
+ preview.dispose();h.preview.dispose();
+});
+
+
+test('locally proven unsent adoption marks pending status before storage-triggered watchers can read',async()=>{
+ const {PendingThreadError}=await import('../src/conversations/thread-stream');
+ const h=fixture(false),issues:any[]=[],wakes:string[]=[];let callbacks!:ThreadStreamCallbacks;
+ const preview=new DirectInlinePreview(h.record,async()=>{throw Error('No transport');},()=>{},(_id,_access,cb)=>{callbacks=cb;return {stop(){},refresh(_read,message){wakes.push(message!);}};},h.clock,issue=>issues.push(issue));
+ preview.pendingSend('prompt');preview.tick(true);callbacks.reconnecting(new PendingThreadError('thread'));assert.deepEqual(issues,[]);
+ callbacks.reconnecting(Error('Offline'));assert.equal(issues.at(-1)?.kind,'reconnecting');
+ preview.pendingSend();preview.accepted('prompt');assert.deepEqual(wakes,['prompt']);assert.equal(issues.at(-1)?.kind,'reconnecting','acceptance keeps an actual offline error until data arrives');
+ callbacks.item(h.snapshot());assert.equal(issues.at(-1),undefined);preview.dispose();h.preview.dispose();
 });

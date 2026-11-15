@@ -191,3 +191,28 @@ test('canonical refresh keeps live history cancellation alongside its owned abor
  h.pool.forSource('stranded',true)('thread',access,{item:()=>{},reconnecting:error=>assert.fail(error.message)},undefined,()=>({messageIds:['old'],turnIds:[],recoveryVersion:String(version)}));
  await drain();assert.equal(paths.length,2);h.pool.dispose();
 });
+
+test('acceptance wakes only its exact source and bypasses canonical backoff',async()=>{
+ let now=0;const starts:Array<Parameters<typeof watchThread>>=[],wakes:string[]=[],reads:string[]=[];let fail=true;
+ const pool=new SharedThreadStreams((...args)=>{starts.push(args);return {stop(){},refresh:()=>wakes.push(args[0])};},2,()=>now);
+ const subscribe=(threadId:string)=>pool.forSource(threadId)(threadId,async()=>({origin:'https://fixture',api:async()=>{reads.push(threadId);if(fail)throw Error('Offline');return {thread:{id:threadId,projectId:'project',messages:[]},snapshotSequence:1};}}),{item:()=>{},reconnecting:()=>{}});
+ const a=subscribe('A'),b=subscribe('B');await drain();for(const start of starts)start[2].item({kind:'synchronized'});
+ now=10_001;pool.tick();await drain();assert.deepEqual(reads,['A','B']);fail=false;
+ a.refresh?.();await drain();assert.deepEqual(wakes,['A']);assert.deepEqual(reads,['A','B','A']);
+ a.stop();a.refresh?.();assert.deepEqual(wakes,['A']);b.stop();pool.dispose();
+});
+
+test('one acknowledgement wakes a shared source once across several exact readers',async()=>{
+ let reads=0,wakes=0;const pool=new SharedThreadStreams(()=>({stop(){},refresh(){wakes++;}}));
+ const access=async()=>({origin:'https://fixture',api:async()=>{reads++;return {thread:{id:'thread',projectId:'project',messages:[]},snapshotSequence:1};}});
+ const a=pool.forSource('exact')('thread',access,{item:()=>{},reconnecting:()=>{}}),b=pool.forSource('exact')('thread',access,{item:()=>{},reconnecting:()=>{}});
+ await drain();a.refresh?.(true,'message');b.refresh?.(true,'message');await drain();assert.equal(wakes,1);assert.equal(reads,1);
+ a.refresh?.(true,'next-message');await drain();assert.equal(wakes,2);assert.equal(reads,2);a.stop();b.stop();pool.dispose();
+});
+
+test('a pre-acceptance canonical failure cannot reinstate backoff over the acknowledgement wake',async()=>{
+ let now=0,reads=0,fail!:(error:Error)=>void;const pool=new SharedThreadStreams(()=>({stop(){}}),2,()=>now);
+ const watcher=pool.forSource('exact')('thread',async()=>({origin:'https://fixture',api:async()=>{if(++reads===1)return new Promise((_done,reject)=>fail=reject);return {thread:{id:'thread',projectId:'project',messages:[]},snapshotSequence:2};}}),{item:()=>{},reconnecting:()=>{}});
+ await drain();now=10_001;pool.tick();await drain();assert.equal(reads,1);
+ watcher.refresh?.();fail(Error('Pre-acceptance missing snapshot'));await drain();assert.equal(reads,2);watcher.stop();pool.dispose();
+});

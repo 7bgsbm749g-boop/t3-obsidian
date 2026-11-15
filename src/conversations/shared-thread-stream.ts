@@ -30,7 +30,7 @@ function threadFingerprint(state:ReturnType<typeof replayState>){
 
 type Watch=typeof watchThread;
 type Reader={callbacks:ThreadStreamCallbacks;targets?:()=>InlineHistoryTargets;replay?:Parameters<Watch>[5];completed:boolean;priority:()=>number};
-type Source={key:string;threadId:string;access:Parameters<Watch>[1];readers:Set<Reader>;watch?:ReturnType<Watch>;snapshot?:ThreadStreamItem;events:ThreadStreamItem[];characters:number;comparison?:string;comparisonDirty?:boolean;slot?:()=>void;timeout?:ReturnType<typeof scheduleTimeout>;refresh?:Promise<void>;started:boolean;retry?:ReturnType<typeof scheduleTimeout>;attempt?:number;refreshAgain?:boolean;controller?:AbortController;freshAt:number;sequence:number;retryAt:number;readAt?:number;expire?:()=>void;refreshWanted?:boolean;recovery?:boolean;fatal?:boolean};
+type Source={acknowledgement?:string;key:string;threadId:string;access:Parameters<Watch>[1];readers:Set<Reader>;watch?:ReturnType<Watch>;snapshot?:ThreadStreamItem;events:ThreadStreamItem[];characters:number;comparison?:string;comparisonDirty?:boolean;slot?:()=>void;timeout?:ReturnType<typeof scheduleTimeout>;refresh?:Promise<void>;started:boolean;retry?:ReturnType<typeof scheduleTimeout>;attempt?:number;refreshAgain?:boolean;controller?:AbortController;freshAt:number;sequence:number;retryAt:number;readAt?:number;expire?:()=>void;refreshWanted?:boolean;recovery?:boolean;fatal?:boolean};
 
 /** One source connection per authenticated environment/project/thread. Each
  * consumer still owns its exact run binding, projection and final save. */
@@ -77,7 +77,16 @@ export class SharedThreadStreams {
         // A union-target read supplies it without opening another watcher.
         if(current.readers.has(reader))this.refresh(current,true);
       });
-      return {stop:()=>{
+      return {refresh:(_read=true,accepted)=>{
+        if(this.stopped||!current.readers.has(reader)||current.fatal)return;
+        if(accepted&&current.acknowledgement===accepted)return;
+        current.acknowledgement=accepted;
+        current.retryAt=0;current.attempt=0;
+        if(current.retry)cancelTimeout(current.retry);current.retry=undefined;
+        // Wake only this source. Keep the bounded canonical read queue and
+        // request a fresh read after any pre-acknowledgement read settles.
+        current.watch?.refresh?.(false);this.refresh(current,true);
+      },stop:()=>{
         if(!current.readers.delete(reader)||current.readers.size)return;
         this.sources.delete(key);this.pending=this.pending.filter(value=>value!==current);
         current.watch?.stop();current.slot?.();current.controller?.abort();current.expire?.();if(current.retry)cancelTimeout(current.retry);if(current.timeout)cancelTimeout(current.timeout);
@@ -196,7 +205,7 @@ export class SharedThreadStreams {
       this.refreshing--;source.readAt=undefined;source.expire=undefined;
       if(source.controller===controller)source.controller=undefined;
       if(source.refresh===work)source.refresh=undefined;
-      if(source.refreshAgain){source.refreshAgain=false;if(!source.retry)this.refresh(source);}
+      if(source.refreshAgain){source.refreshAgain=false;source.retryAt=0;if(!source.retry)this.refresh(source);}
       this.drainRefresh();
     });
     source.refresh=work;void work.catch(()=>{});

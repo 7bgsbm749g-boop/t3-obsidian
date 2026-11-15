@@ -134,10 +134,11 @@ export class LocalResponseManager {
       await this.io.saveLocalNote?.(request.notePath);
     }
     this.documents.set(request.notePath,[{document:after,bindings:localResponseBindings(after,this.stored()),references:new Map(responseIds(after).map(id=>[id,this.index(this.stored()).get(id)]))}]);
-    const runtime=this.adopt(request);if(importedSnapshot)runtime.preview.seedImport?.(importedSnapshot);this.watch(runtime,true);
+    const runtime=this.adopt(request);if(!explicitLocation&&!request.importTurn)runtime.preview.sending?.(request.localMessageId??request.messageId);if(importedSnapshot)runtime.preview.seedImport?.(importedSnapshot);this.watch(runtime,true);
   }
   attempted(id:string){this.unsentMessages.delete(id);this.jobs.get(id)?.preview.pendingSend?.();}
   delivered(id:string,delivery:InlineStartRequest){if(this.unsentMessages.get(id)===delivery.messageId)this.unsentMessages.delete(id);this.jobs.get(id)?.preview.delivery(delivery);}
+  accepted(id:string,messageId:string){if(this.unsentMessages.get(id)===messageId)this.attempted(id);this.jobs.get(id)?.preview.accepted(messageId);}
   resume(){
     if(this.closed)return;
     const documents=this.io.openedNotes?.()??[],locations=new Map<string,ResponseRequest[]>(),stored=this.stored(),byId=this.index(stored),blocked=new Set<string>(),paneCounts=new Map<string,number>();

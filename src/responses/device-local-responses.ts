@@ -64,6 +64,7 @@ export class DeviceResponseManager {
   private manager(){if(!this.local){if(!this.io.localFinalNotes)throw Error('Local reply saving is unavailable.');this.local=new LocalResponseManager(this.io.completionActor??this.actor,this.vaultId,this.io,this.io.localFinalNotes);}return this.local;}
   register(request:ResponseRequest,importedSnapshot?:ThreadSnapshot,unsentMessageId?:string){if(this.stopped||!request.localOnly)throw Error('Legacy reply creation was retired.');return this.manager().register(request,false,importedSnapshot,unsentMessageId);}
   attempted(id:string){this.local?.attempted(id);}
+  accepted(_host:ResponseStorageTarget,id:string,messageId:string){this.local?.accepted(id,messageId);}
   delivered(_host:ResponseStorageTarget,id:string,delivery:InlineStartRequest){this.local?.delivered(id,delivery);return Promise.resolve();}
   stopLocally(id:string){this.stops.add(id);this.io.saveStops?.([...this.stops]);this.local?.stopLocally(id);}
   failResponse(_host:ResponseStorageTarget,id:string){return this.local?.cancel(id)??Promise.resolve();}

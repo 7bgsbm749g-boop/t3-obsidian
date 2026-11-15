@@ -2990,11 +2990,12 @@ export default class SendToT3 extends Plugin {
     // Keep the acknowledged exact start even when the renderer/event feed
     // missed it. This is orchestration delivery, not a guessed provider turn.
     const delivery=request.directPlan?.delivery;
-    if(delivery&&this.deviceInline){
+    if(this.deviceInline){
+      const accepted=(host:ResponseStorageTarget,id:string)=>{if(delivery)return this.deviceInline!.delivered(host,id,delivery);this.deviceInline!.accepted(host,id,commandId(request.id,'message'));};
       const bindings=request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]);
-      for(const binding of bindings)if([2,3,4].includes(binding.version))await this.deviceInline.delivered(binding.host,binding.id,delivery);
-      if(request.inlineSteering)for(const target of request.inlineSteering.targets??[request.inlineSteering])if(target.host)await this.deviceInline.delivered(target.host,target.jobId,delivery);
-      if(request.inlineFollow?.host)await this.deviceInline.delivered(request.inlineFollow.host,request.inlineFollow.jobId,delivery);
+      for(const binding of bindings)if([2,3,4].includes(binding.version))await accepted(binding.host,binding.id);
+      if(request.inlineSteering)for(const target of request.inlineSteering.targets??[request.inlineSteering])if(target.host)await accepted(target.host,target.jobId);
+      if(request.inlineFollow?.host)await accepted(request.inlineFollow.host,request.inlineFollow.jobId);
     }
     stage='local-confirmation';this.persistAgentCommand(request,result.threadId);
     logEvent('request.dispatch.acknowledged',{requestId:request.id,threadId:result.threadId,jobId:request.inlineSteering?.jobId,messageId:commandId(request.id,'message')});
