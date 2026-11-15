@@ -3,7 +3,7 @@ import {readRawSnapshot,readHistory,readThreadList} from './wire-readers';
 import type {WireSnapshot,WireMessage,WireTurnItem} from './wire-types';
 import {toError,isRecord} from '../shared/values';
 import {connectT3Rpc,type T3Api,type SocketFactory} from './t3-rpc';
-import {normalizeV2Snapshot,normalizeV2ShellThread,restoreCompactSnapshot,v2Command} from './orchestration-v2';
+import {normalizeV2Snapshot,restoreCompactSnapshot,v2Command} from './orchestration-v2';
 import {htmlRenderFromToolItem} from '../responses/html-results';
 
 interface Attachment {id:string;dataUrl?:string;type?:string;name?:string;mimeType?:string;sizeBytes?:number}
@@ -31,45 +31,6 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
   const outputSizes=new Map<string,number>();let outputCharacters=0;
   const senderTitles=new Map<string,string|undefined>();let senderRefresh=-Infinity;
   const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-  async function threadState(threadId:string,options?:T3RequestOptions){
-    const signal=options?.signal;
-    let socket:WebSocket|undefined,rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined,closed=false;
-    const close=()=>{if(closed)return;closed=true;try{if(rpc)rpc.close();else socket?.close();}catch{/* Cleanup must not replace the read's result. */}};
-    signal?.addEventListener('abort',close,{once:true});
-    try{
-      requestAborted(signal);
-      rpc=await abortableRead(connectT3Rpc((path,payload)=>raw(path,payload,options),origin,url=>{
-        requestAborted(signal);socket=makeSocket?makeSocket(url):new WebSocket(url);return socket;
-      }),signal);
-      const family=await abortableRead(rpc.call('orchestration.getThreadFamily',{threadId}),signal);
-      requestAborted(signal);
-      const row=readThreadList(family).find(thread=>thread.id===threadId);
-      // This is authoritative control state, never a cached picker row. Missing
-      // active-run or approval fields must not silently authorize a send.
-      if(!row||typeof row.projectId!=='string'||!row.projectId||
-        !Object.hasOwn(row,'activeRunId')||row.activeRunId!==null&&typeof row.activeRunId!=='string'||
-        !Object.hasOwn(row,'latestRunId')||row.latestRunId!==null&&typeof row.latestRunId!=='string'||
-        !Object.hasOwn(row,'pendingRuntimeRequest')||row.pendingRuntimeRequest!==null&&!isRecord(row.pendingRuntimeRequest)||
-        !['approval-required','auto-accept-edits','auto','full-access'].includes(row.runtimeMode??'')||
-        !['default','plan'].includes(row.interactionMode??'')||typeof row.status!=='string')throw Error('T3 did not return the requested thread control state.');
-      const request=row.pendingRuntimeRequest;
-      // Shell summaries are already pending; they contain id/kind/createdAt,
-      // not the full runtime request's status or response capability.
-      if(request&&(typeof request.id!=='string'||!request.id||typeof request.kind!=='string'||!request.kind))throw Error('T3 returned an invalid pending thread request.');
-      const normalized=normalizeV2ShellThread(row);
-      // Select control fields explicitly. Do not retain latest message bodies,
-      // inherited history, tool output or other family members in send checks.
-      return {snapshotSequence:isRecord(family)?family.snapshotSequence:undefined,page:{hasMore:true},thread:{
-        id:row.id,projectId:row.projectId,title:row.title,updatedAt:row.updatedAt,archivedAt:row.archivedAt,deletedAt:row.deletedAt,
-        runtimeMode:row.runtimeMode,interactionMode:row.interactionMode,protocolVersion:2,
-        // The active pointer owns delivery even when a newer run is terminal
-        // and an older server omits activityRunStatus.
-        session:row.activeRunId?{...normalized.session,status:'running',activeTurnId:row.activeRunId}:normalized.session,latestTurn:normalized.latestTurn,
-        hasPendingApprovals:normalized.hasPendingApprovals,hasPendingUserInput:normalized.hasPendingUserInput,
-        messages:[],activities:[],turns:normalized.latestTurn?{[normalized.latestTurn.turnId]:normalized.latestTurn}:{},
-      }};
-    }finally{signal?.removeEventListener('abort',close);close();}
-  }
   async function persistAttachments<T extends OutgoingMessage>(rpc:Awaited<ReturnType<typeof connectT3Rpc>>,threadId:string,message:T){
     const uploads=message.attachments.filter(a=>typeof a.dataUrl==='string');
     if(!uploads.length)return message;
@@ -217,12 +178,6 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
     // authoritative; bounded/history endpoints use opaque v2 paging cursors.
     if(/^\/api\/orchestration\/threads\/[^/?]+(?:\?|$)/.test(path)){
       const root=path.split('?')[0],query=new URLSearchParams(path.split('?')[1]),controlOnly=query.get('controlOnly')==='true',importOnly=query.get('importRuns')==='true',importRunId=query.get('importRunId');
-      // Send checks need state, not a projection decoded and discarded later.
-      // Detailed controlOnly reads still supply question/approval presentation.
-      if(query.get('stateOnly')==='true'){
-        if(payload!==undefined)throw Error('Thread state checks must be read-only.');
-        return threadState(decodeURIComponent(root.slice(root.lastIndexOf('/')+1)),options);
-      }
       let rawSnapshot=readRawSnapshot(await raw(root+'/bounded?compactTurnItems=1'+(importOnly?'&deferWork=1&dedupeBodies=1':''),payload,{...options,...(importOnly?{compactImport:true}:{})}));
       if(importOnly&&'projection' in rawSnapshot){
         const relevant=(item:WireTurnItem)=>['user_message','assistant_message','error','approval_request','user_input_request','run_interrupt_request'].includes(item.type)||!!htmlRenderFromToolItem(item),p=rawSnapshot.projection;

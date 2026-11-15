@@ -10,7 +10,6 @@ const eid='environment';const url='https://t3.example';const now=Date.now();
 const session={url,environmentId:eid,token:'device-token',expiresAt:now+600000};
 const descriptor={environmentId:eid,label:'Computer',orchestrationProtocolVersion:2};
 const response=(d:any,status=200)=>new Response(JSON.stringify(d),{status});
-const family=(thread:any)=>({snapshotSequence:12,threads:[{status:'completed',runtimeMode:'approval-required',interactionMode:'default',activeRunId:null,latestRunId:null,pendingRuntimeRequest:null,...thread}]});
 test('launch reservation follows successful uploads and survives a later lost acknowledgement',async t=>{
  const before=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=before;});let failUpload=true,loseLaunch=false,creates=0;const records:string[]=[];
  const Base=settingsSocket(modelConfig,undefined,(tag)=>{assert.equal(tag,'orchestration.launchThread');creates++;if(loseLaunch)throw Error('Lost acknowledgement');return {};});
@@ -128,11 +127,9 @@ test('direct credentials are bound to origin/environment and expired sessions re
  await assert.rejects(readDirect({...c,url:'https://other.example'},['projects'],session,wrong as any),/Pair this connection/);assert.equal(calls,1);
 });
 
-test('control reads reuse verified credential access but fetch fresh state and fence changed credentials',async t=>{
+test('control reads reuse verified credential access but fetch fresh state and fence changed credentials',async()=>{
  const c={transport:'direct' as const,url,environmentId:eid,host:'direct',executable:''};let descriptors=0,snapshots=0;
- const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});
- globalThis.WebSocket=settingsSocket(undefined,undefined,tag=>{assert.equal(tag,'orchestration.getThreadFamily');snapshots++;return family({id:'thread',projectId:'p',title:'Revision '+snapshots});}) as any;
- const fetcher=async(u:any)=>{if(u.endsWith('/environment')){descriptors++;return response(descriptor);}assert.ok(u.endsWith('/websocket-ticket'));return response({ticket:'test'});};
+ const fetcher=async(u:any,o:any)=>{if(u.endsWith('/environment')){descriptors++;return response(descriptor);}assert.ok(u.endsWith('/bounded?compactTurnItems=1'));snapshots++;return response({thread:{id:'thread',projectId:'p',title:'Revision '+snapshots}});};
  const first=await readDirect(c,['read','thread'],session,fetcher as any,{control:true});
  const second=await readDirect(c,['read','thread'],session,fetcher as any,{control:true});
  assert.equal(descriptors,1);assert.equal(snapshots,2);assert.notEqual(first.title,second.title);
@@ -147,11 +144,9 @@ test('direct HTTP cancellation rejects even when a fetch implementation ignores 
  await assert.rejects(work,/obsolete chooser/);assert.equal(signal?.aborted,true);
 });
 
-test('cancelling one shared descriptor waiter does not cancel another reader',async t=>{
+test('cancelling one shared descriptor waiter does not cancel another reader',async()=>{
  const c={transport:'direct' as const,url,environmentId:eid,host:'direct',executable:''};let release!:()=>void,descriptorSignal:AbortSignal|undefined,descriptors=0;
- const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});
- globalThis.WebSocket=settingsSocket(undefined,undefined,tag=>{assert.equal(tag,'orchestration.getThreadFamily');return family({id:'thread',projectId:'p'});}) as any;
- const fetcher:any=async(u:any,options:any)=>{if(u.endsWith('/environment')){descriptors++;descriptorSignal=options.signal;await new Promise<void>(resolve=>{release=resolve;});return response(descriptor);}assert.ok(u.endsWith('/websocket-ticket'));return response({ticket:'test'});};
+ const fetcher:any=async(u:any,options:any)=>{if(u.endsWith('/environment')){descriptors++;descriptorSignal=options.signal;await new Promise<void>(resolve=>{release=resolve;});return response(descriptor);}return response({thread:{id:'thread',projectId:'p'}});};
  const a=new AbortController(),b=new AbortController();
  const first=readDirect(c,['read','thread'],session,fetcher,{control:true,signal:a.signal});
  const second=readDirect(c,['read','thread'],session,fetcher,{control:true,signal:b.signal});
@@ -163,14 +158,14 @@ test('existing-thread sends preserve conversation settings and retry one immutab
  const thread={id:'existing-thread',projectId:'p',title:'Ongoing',runtimeMode:'approval-required',interactionMode:'plan',modelSelection:{instanceId:'codex',model:'existing-model'},session:{status:'running',runtimeMode:'approval-required'},hasPendingApprovals:false,hasPendingUserInput:false};
  const fetcher=async(u:any,o:any)=>{
   if(u.endsWith('/environment'))return response(descriptor);
-  assert.ok(!u.includes('/threads/'),'existing sends never read transcript HTTP endpoints');
+  if(u.includes('/threads/')){reads++;return response({thread});}
   if(u.endsWith('/websocket-ticket'))return response({ticket:'test'});
   assert.ok(saves>0);const command=JSON.parse(o.body);commands.push(command);
   if(lose){lose=false;throw Error('Lost ack');}return response({});
  };
  const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',threadId:thread.id,project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',connectionId:'c',environmentId:eid,url,host:'direct',executable:''},title:'Note',prompt:'Markdown with image',attachments:[{type:'image',id:'i',name:'i.png',mimeType:'image/png',sizeBytes:1,dataUrl:'data:image/png;base64,YQ=='}]};
  const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});
- globalThis.WebSocket=settingsSocket(modelConfig,()=>{},async(tag,payload)=>{if(tag==='orchestration.getThreadFamily'){reads++;return family(thread);}assert.equal(tag,'orchestration.dispatchCommand');return (await fetcher('rpc:dispatch',{body:JSON.stringify(payload)})).json();}) as any;
+ globalThis.WebSocket=settingsSocket(modelConfig,()=>{},async(tag,payload)=>{assert.equal(tag,'orchestration.dispatchCommand');return (await fetcher('rpc:dispatch',{body:JSON.stringify(payload)})).json();}) as any;
  const save=async()=>{saves++;};
  await assert.rejects(sendDirect(request,session,save,fetcher as any),/Cannot reach/);
  const restored=JSON.parse(JSON.stringify(request));
@@ -183,13 +178,11 @@ test('existing-thread sends preserve conversation settings and retry one immutab
  await assert.rejects(sendDirect({...restored,threadId:'different'},session,save,fetcher as any),/no longer matches/);
 });
 
-test('existing-thread validation rejects other projects, archived threads, and pending input before dispatch',async t=>{
- const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});
- for(const overrides of [{projectId:'other'},{archivedAt:'2026-09-19'},{pendingRuntimeRequest:{id:'approval',kind:'approval',createdAt:'2026-09-19'}},{pendingRuntimeRequest:{id:'question',kind:'user_input',createdAt:'2026-09-19'}}]){
+test('existing-thread validation rejects other projects, archived threads, and pending input before dispatch',async()=>{
+ for(const overrides of [{projectId:'other'},{archivedAt:'2026-09-19'},{hasPendingApprovals:true},{hasPendingUserInput:true}]){
   let dispatched=false;
   const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',threadId:'existing',project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',connectionId:'c',environmentId:eid,url,host:'direct',executable:''},title:'Note',prompt:'Content'};
-  globalThis.WebSocket=settingsSocket(undefined,undefined,tag=>{if(tag==='orchestration.getThreadFamily')return family({id:'existing',projectId:'p',...overrides});dispatched=true;return {};}) as any;
-  const fetcher=async(u:any)=>{if(u.endsWith('/environment'))return response(descriptor);assert.ok(u.endsWith('/websocket-ticket'));return response({ticket:'test'});};
+  const fetcher=async(u:any)=>{if(u.endsWith('/environment'))return response(descriptor);if(u.includes('/threads/'))return response({thread:{id:'existing',projectId:'p',...overrides}});dispatched=true;return response({});};
   await assert.rejects(sendDirect(request,session,async()=>{},fetcher as any),/thread|approval|input/i);
   assert.equal(dispatched,false);
  }
@@ -200,12 +193,12 @@ test('direct acknowledgement persists exact prompt delivery and the observed act
   const snapshots:any[]=[];let dispatches=0;
   const fetcher=async(u:any)=>{
     if(u.endsWith('/.well-known/t3/environment'))return response(descriptor);
-    assert.ok(!u.includes('/threads/'),'steering validation must not decode old history');
+    if(u.includes('/threads/'))return response({thread:{id:'thread',projectId:'p',session:{status:'running',activeTurnId:'existing',runtimeMode:'approval-required'}}});
     if(u.endsWith('/websocket-ticket'))return response({ticket:'test'});
     dispatches++;return response({sequence:123});
   };
   const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});
-  globalThis.WebSocket=settingsSocket(modelConfig,()=>{},async(tag,payload)=>{if(tag==='orchestration.getThreadFamily')return family({id:'thread',projectId:'p',status:'running',activityRunStatus:'running',activeRunId:'existing',latestRunId:'existing'});assert.equal(tag,'orchestration.dispatchCommand');return (await fetcher('rpc:dispatch')).json();}) as any;
+  globalThis.WebSocket=settingsSocket(modelConfig,()=>{},async(tag,payload)=>{assert.equal(tag,'orchestration.dispatchCommand');return (await fetcher('rpc:dispatch')).json();}) as any;
   await sendDirect(request,session,async()=>{snapshots.push(structuredClone(request));},fetcher as any);
   assert.deepEqual(request.directPlan?.delivery,{messageId:commandId(request.id,'message'),requestedAt:request.directPlan!.turn.createdAt,sequence:123,activeTurnId:'existing'});
   const restored=structuredClone(snapshots.at(-1));await sendDirect(restored,session,async()=>{},fetcher as any);

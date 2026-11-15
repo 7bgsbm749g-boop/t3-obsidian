@@ -298,57 +298,6 @@ test('control read forwards cancellation and refuses a late snapshot after abort
  controller.abort(Error('obsolete lookup'));release(snapshot());await assert.rejects(work,/obsolete lookup/);assert.equal(observed,controller.signal);
 });
 
-const threadState=(overrides:any={})=>({id:'thread',projectId:'project',title:'Current title',status:'running',runtimeMode:'full-access',interactionMode:'plan',activeRunId:run.id,activityRunStatus:'running',latestRunId:run.id,latestRunRequestedAt:at,pendingRuntimeRequest:null,...overrides});
-test('send state uses exact family metadata without transcript, tool or history reads',async()=>{
- const calls:any[]=[],raw:string[]=[];let closes=0;
- const Base=settingsSocket(undefined,undefined,(tag,payload)=>{calls.push({tag,payload});return {snapshotSequence:17,threads:[threadState({id:'other',projectId:'other-project'}),threadState({latestVisibleMessage:{text:'private old output'},pendingBackgroundTasks:[{prompt:'private task'}]})]};});
- const Socket=class extends Base {close(){closes++;super.close();}};
- const api=t3Api(async path=>{raw.push(path);assert.equal(path,'/api/auth/websocket-ticket');return {ticket:'ticket'};},'https://fixture',url=>new Socket(url) as any);
- const result=expectSnapshot(await api('/api/orchestration/threads/thread?stateOnly=true'));
- assert.deepEqual(calls,[{tag:'orchestration.getThreadFamily',payload:{threadId:'thread'}}]);assert.deepEqual(raw,['/api/auth/websocket-ticket']);
- assert.equal(result.snapshotSequence,17);assert.equal(result.thread.id,'thread');assert.equal(result.thread.projectId,'project');assert.equal(result.thread.title,'Current title');
- assert.equal(result.thread.session.activeTurnId,run.id);assert.equal(expectRecord(result.thread.session).runtimeMode,'full-access');assert.equal(expectRecord(result.thread).interactionMode,'plan');
- assert.deepEqual(result.thread.messages,[]);assert.deepEqual(result.thread.activities,[]);assert.doesNotMatch(JSON.stringify(result),/private|latestVisibleMessage|pendingBackgroundTasks/);assert.equal(closes,1);
-});
-
-test('send state preserves active ownership independently of the latest run and keeps archive/deletion gates',async()=>{
- const row=threadState({activeRunId:'older-active',latestRunId:'newer-terminal',status:'completed',activityRunStatus:undefined,archivedAt:at,deletedAt:at});
- const Socket=settingsSocket(undefined,undefined,()=>({threads:[row]}));
- const api=t3Api(async()=>({ticket:'ticket'}),'https://fixture',url=>new Socket(url) as any);
- const result=expectSnapshot(await api('/api/orchestration/threads/thread?stateOnly=true'));
- assert.equal(result.thread.session.activeTurnId,'older-active');assert.equal(result.thread.session.status,'running');assert.equal(result.thread.latestTurn?.turnId,'newer-terminal');assert.equal(result.thread.latestTurn?.state,'completed');assert.equal(result.thread.archivedAt,at);assert.equal(result.thread.deletedAt,at);
-});
-
-test('send state retains approval and question gates from the actual pending-summary wire shape',async()=>{
- for(const kind of ['approval','user_input','user-input'])for(const blocking of [true,false]){
-  const Socket=settingsSocket(undefined,undefined,()=>({threads:[threadState({pendingRuntimeRequest:{id:'request',kind,createdAt:at,blocking}})]}));
-  const api=t3Api(async()=>({ticket:'ticket'}),'https://fixture',url=>new Socket(url) as any);
-  const result=expectSnapshot(await api('/api/orchestration/threads/thread?stateOnly=true'));
-  assert.equal(result.thread.hasPendingApprovals,kind==='approval');assert.equal(result.thread.hasPendingUserInput,kind!=='approval');
- }
-});
-
-test('send state fails closed for missing thread identity, run state, permissions or pending-request metadata',async()=>{
- const invalid=[{id:'different'},{projectId:undefined},{activeRunId:undefined},{latestRunId:undefined},{pendingRuntimeRequest:undefined},{runtimeMode:undefined},{interactionMode:undefined},{status:undefined},{pendingRuntimeRequest:{id:'request'}}];
- for(const overrides of invalid){
-  let closes=0;const Base=settingsSocket(undefined,undefined,()=>({threads:[threadState(overrides)]}));
-  const Socket=class extends Base {close(){closes++;super.close();}};
-  const api=t3Api(async()=>({ticket:'ticket'}),'https://fixture',url=>new Socket(url) as any);
-  await assert.rejects(api('/api/orchestration/threads/thread?stateOnly=true'),/thread control state|pending thread request/);assert.equal(closes,1);
- }
-});
-
-test('send state cancellation closes its socket and rejects a late metadata reply',async()=>{
- const controller=new AbortController();let release!:(value:any)=>void,closes=0,observed:AbortSignal|undefined;
- const Base=settingsSocket(undefined,undefined,()=>new Promise(resolve=>{release=resolve;}));
- const Socket=class extends Base {close(){closes++;super.close();}};
- const api=t3Api(async(_path,_payload,options)=>{observed=options?.signal;return {ticket:'ticket'};},'https://fixture',url=>new Socket(url) as any);
- const work=api('/api/orchestration/threads/thread?stateOnly=true',undefined,{signal:controller.signal});
- for(let i=0;i<12;i++)await Promise.resolve();
- controller.abort(Error('obsolete state check'));release({threads:[threadState()]});
- await assert.rejects(work,/obsolete state check/);assert.equal(observed,controller.signal);assert.equal(closes,1);
-});
-
 test('v2 direct access sends the protocol HTTP header and refuses a v1 machine before authorization',async()=>{
   const connection:any={url:'https://t3.example',environmentId:'environment'},session:any={...connection,token:'test',expiresAt:Date.now()+600000};let authorized=0;
   const fetcher:any=async(url:string,options:any)=>{if(url.endsWith('/environment'))return new Response(JSON.stringify({environmentId:'environment',label:'Test',orchestrationProtocolVersion:2}));authorized++;assert.equal(options.headers['x-t3-orchestration-protocol'],'2');assert.ok(url.endsWith('/thread/bounded?compactTurnItems=1'));return new Response(JSON.stringify(snapshot()));};
