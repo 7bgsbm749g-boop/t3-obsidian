@@ -92,7 +92,7 @@ async function folderMenuHarness(initial?:any){
     addSeparator(){return this;}
     showAtPosition(){shownMenu=this;return this;}
   }
-  const api={setIcon:()=>{},Plugin,Menu,Platform:{isMobile:true},TFolder:Folder,TFile:File,Modal,FuzzySuggestModal:Modal,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Setting,Notice:class{constructor(text:string){notices.push(text);}}};
+  const api={setIcon:()=>{},Plugin,Menu,Platform:{isMobile:true},TFolder:Folder,TFile:File,Modal,FuzzySuggestModal:Modal,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Setting,Notice:class{constructor(text:string){notices.push(text);}hide(){}}};
   const module={exports:{} as any};
   runInNewContext(await readFile('dist/main.js','utf8'),{
     module,exports:module.exports,window:{innerWidth:1000,innerHeight:700},require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,
@@ -318,10 +318,10 @@ test('a single paired remote No project works without local CLI discovery or a c
   assert.equal(reads.length,1,'Opening the machine picker must not send or read a project');
   picker.close();picker.onChooseItem(h.plugin.vaultMachines()[0]);
   assert.equal((await choosing).project.connectionId,'c','Native close-before-choose order must retain the selected machine');
-  assert.equal(reads.length,2);
+  assert.equal(reads.length,1,'Selecting the same machine reuses only its verified catalog identity');
   const cancelled=h.plugin.noProjectTarget(),rejected=assert.rejects(cancelled,/Machine selection was cancelled/);
   h.modals.at(-1).close();await rejected;
-  assert.equal(reads.length,2,'Cancelling must not resolve a project');
+  assert.equal(reads.length,1,'Cancelling must not resolve a project');
  }finally{h.plugin.onunload();}
 });
 
