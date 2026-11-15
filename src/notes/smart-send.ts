@@ -22,7 +22,7 @@ type Projection=Awaited<ReturnType<typeof computeSourceProjection>>;
 type ProjectionEntry={document:string;signature:string;work:Promise<Projection>;characters:number};
 type Preparation=Awaited<ReturnType<typeof computeSmartSend>>;
 type PreparationEntry={projection:Projection;signature:string;generation:readonly unknown[];work:Promise<Preparation>;characters:number};
-type HistoryIndex={preparation?:PreparationEntry;responses?:SmartSendData['responses'];edits?:SmartSendData['noteEdits'];byNote:Map<string,ResponseText[]>;editsByNote:Map<string,NoteEditText[]>;projections:Map<string,ProjectionEntry>};
+type HistoryIndex={preparationGeneration?:number;preparation?:PreparationEntry;responses?:SmartSendData['responses'];edits?:SmartSendData['noteEdits'];byNote:Map<string,ResponseText[]>;editsByNote:Map<string,NoteEditText[]>;projections:Map<string,ProjectionEntry>};
 const historyIndexes=new WeakMap<SmartSendData,HistoryIndex>();
 function historyIndex(data:SmartSendData){
   let index=historyIndexes.get(data);
@@ -269,9 +269,9 @@ export function explicitSelectionText(document:string,[start,end]:Span):string {
 }
 /** A content plan is not send authority. Only one exact revision is retained;
  * callers must still perform canonical-note, credential and dispatch checks. */
-export function clearSmartSendPreparation(data:SmartSendData){const index=historyIndexes.get(data);if(index)index.preparation=undefined;}
+export function clearSmartSendPreparation(data:SmartSendData){const index=historyIndexes.get(data);if(index){index.preparation=undefined;index.preparationGeneration=(index.preparationGeneration??0)+1;}}
 export async function prepareSmartSend(data:SmartSendData,path:string,destination:string,document:string,scope?:Span,generation:readonly unknown[]=[]){
-  const index=historyIndex(data),selection=scope&&[...scope] as Span,epoch=[...generation];
+  const index=historyIndex(data),selection=scope&&[...scope] as Span,epoch=[...generation],cacheGeneration=index.preparationGeneration;
   try{
     const noteId=smartNote(data,path),projection=await sourceProjection(data,noteId,document);
     const identities=noteIdentities(data,noteId),heads=Object.entries(data.heads).filter(([,h])=>identities.has(h.noteId)&&h.destination===destination);
@@ -282,7 +282,7 @@ export async function prepareSmartSend(data:SmartSendData,path:string,destinatio
       // Snapshot the small mutable receipt fields before asynchronous decoding.
       work=computeSmartSend(noteId,projection,heads.map(([id,head])=>[id,{...head,source:{...head.source},covered:head.covered.map(([from,to]):Span=>[from,to]),parents:[...head.parents],bindings:[...head.bindings??[]]}]),selection);
       const entry={projection,signature,generation:epoch,work,characters:document.length+projection.text.length+signature.length};
-      index.preparation=entry.characters<=2_000_000?entry:undefined;
+      if(index.preparationGeneration===cacheGeneration)index.preparation=entry.characters<=2_000_000?entry:undefined;
       void work.then(result=>{
         if(index.preparation!==entry)return;
         entry.characters+=result.text.length+result.capture.source.data.length+16*(result.ranges.length+result.capture.covered.length);

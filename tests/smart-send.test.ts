@@ -333,6 +333,8 @@ test('preparation keeps only one revision and fences dialog, route, credential a
   assert.equal(reads,20);await prepare();assert.equal(reads,24);
   await prepare('Edited revision.');assert.equal(reads,28);await prepare();assert.equal(reads,32,'returning to an older revision recomputes');
   clearSmartSendPreparation(data);await prepare();assert.equal(reads,36,'cancelled/finished attempts discard their entry');
+  clearSmartSendPreparation(data);const pending=prepare();clearSmartSendPreparation(data);await pending;assert.equal(reads,40);await prepare();assert.equal(reads,44,'in-flight work cannot repopulate a cancelled generation');
+  const oversized='x'.repeat(1_000_001)+'Oversized revision.';await prepare(oversized);assert.equal(reads,48);await prepare(oversized);assert.equal(reads,52,'oversized revisions are not retained');
  }finally{globalThis.DecompressionStream=Original;}
 });
 test('failed preparations are never retained even when the same corrupt receipt is retried',async()=>{

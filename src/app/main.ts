@@ -226,6 +226,7 @@ export default class SendToT3 extends Plugin {
   private clientMaintenance?:DesktopClientMaintenance;
   private saving = Promise.resolve();
   private sharedBaseline='';
+  private smartPreparationSettingsRevision=0;
   private lastDiskSnapshot='';
   private queuedSharedSnapshot?:string;
   private folderLinkReplica:FolderLinkChange[]=[];
@@ -1001,7 +1002,7 @@ export default class SendToT3 extends Plugin {
     if(connectionsChanged)this.settings.paired=adopted.paired.map((c:PairedConnection)=>this.settings.paired.find(existing=>JSON.stringify(existing)===JSON.stringify(c))??c);
     this.syncProjectSources();if(connectionsChanged){this.refreshProjectsInBackground(true);void this.syncThreadVisibility();}
     remote.folderLinks=this.settings.folderLinks;remote.folderLinkChanges=this.folderLinkReplica;
-    this.sharedBaseline=JSON.stringify(remote);
+    this.sharedBaseline=JSON.stringify(remote);this.smartPreparationSettingsRevision++;
     // Include sends and note moves confirmed while the refresh was awaiting IO.
     const mergedThreads=mergeNoteThreads(remoteThreads,this.settings.noteThreads);
     this.settings.noteThreads=mergedThreads;
@@ -1109,9 +1110,8 @@ export default class SendToT3 extends Plugin {
     const data=this.smartData();
     return Object.values(data.heads).some(head=>{const note=data.notes[head.noteId];return note?.path===path&&!note.deleted;});
   }
-  private smartPreparationGeneration(project:Project,context?:EditorChatContext){
-    const route=this.connection(project);
-    return [context,this.settings,this.sharedBaseline,this.cloudGeneration,this.nativeAccount,this.cloudAccount,this.pairedSessions[route.connectionId??''],route.transport,route.url,route.connectionId,route.environmentId,context?.referenceSelection,context?.smartQuestion,context?.snapshot];
+  private smartPreparationGeneration(route:Connection,context?:EditorChatContext){
+    return [context,this.smartPreparationSettingsRevision,this.cloudGeneration,this.nativeAccount,this.cloudAccount,this.pairedSessions[route.connectionId??''],route.transport,route.url,route.connectionId,route.environmentId,context?.referenceSelection,context?.smartQuestion,context?.snapshot];
   }
   private async hasSmartContent(file:TFile,destination:ChatDestination,context?:EditorChatContext){
     if(context?.smartQuestion?.trim()||context?.referenceSelection||context?.smartScope&&context.smartScope[1]>context.smartScope[0])return true;
@@ -1122,7 +1122,8 @@ export default class SendToT3 extends Plugin {
     const active=this.app.workspace.getActiveViewOfType(MarkdownView);
     const document=context?.smartDocument??(active?.file?.path===file.path?this.notePromptDocument(active):await this.app.vault.read(file));
     await this.recoverSmartReplies(file.path,document);
-    return !!(await prepareSmartSend(this.smartData(),file.path,await this.smartKey(project,this.connection(project),destination.threadId??''),document,context?.smartScope,this.smartPreparationGeneration(project,context))).text.trim();
+    const route=this.connection(project);
+    return !!(await prepareSmartSend(this.smartData(),file.path,await this.smartKey(project,route,destination.threadId??''),document,context?.smartScope,this.smartPreparationGeneration(route,context))).text.trim();
   }
   private async recoverSmartReplies(path:string,document:string){
 
@@ -2193,7 +2194,7 @@ export default class SendToT3 extends Plugin {
       if(note&&options?.sourceContext?.smartDocument!==undefined){
         const context=options.sourceContext;
         await this.recoverSmartReplies(note.path,context.smartDocument!);
-        const plan=await prepareSmartSend(this.smartData(),note.path,await this.smartKey(project,connection,threadId??''),context.smartDocument!,context.smartScope,this.smartPreparationGeneration(project,context));
+        const plan=await prepareSmartSend(this.smartData(),note.path,await this.smartKey(project,connection,threadId??''),context.smartDocument!,context.smartScope,this.smartPreparationGeneration(connection,context));
         const question=context.smartQuestion??'';
         const selected=context.smartScope?explicitSelectionText(context.smartDocument!,context.smartScope):context.canonicalAnchor?.text??context.anchor?.text??'';
         // Explicit selections are deliberate input, including text delivered
@@ -2616,6 +2617,7 @@ export default class SendToT3 extends Plugin {
       completion:{action:'keep',archiveFolder:''}};
   }
   save(forceShared=false) {
+    this.smartPreparationSettingsRevision++;
     this.rememberProjectViews();
     this.refreshFolderIndicators();
     const {pending,completionJobs,settlementJobs,connection}=this.settings,intended=this.sharedSnapshot(),intendedThreads=JSON.stringify(this.settings.noteThreads),intendedLinks=JSON.stringify(this.settings.folderLinks);

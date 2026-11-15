@@ -64,15 +64,18 @@ export default class SmartSendPreparationLab extends Plugin {
           assert(!await subject.hasSmartContent(file,target,context),'Confirmed duplicate still available');
           await subject.sendChat('Prepare note',file,{threadId:'synthetic-thread',sourceContext:context});assert(dispatches===1,'Duplicate note was dispatched');
           await subject.sendChat('Selected text',file,{threadId:'synthetic-thread',sourceContext:{smartDocument:source,smartScope:[0,'Line 0'.length]}});assert(dispatches===2&&prepared.prompt==='Line 0','Explicit resend was blocked');
-          const typed=source+'\nFresh typing.';view.editor.setValue(typed);await view.save();assert(await subject.hasSmartContent(file,target,{smartDocument:typed}),'Typing did not invalidate preparation');
-          await subject.sendChat('Prepare note',file,{threadId:'synthetic-thread',sourceContext:{smartDocument:typed}});assert(dispatches===3&&prepared.prompt.trim()==='Fresh typing.','Typing was lost or old text resent');
+          const typed=source+'\nFresh typing.';view.editor.setValue(typed);await view.save();
+          const typedContext={smartDocument:typed};previousReads=reads;previousCompressions=compressions;
+          started=performance.now();assert(await subject.hasSmartContent(file,target,typedContext),'Typing did not invalidate preparation');observe('edited-cold-check',performance.now()-started);
+          for(let n=0;n<3;n++){started=performance.now();assert(await subject.hasSmartContent(file,target,typedContext),'Edited availability changed');observe('edited-warm-check',performance.now()-started);}
+          started=performance.now();await subject.sendChat('Prepare note',file,{threadId:'synthetic-thread',sourceContext:typedContext});observe('edited-send-preparation',performance.now()-started);assert(dispatches===3&&prepared.prompt.trim()==='Fresh typing.','Typing was lost or old text resent');
           const elsewhere=JSON.stringify(['synthetic-environment',project.id,'other-thread']);subject.smartKey=async()=>elsewhere;
           assert(await subject.hasSmartContent(file,{...target,threadId:'other-thread'},context),'Destination coverage leaked');
           assert(view.editor.getValue()===typed&&await this.app.vault.read(file)===typed,'Checked native output changed');
           const responseUpdate='\nAgent streamed update '+trial;view.editor.setValue(typed+responseUpdate);await view.save();
           const body=pack(responseUpdate.trim());data.bodies[body.hash]=body;data.responses={...data.responses,stream:{noteId,body:body.hash,before:'',after:'',offset:typed.length+1}};
           subject.smartKey=async()=>destination;
-          await subject.sendChat('Prepare note',file,{threadId:'synthetic-thread',sourceContext:{smartDocument:typed+responseUpdate}});
+          previousReads=reads;previousCompressions=compressions;started=performance.now();await subject.sendChat('Prepare note',file,{threadId:'synthetic-thread',sourceContext:{smartDocument:typed+responseUpdate}});observe('response-updated-send',performance.now()-started);
           assert(dispatches===4&&prepared.prompt.trim()==='Fresh typing.','Response update reused stale preparation or sent agent text');
           assert(await this.app.vault.read(file)===typed+responseUpdate,'Response update was not saved exactly');
           samples.push({observed,responseCount:responses.length,historyHeads:4,syntheticAcknowledgement:true,responseInvalidation:true,size,trial,characters:source.length,firstCheckMs,repeatChecksMs,sendPreparationMs,duplicateBlocked:true,explicitSelectionRetained:true,typingDetected:true,destinationIndependent:true,coverageIdentityRetained:true});
