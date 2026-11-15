@@ -2444,7 +2444,7 @@ export default class SendToT3 extends Plugin {
       const state={...account};
       const token=await nativeRelayAccount(state,async()=>{requestAborted(signal);if(!active())throw Error('Sign-in cancelled.');account.clientToken=state.clientToken;await this.save();},setupFetcher(nativeAccountFetch,signal));
       requestAborted(signal);if(!active())throw Error('Sign-in cancelled.');this.nativeToken=token;return token;
-    },this.connectionSetupOwner.signal).catch(async error=>{if(active()&&signInRequired(error))await this.clearAccount(true);throw error;});
+    },this.connectionSetupOwner.signal).catch(async error=>{if(active()&&signInRequired(error))await this.clearAccount(true,error);throw error;});
     this.nativeRefreshing=work;try{return await work;}finally{if(this.nativeRefreshing===work)this.nativeRefreshing=undefined;}
   }
   async sessionFor(id:string,forceRefresh=false,permissions:readonly string[]=PLUGIN_PERMISSIONS):Promise<PairedSession|undefined>{
@@ -2498,7 +2498,7 @@ export default class SendToT3 extends Plugin {
     const login=await beginLogin();if(this.stopped||generation!==this.cloudGeneration)return;
     this.cloudLogin=login;this.cloudChanged?.();this.scheduleCloudPoll();
   }
-  cancelCloudLogin(){this.connectionSetupOwner.abort();this.connectionSetupOwner=new AbortController();this.renewalPreparation=new ConnectionPreparation();this.smartRecoveryEmpty.clear();for(const entry of this.smartRecovering.values())entry.controller.abort();this.projectDiscovery?.invalidate();this.cloudGeneration++;this.refreshRun++;this.connecting=false;if(this.cloudTimer)clearTimeout(this.cloudTimer);this.cloudLogin=null;this.emailLogin=null;this.cloudChanged?.();}
+  cancelCloudLogin(reason?:unknown){this.connectionSetupOwner.abort(reason);this.connectionSetupOwner=new AbortController();this.renewalPreparation=new ConnectionPreparation();this.smartRecoveryEmpty.clear();for(const entry of this.smartRecovering.values())entry.controller.abort();this.projectDiscovery?.invalidate();this.cloudGeneration++;this.refreshRun++;this.connecting=false;if(this.cloudTimer)clearTimeout(this.cloudTimer);this.cloudLogin=null;this.emailLogin=null;this.cloudChanged?.();}
   private scheduleCloudPoll(){
     const login=this.cloudLogin;if(!login||this.stopped)return;const generation=this.cloudGeneration;
     this.cloudTimer=setTimeout(()=>{void this.pollCloudLogin(login,generation).catch(error=>logFailure('connection.account.poll',error));},Math.max(1000,login.nextPollAt-Date.now()));
@@ -2706,10 +2706,10 @@ export default class SendToT3 extends Plugin {
       return {...await remote.ensureProject(registration,newFolder),connectionId:c.id,connectionName:c.name};
     }};
   }
-  private async clearAccount(expired:boolean){
+  private async clearAccount(expired:boolean,reason?:unknown){
     this.signInEmail=this.nativeAccount?.identity??this.signInEmail;this.signInExpired=expired;
     this.noProjectProjects.clear();this.noProjectIdentities.clear();
-    this.disposeUnaryOwners();this.cancelCloudLogin();this.nativeAccount=null;this.nativeToken=undefined;this.nativeRefreshing=undefined;this.sessionRefreshing.clear();
+    this.disposeUnaryOwners();this.cancelCloudLogin(reason);this.nativeAccount=null;this.nativeToken=undefined;this.nativeRefreshing=undefined;this.sessionRefreshing.clear();
     for(const [id,s] of Object.entries(this.pairedSessions))if(s.accountId)delete this.pairedSessions[id];
     this.cloudAccount=null;this.cloudMachines=[];this.accountCandidates.clear();this.registryNextAttempt=0;this.cloudError='';this.machineErrors={};this.connectionSyncComplete=false;this.machineRefreshing=undefined;this.cloudRefreshing=undefined;
     // Clear only device credentials. Keep synced links, bindings and choices.
