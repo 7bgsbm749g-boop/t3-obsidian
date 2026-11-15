@@ -71,3 +71,13 @@ test('unload and reusing a view for another file release pending blocks',()=>{
   h.view.file={path:'Other.md'};previews.begin(h.view,5);old();assert.equal(h.count(),1);
   previews.dispose();assert.equal(h.count(),0);
 });
+
+
+test('Preparing scopes give immediate feedback without an editor and dispose exactly once',()=>{
+  const events:string[]=[],previews=new SendPreviews(()=>{events.push('preparing');return {hide:()=>events.push('hide')};});
+  const first=previews.preparing(),second=previews.preparing();assert.deepEqual(events,['preparing']);
+  first();first();assert.deepEqual(events,['preparing']);second();assert.deepEqual(events,['preparing','hide']);
+  const old=previews.preparing();previews.dispose();const next=previews.preparing();old();
+  assert.deepEqual(events,['preparing','hide','preparing','hide','preparing']);next();
+  assert.equal(events.at(-1),'hide');
+});

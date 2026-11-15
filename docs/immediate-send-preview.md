@@ -1,5 +1,11 @@
 # Immediate Send feedback
 
+After an explicit submission, Send and Ask show a temporary **Preparing send…**
+notice before destination discovery and content checks. The notice clears when
+preparation ends, fails, or is cancelled, and on plugin unload. Opening the
+first-send chooser alone does not start preparation. Machine and workspace
+choices remain explicit; the notice does not mean a message was dispatched.
+
 Send and Ask show their streaming box after the send destination is resolved,
 before smart-send preparation, images, title lookup, or dispatch. Machine and
 workspace selection show no Sending box. A send to a known previous or running
@@ -32,3 +38,10 @@ external dispatch, captures editor and Reading-view behavior, and deletes all
 fixture notes through the vault API. It does not test real provider delivery,
 Obsidian Sync propagation, or native iPhone/Android UI. QLO2 delivery separately
 requires exact installed bytes, a fresh Sync scan, and a real client reload.
+
+
+No project reuses an identity verified by T3 only while its exact connection,
+account, environment, endpoint, vault, and catalog workspace still match. A
+catalog removal or changed identity forces verification again. Ordinary named
+projects continue to resolve from the existing catalog. Reuse does not authorize
+an active turn or replace dispatch checks.

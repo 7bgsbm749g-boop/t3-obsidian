@@ -25,6 +25,8 @@ export interface ChatHost {
   onBusyChange?(listener:()=>void):()=>void;
   runDefaultSend?(send:()=>Promise<void>):Promise<void>;
   beginSend?(options:ResolvedJobOptions):()=>void;
+  /** Submission feedback; does not imply a destination or dispatch. */
+  beginPreparing?():()=>void;
   getNotePath():string;
   getProjectName(projectKey?:string):string;
   getDefaultProjectKey?():string|undefined;
@@ -189,6 +191,7 @@ class SendDestinationModal extends NoteTabPanel {
     const resolve=()=>resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},this.overrides);
     const returnToDraft=()=>this.open();
     let finishPreview:(()=>void)|undefined;
+    const finishPreparing=this.host.beginPreparing?.();
     try{
       // New destinations can still need a machine or workspace choice.
       // Their send path starts the preview once that choice is resolved.
@@ -213,7 +216,7 @@ class SendDestinationModal extends NoteTabPanel {
       logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target});
       new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`,10000);
       if(!this.opened&&!(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)))this.open();
-    }finally{finishPreview?.();this.choosing=false;this.refreshAvailability?.();}
+    }finally{finishPreview?.();finishPreparing?.();this.choosing=false;this.refreshAvailability?.();}
   }
 }
 
@@ -224,6 +227,7 @@ async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
     if(!(host.hasConfirmedNoteSend?.()??Boolean(host.getDefaultThread(key)||host.steering))){
       new SendDestinationModal(app,host,prompt).open();return;
     }
+    const finishPreparing=host.beginPreparing?.();
     const finishPreview=host.getDefaultThread(key)||host.steering?host.beginSend?.(resolveJobOptions(host.getInlineDefaults?.()??{enabled:false})):undefined;
     try{
       const options=resolveJobOptions(host.getInlineDefaults?.()??{enabled:false});
@@ -240,7 +244,7 @@ async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
         if(host.hasNewContent&&!await host.hasNewContent(destination,prompt)){new SendDestinationModal(app,host,prompt).open();return;}
       }
       await host.sendChat(prompt,key,resolve,undefined,destination);
-    }finally{finishPreview?.();}
+    }finally{finishPreview?.();finishPreparing?.();}
   };
   try{
     if(host.busy)throw new RequestDeliveryError('Another send is in progress. Wait for it to finish.',false);

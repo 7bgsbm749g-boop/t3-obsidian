@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {ensureNoProject,NO_PROJECT,noProjectKey,noProjectMachine,isNoProjectKey} from '../src/projects/no-project';
+import {verifiedNoProject,ensureNoProject,NO_PROJECT,noProjectKey,noProjectMachine,isNoProjectKey} from '../src/projects/no-project';
 import {t3Api} from '../src/connection/t3-api';
 import {readDirect,sendDirect,commandId} from '../src/connection/direct';
 import type {Request} from '../src/app/bridge';
@@ -79,4 +79,12 @@ test('authenticated No project setup and automatic naming share the native launc
   assert.equal(result.threadId,commandId(request.id,'thread'));assert.equal(launches[0].projectId,nativeProject.id);
   assert.equal(launches[0].generateTitle,true);assert.deepEqual(launches[0].workspaceStrategy,{type:'root'});
   assert.equal(launches[0].initialMessage.text,request.prompt);
+});
+
+
+test('a cached scratch identity requires the exact catalog record, never a matching title',()=>{
+  const project={id:'scratch',title:'No project',workspaceRoot:'/scratch',connectionId:'machine'};
+  assert.equal(verifiedNoProject(project,[{...project,title:'Renamed'}]),project);
+  for(const changed of [{id:'other'},{workspaceRoot:'/other'},{connectionId:'other'}])assert.equal(verifiedNoProject(project,[{...project,...changed}]),undefined);
+  assert.equal(verifiedNoProject(undefined,[project]),undefined);
 });

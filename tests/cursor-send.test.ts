@@ -26,23 +26,23 @@ async function fixture(document='First paragraph.\n\nLater paragraph.'){
   return {plugin,app,view,editor,file,exports:module.exports,value:()=>value,cursor:(offset:number)=>{cursor=offset;selection=undefined;},select:(from:number,to:number)=>{selection=[from,to];},active:(yes:boolean)=>{active=yes;},mode:(next:string)=>{mode=next;}};
 }
 
-test('whole-note Send waits for its destination before showing the indicator and clears failed preparation',async()=>{
+test('whole-note Send shows Preparing before discovery, keeps Sending after selection, and clears failure',async()=>{
   const h=await fixture(),document=h.value(),events:string[]=[];
-  h.plugin.sendPreviews={begin:()=>{events.push('show');return ()=>events.push('clear');}};
+  h.plugin.sendPreviews={preparing:()=>{events.push('preparing');return ()=>events.push('prepared');},begin:()=>{events.push('show');return ()=>events.push('clear');}};
   let resolve!:(target:any)=>void;const gate=new Promise(done=>{resolve=done;});
   h.plugin.chatTarget=async()=>{events.push('lookup');return gate;};
   h.plugin.projectReadinessError=()=>undefined;
   h.plugin.send=async()=>{events.push('send');throw Error('Synthetic preparation failure');};
   const sending=h.plugin.sendNote(h.file,undefined,undefined,true);
   assert.equal(h.value(),document);
-  await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(events,['lookup']);
+  await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(events,['preparing','lookup']);
   resolve({project:{id:'scratch'},link:{id:'no-project'}});await assert.rejects(sending,/Synthetic preparation failure/);
-  assert.deepEqual(events,['lookup','show','send','clear']);assert.equal(h.value(),document);
+  assert.deepEqual(events,['preparing','lookup','show','send','clear','prepared']);assert.equal(h.value(),document);
 });
 
 test('Inline Off does not create a preparation block',async()=>{
   const h=await fixture(),original=h.value();
-  h.plugin.sendPreviews={begin:()=>assert.fail('Disabled inline streaming must not create a preview')};
+  h.plugin.sendPreviews={preparing:()=>()=>{},begin:()=>assert.fail('Disabled inline streaming must not create a preview')};
   h.plugin.chatTarget=async()=>{throw Error('Synthetic cancellation');};
   await assert.rejects(h.plugin.sendNote(h.file,undefined,undefined,true,undefined,{inline:{enabled:false,intermediateMode:'collapse',finalAnswerFormat:'formatted'}}),/Synthetic cancellation/);
   assert.equal(h.value(),original);
@@ -199,4 +199,31 @@ for(const state of ['completed','running'])for(const cursor of [3,'First paragra
   assert.ok(at>h.value().indexOf('First paragraph.'));assert.ok(at<h.value().indexOf('Later paragraph.'));
   const once=h.value();assert.equal((await h.plugin.importRun(h.file.path,project,threadId,messageId,false,insertion)).duplicate,true);
   assert.equal(h.value(),once);assert.equal(registered.length,2);assert.equal(registered[0].id,registered[1].id);
+});
+
+
+test('verified No project reuse is exact and invalidates on removal, workspace or identity changes',async()=>{
+  const h=await fixture(),p=h.plugin;
+  const paired={id:'machine',environmentId:'env',url:'https://example.invalid',name:'Synthetic'};
+  p.settings={...p.settings,paired:[paired],directProjects:[],vaultId:'vault'};
+  let reads=0;p.readNoProjectProject=async()=>{reads++;return {id:'scratch',title:'No project',workspaceRoot:'/scratch'};};
+  const target=()=>p.noProjectTarget('thread:no-project:machine',false);
+  const first=await target();assert.equal(reads,1);assert.equal((await target()).project,first.project);assert.equal(reads,1);
+  p.settings.directProjects=[];await target();assert.equal(reads,2);
+  p.settings.directProjects[0].workspaceRoot='/changed';await target();assert.equal(reads,3);
+  paired.environmentId='different';await target();assert.equal(reads,4);
+  paired.url='https://other.invalid';await target();assert.equal(reads,5);
+  p.cloudGeneration++;await target();assert.equal(reads,6);
+  p.settings.vaultId='other';await target();assert.equal(reads,7);
+  p.nativeAccount={userId:'other-account'};await target();assert.equal(reads,8);
+  p.settings.paired=[];await assert.rejects(target(),/Reconnect/);assert.equal(reads,8);
+});
+
+test('a late No project result cannot repopulate another connection identity',async()=>{
+  const h=await fixture(),p=h.plugin;
+  p.settings={...p.settings,paired:[{id:'machine',environmentId:'env',url:'https://example.invalid'}],directProjects:[],vaultId:'vault'};
+  let release!:(value:any)=>void;p.readNoProjectProject=()=>new Promise(resolve=>{release=resolve;});
+  const pending=p.noProjectTarget('thread:no-project:machine',false);p.cloudGeneration++;
+  release({id:'scratch',title:'No project',workspaceRoot:'/scratch'});
+  await assert.rejects(pending,/connection changed/);assert.equal(p.noProjectProjects.size,0);assert.equal(p.settings.directProjects.length,0);
 });
