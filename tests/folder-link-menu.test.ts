@@ -938,10 +938,14 @@ test('historical recovery stages obsolete work, joins the send gate, and reuses 
  p.app.vault.getFileByPath=()=>({path});p.app.vault.read=async()=>document;
  p.settings.noteThreads=[{notePath:path,threadId:thread,projectId:'project',environmentId:'env',connectionId:'c',workspaceRoot:'/writing',selectedAt:new Date().toISOString()}];
  p.inlineThreadAccess=async()=>({origin:'https://fixture',api:async()=>{reads++;await new Promise<void>(resolve=>{release=resolve;});return snapshot;},close:()=>{closes++;}});
+ // The next save reads a canonical key order from disk. It must not look
+ // like changed source membership after provenance is published.
+ await p.save(true);
+ const originalFence=p.smartRecoveryFence(path);
  const recovery=p.recoverSmartReplies(path,document,true);for(let n=0;n<12;n++)await Promise.resolve();
  const sendGate=p.recoverSmartReplies(path,document);let passed=false;void sendGate.then(()=>{passed=true;});
  await Promise.resolve();assert.equal(passed,false);assert.equal(reads,1);assert.equal(Object.keys(p.smartData().responses).length,0);
- release();await Promise.all([recovery,sendGate]);assert.equal(closes,1);assert.equal(reads,1);assert.equal(Object.keys(p.smartData().responses).length,1);
+ release();await Promise.all([recovery,sendGate]);assert.equal(p.smartRecoveryFence(path),originalFence,'Settings key order is not a source change');assert.equal(closes,1);assert.equal(reads,1);assert.equal(Object.keys(p.smartData().responses).length,1);
  assert.ok(h.notices.some(text=>text.includes('Checking saved replies')));
  const plan=await prepareSmartSend(p.smartData(),path,'target',document);assert.equal(plan.text.includes('Synthetic reply'),false);assert.ok(plan.text.includes('User request'));
  const saved=JSON.parse(JSON.stringify(p.smartData()));p.smartReplica=saved;p.settings.smartSend=saved;

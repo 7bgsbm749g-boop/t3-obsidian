@@ -1134,7 +1134,7 @@ export default class SendToT3 extends Plugin {
     // Device/account changes must not inherit another session's negative proof.
     return contentHash(JSON.stringify([this.deviceId,this.settings.vaultId,this.nativeAccount?.userId,this.nativeAccount?.sessionId,this.cloudAccount?.identity,
       this.settings.paired.map(route=>[route.id,route.environmentId,route.url,route.managed,this.pairedSessions[route.id]?.accountId,this.pairedSessions[route.id]?.dpopKeyId,this.pairedSessions[route.id]?.expiresAt]),
-      responseBindingRequests(this.settings.responseBindings??{}).filter(request=>request.notePath===path),previousNoteThreads(this.settings.noteThreads,path)]));
+      responseBindingRequests(this.settings.responseBindings??{}).filter(request=>request.notePath===path),previousNoteThreads(this.settings.noteThreads,path)],(_key,value:unknown)=>isRecord(value)?Object.fromEntries(Object.entries(value).sort(([left],[right])=>left.localeCompare(right))):value));
   }
   private prepareSmartReplies(file:TFile|null){
     if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);
