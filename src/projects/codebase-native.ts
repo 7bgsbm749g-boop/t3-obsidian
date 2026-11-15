@@ -463,11 +463,16 @@ export class CodebaseBridge {
     }
     const sourceItem=this.files.get(source)??this.records.get(source),relative=projectLink(name);
     if(sourceItem?.scope.filesystem&&relative?.path&&!/^(?:\/|[a-z]:\/)/i.test(relative.path)&&!name.startsWith(CODEBASE_PREFIX)){
-      const remembered=this.choices[JSON.stringify([source,relative.path])],chosen=remembered?this.files.get(remembered)??this.records.get(remembered):undefined;
-      if(remembered)return {owned:true,items:chosen&&chosen.scope.environmentId===sourceItem.scope.environmentId&&this.allowed(chosen.scope)?[this.register(chosen.scope,chosen.path)]:[]};
-      const matches=this.candidates(relative.path,source).filter(item=>item.scope.environmentId===sourceItem.scope.environmentId);
-      const siblings=matches.filter(item=>virtualPath(item.scope,'identity')===virtualPath(sourceItem.scope,'identity'));
-      if(matches.length)return {owned:true,items:siblings.length?siblings:matches};
+      // Only a bare Markdown basename needs the registered-name fallback.
+      // Explicit filenames and paths always resolve from the source directory,
+      // even if older routing saved a same-named file in another directory.
+      if(!/[/.]/.test(relative.path)){
+        const remembered=this.choices[JSON.stringify([source,relative.path])],chosen=remembered?this.files.get(remembered)??this.records.get(remembered):undefined;
+        if(remembered)return {owned:true,items:chosen&&chosen.scope.environmentId===sourceItem.scope.environmentId&&this.allowed(chosen.scope)?[this.register(chosen.scope,chosen.path)]:[]};
+        const matches=this.candidates(relative.path,source).filter(item=>item.scope.environmentId===sourceItem.scope.environmentId&&item.file.extension==='md');
+        const siblings=matches.filter(item=>virtualPath(item.scope,'identity')===virtualPath(sourceItem.scope,'identity'));
+        if(matches.length)return {owned:true,items:siblings.length?siblings:matches};
+      }
       const reference=relativeFilesystemReference(name,sourceItem.scope,sourceItem.path);
       return {owned:true,items:reference&&this.allowed(reference.scope)?[this.register(reference.scope,reference.path)]:[] as RegisteredFile[]};
     }

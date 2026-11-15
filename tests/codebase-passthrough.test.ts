@@ -179,6 +179,41 @@ test('filesystem wiki basenames keep registered Markdown files and saved choices
   }finally{f.bridge.dispose();}
 });
 
+test('filesystem relative filenames do not select a registered file from another directory',async()=>{
+  const f=await fixture();try{
+    await f.app.workspace.openLinkText('/srv/reports/report.md','Unlinked/Note.md',false);const source=f.opened.file.path;
+    await f.app.workspace.openLinkText('/srv/archive/guide.md','Archive.md',false);const unrelated=f.opened;
+    assert.equal(f.app.metadataCache.getFirstLinkpathDest('guide.md',source)?.path,virtualPath({...unrelated.scope,root:'/srv/reports'},'guide.md'));
+    await f.app.workspace.openLinkText('guide.md',source,false);
+    assert.equal(f.opened.scope.root,'/srv/reports');assert.equal(f.opened.path,'guide.md');assert.notEqual(f.opened,unrelated);
+  }finally{f.bridge.dispose();}
+});
+
+for(const root of ['/srv','C:/Reports'])for(const link of ['guide.md','./guide.md','nested/guide.md','guide%20book.md'])test(`filesystem relative filename ${link} stays at its source directory on ${root}`,async()=>{
+  const f=await fixture();try{
+    await f.app.workspace.openLinkText(root+'/reports/report.md','Unlinked/Note.md',false);const source=f.opened.file.path;
+    const name=link.includes('%20')?'guide book.md':'guide.md';
+    await f.app.workspace.openLinkText(root+'/archive/'+name,'Archive.md',false);const unrelated=f.opened;
+    // A retained choice produced by older broad filename matching must not
+    // turn an explicit relative filename into a cross-directory shortcut.
+    f.bridge.choices[JSON.stringify([source,decodeURIComponent(link)])]=unrelated.file.path;
+    await f.app.workspace.openLinkText(link+'#Heading',source,false);
+    assert.equal(f.opened.scope.root,root+'/reports'+(link.startsWith('nested/')?'/nested':''));
+    assert.equal(f.opened.path,name);assert.equal(f.opened.scope.environmentId,'env');
+    assert.notEqual(f.opened,unrelated);assert.deepEqual(f.nativeLinks,[]);
+  }finally{f.bridge.dispose();}
+});
+
+test('filesystem relative media uses its exact directory despite a registered image basename',async()=>{
+  const f=await fixture();try{
+    await f.app.workspace.openLinkText('/srv/reports/report.md','Unlinked/Note.md',false);const source=f.opened.file.path;
+    await f.app.workspace.openLinkText('/srv/archive/chart.png','Archive.md',false);
+    let resource:any;f.io.resource=async(scope:any,path:string)=>{resource={scope,path};return {url:'https://signed.example/report-chart',expiresAt:Date.now()+300000};};
+    const image=f.image('');await f.bridge.renderMedia({querySelectorAll:(selector:string)=>selector==='img'?[image]:[]},source,()=>'chart.png');
+    assert.equal(resource.scope.root,'/srv/reports');assert.equal(resource.path,'chart.png');assert.equal(resource.scope.environmentId,'env');assert.equal(image.attrs.src,'https://signed.example/report-chart');
+  }finally{f.bridge.dispose();}
+});
+
 test('pending unscoped ownership prevents vault copies from replacing remote files and media',async()=>{
   const f=await fixture();try{
     f.physical.path='machine/scratch/chart.png';await f.bridge.discoverWorkspaces();
