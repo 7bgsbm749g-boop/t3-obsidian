@@ -1,6 +1,18 @@
-import {test} from 'node:test';
+import {test,mock} from 'node:test';
 import assert from 'node:assert/strict';
 import {clockForDocument} from '../src/shared/clock';
+
+test('clearing an unstarted browser timer does not invoke a fallback with the wrong receiver',()=>{
+  const calls:number[]=[];
+  const browser={setTimeout(){return 1;},setInterval(){return 2;},clearTimeout(id:number){assert.equal(this,browser);calls.push(id);},clearInterval(id:number){assert.equal(this,browser);calls.push(id);}};
+  const clock=clockForDocument({defaultView:browser} as unknown as Document);
+  const timeout=mock.method(globalThis,'clearTimeout',function(){throw new TypeError('Illegal invocation');});
+  const interval=mock.method(globalThis,'clearInterval',function(){throw new TypeError('Illegal invocation');});
+  try{
+    clock.clearTimeout(undefined);clock.clearInterval(undefined);assert.deepEqual(calls,[]);
+    clock.clearTimeout(1);clock.clearInterval(2);assert.deepEqual(calls,[1,2]);
+  }finally{timeout.mock.restore();interval.mock.restore();}
+});
 
 test('two windows can share timer IDs and still cancel only their own timer',()=>{
   function owner(){

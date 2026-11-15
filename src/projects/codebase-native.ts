@@ -91,7 +91,12 @@ export class CodebaseBridge {
     this.nativeSwitcher();
     this.nativeFileOpen();
     this.nativePathLinks();
-    if(this.plugin.registerEditorExtension)this.plugin.registerEditorExtension(codebaseMediaExtension(editorInfoField,(root,source,original,current)=>this.renderMedia(root,source,original,current)));
+    if(this.plugin.registerEditorExtension)this.plugin.registerEditorExtension(codebaseMediaExtension(editorInfoField,(root,source,original,current)=>this.renderMedia(root,source,original,current),(link,source,event)=>{
+      const route=this.pathRoute(link,source);
+      if(!route.owned&&(!this.absoluteReference(link)||!this.environmentIds().length))return;
+      event.preventDefault();event.stopImmediatePropagation();
+      if(event.type==='click')void this.app.workspace.openLinkText(link,source,event.ctrlKey||event.metaKey).catch(error=>new Notice(String(error),10000));
+    }));
     this.patch(vault,'getFileByPath',original=>(path:string)=>this.files.get(path)?.file??this.files.get(this.legacyPaths[path])?.file??original(path)??this.vaultAlias(path)?.file??null);
     this.patch(vault,'getAbstractFileByPath',original=>(path:string)=>this.files.get(path)?.file??this.files.get(this.legacyPaths[path])?.file??this.folders.get(path)??original(path)??this.vaultAlias(path)?.file??null);
     for(const method of ['read','cachedRead'] as const)this.patch(vault,method,original=>async(file:TFile)=>{

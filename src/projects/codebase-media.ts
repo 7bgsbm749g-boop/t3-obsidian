@@ -38,8 +38,15 @@ export function nativeMediaSource(rendered:string,vaultResourceRoot?:string):{li
 }
 
 type MediaRender=(root:HTMLElement,source:string,original:(image:Element)=>string|undefined,current:()=>boolean)=>Promise<void>;
+type FileLink=(link:string,source:string,event:MouseEvent)=>void;
+/** Native Live Preview links are spans with no href. Resolve the clicked
+ * source range rather than guessing from their display label. */
+export function originalLinkAt(line:string,offset:number){
+  if(line.length>8192)return;
+  return replyReferences(line).find(reference=>!reference.image&&offset>=reference.offset&&offset<reference.offset+reference.original.length)?.source;
+}
 /** Observe only this editor's rendered viewport; never the vault or document body. */
-export function codebaseMediaExtension(info:StateField<MarkdownFileInfo>,render:MediaRender):Extension {
+export function codebaseMediaExtension(info:StateField<MarkdownFileInfo>,render:MediaRender,fileLink?:FileLink):Extension {
   const {ViewPlugin}=cmView;
   return ViewPlugin.fromClass(class {
     private stopped=false;
@@ -47,7 +54,14 @@ export function codebaseMediaExtension(info:StateField<MarkdownFileInfo>,render:
     private rendering=false;
     private again=false;
     private observer:MutationObserver;
+    private linkEvent=(event:MouseEvent)=>{
+      if(event.button!==0||!fileLink)return;
+      const target=(event.target as Element|null)?.closest?.('.cm-link');if(!target||target.closest('.cm-hmd-internal-link'))return;
+      const source=this.view.state.field(info,false)?.file?.path;if(!source)return;
+      try{const position=this.view.posAtDOM(target),line=this.view.state.doc.lineAt(position),link=originalLinkAt(line.text,position-line.from);if(link)fileLink(link,source,event);}catch{/* A recycled editor node belongs to native handling. */}
+    };
     constructor(private view:EditorView){
+      if(fileLink){view.dom.addEventListener('mousedown',this.linkEvent,true);view.dom.addEventListener('click',this.linkEvent,true);}
       const Observer=view.dom.ownerDocument.defaultView!.MutationObserver;
       this.observer=new Observer((records=[])=>{if(!records.length||records.some(record=>record.type!=='attributes'||nativeMediaSource((record.target as Element).getAttribute('src')??'')))this.schedule();});
       this.observer.observe(view.contentDOM,{childList:true,subtree:true,attributes:true,attributeFilter:['src']});
@@ -68,6 +82,6 @@ export function codebaseMediaExtension(info:StateField<MarkdownFileInfo>,render:
         void render(this.view.contentDOM,source,original,current).catch(()=>{}).finally(()=>{this.rendering=false;if(this.again){this.again=false;this.schedule();}});
       });
     }
-    destroy(){this.stopped=true;this.observer.disconnect();}
+    destroy(){this.stopped=true;this.observer.disconnect();if(fileLink){this.view.dom.removeEventListener('mousedown',this.linkEvent,true);this.view.dom.removeEventListener('click',this.linkEvent,true);}}
   });
 }

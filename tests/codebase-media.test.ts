@@ -1,6 +1,25 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {nativeMediaSource,originalMediaSource,codebaseMediaExtension,mediaSourceCacheStatus} from '../src/projects/codebase-media';
+import {nativeMediaSource,originalMediaSource,originalLinkAt,codebaseMediaExtension,mediaSourceCacheStatus} from '../src/projects/codebase-media';
+
+test('Live Preview file links retain the exact target even when labels repeat',()=>{
+  const line='> [report](C:/Users/Public/Documents/report.md) and [report](/other/report.md)';
+  assert.equal(originalLinkAt(line,line.indexOf('report')),'C:/Users/Public/Documents/report.md');
+  assert.equal(originalLinkAt(line,line.lastIndexOf('[report]')+1),'/other/report.md');
+  assert.equal(originalLinkAt(line,0),undefined);assert.equal(originalLinkAt('![image](/image.png)',3),undefined);
+});
+
+test('native span gestures route both early mousedown and click from the editor source range',()=>{
+  const handlers=new Map<string,(event:any)=>void>(),calls:any[]=[];
+  class Observer{observe(){}disconnect(){}}
+  const line='> Created [report](C:/Users/Public/Documents/report.md).';
+  const view:any={dom:{ownerDocument:{defaultView:{MutationObserver:Observer}},addEventListener:(name:string,handler:any)=>handlers.set(name,handler),removeEventListener:(name:string)=>handlers.delete(name)},contentDOM:{},state:{field:()=>({file:{path:'Reply.md'}}),doc:{lineAt:()=>({from:20,text:line})}},posAtDOM:()=>20+line.indexOf('report')};
+  const instance=(codebaseMediaExtension({} as any,async()=>{},(link,source,event)=>{calls.push({link,source,type:event.type});event.preventDefault();}) as any).create(view);
+  const span={closest:(selector:string)=>selector==='.cm-link'?span:null};
+  for(const type of ['mousedown','click']){let prevented=false;handlers.get(type)!({type,button:0,target:span,preventDefault(){prevented=true;}});assert.equal(prevented,true);}
+  assert.deepEqual(calls.map(call=>call.type),['mousedown','click']);assert.ok(calls.every(call=>call.link==='C:/Users/Public/Documents/report.md'&&call.source==='Reply.md'));
+  handlers.get('mousedown')!({button:2,target:span});assert.equal(calls.length,2);instance.destroy();assert.equal(handlers.size,0);
+});
 
 test('native image paths resolve on desktop, iOS and Android without treating web images as local files',()=>{
   for(const value of ['app://obsidian.md/home/ubuntu/project/chart.png','capacitor://localhost/_capacitor_file_/home/ubuntu/project/chart.png','http://localhost/_app_file_/home/ubuntu/project/chart.png','https://localhost/_capacitor_file_/home/ubuntu/project/chart.png'])assert.equal(nativeMediaSource(value)?.link,'/home/ubuntu/project/chart.png');
