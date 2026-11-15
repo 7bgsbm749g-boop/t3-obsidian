@@ -431,3 +431,12 @@ test('a recovered preview defaults to full recovery and an exact live binding re
  h.item(h.snapshot());assert.equal(h.updates.at(-1)?.turnId,'turn');
  assert.deepEqual(h.streams[0].targets().messageIds,['prompt']);h.preview.dispose();
 });
+
+
+test('fresh unsent proof invalidates a history search started by an earlier recovery reader',()=>{
+ const h=fixture(false);h.preview.tick(true);const before=h.streams[0].targets().recoveryVersion;
+ h.preview.pendingSend('prompt');assert.notEqual(h.streams[0].targets().recoveryVersion,before);
+ assert.deepEqual(h.streams[0].targets().messageIds,[]);
+ const reserved=h.streams[0].targets().recoveryVersion;h.preview.pendingSend('prompt');
+ assert.equal(h.streams[0].targets().recoveryVersion,reserved,'Repeated adoption must not keep canceling a needed old read');h.preview.dispose();
+});
