@@ -180,3 +180,14 @@ test('independent history cancellation predicates are not shared across readers'
  await Promise.all([access.api('/api/orchestration/threads/thread',undefined,{continueHistory:()=>true}),access.api('/api/orchestration/threads/thread',undefined,{continueHistory:()=>false})]);
  assert.deepEqual(observed,[true,false]);h.pool.dispose();
 });
+
+test('canonical refresh keeps live history cancellation alongside its owned abort signal',async()=>{
+ const h=fixture(),paths:string[]=[];let version=0;
+ const access=async()=>({origin:'https://synthetic.invalid',api:async(path:string,_payload?:unknown,options?:any)=>{
+  paths.push(path);assert.ok(options.signal instanceof AbortSignal);
+  if(!path.includes('turnLimit=')){assert.equal(options.continueHistory(),true);version++;assert.equal(options.continueHistory(),false);}
+  return {snapshotSequence:1,page:{hasMore:true},thread:{id:'thread',projectId:'project',messages:[],activities:[]}};
+ }});
+ h.pool.forSource('stranded',true)('thread',access,{item:()=>{},reconnecting:error=>assert.fail(error.message)},undefined,()=>({messageIds:['old'],turnIds:[],recoveryVersion:String(version)}));
+ await drain();assert.equal(paths.length,2);h.pool.dispose();
+});
