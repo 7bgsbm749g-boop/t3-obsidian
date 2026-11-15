@@ -964,3 +964,35 @@ test('a note changed without an editor event refuses late historical provenance'
  current='New user draft';release();await assert.rejects(work,/note changed/);
  assert.equal(Object.keys(p.smartData().responses).length,0);assert.equal(Object.keys(p.smartData().recoveries??{}).length,0);
 });
+
+test('historical recovery discards changed ownership and source membership during an awaited canonical read',async()=>{
+ for(const change of ['account','vault','device','source','generation'] as const){
+  const h=await folderMenuHarness(),p=h.plugin,path='Fenced history.md',thread='history-thread';
+  const document=`User request\n\n<!-- send-to-t3-fold-key ${thread} -->\n\n> Synthetic reply\n`;
+  let release:()=>void=()=>{};
+  p.app.vault.getFileByPath=()=>({path});p.app.vault.read=async()=>document;
+  p.settings.noteThreads=[{notePath:path,threadId:thread,projectId:'project',environmentId:'env',connectionId:'c',workspaceRoot:'/writing',selectedAt:new Date().toISOString()}];
+  p.inlineThreadAccess=async()=>({origin:'https://fixture',api:async()=>{await new Promise<void>(resolve=>{release=resolve;});return {snapshotSequence:1,thread:{id:thread,projectId:'project',messages:[{id:'answer',role:'assistant',text:'Synthetic reply',streaming:false}]}};},close:()=>{}});
+  const work=p.recoverSmartReplies(path,document,true);for(let n=0;n<12;n++)await Promise.resolve();
+  if(change==='account')p.nativeAccount={userId:'other',sessionId:'new'};
+  if(change==='vault')p.settings.vaultId='other';
+  if(change==='device')p.deviceId='other';
+  if(change==='source')p.settings.noteThreads[0].environmentId='other';
+  if(change==='generation')p.smartPreparationSettingsRevision++;
+  release();await assert.rejects(work,/preparation changed/);
+  assert.equal(Object.keys(p.smartData().responses).length,0,change);
+  assert.equal(Object.keys(p.smartData().recoveries??{}).length,0,change);
+  p.onunload();
+ }
+});
+
+test('Stop unload cancels historical access setup and closes its late result without publishing provenance',async()=>{
+ const h=await folderMenuHarness(),p=h.plugin,path='Stopped history.md',thread='history-thread';
+ const document=`<!-- send-to-t3-fold-key ${thread} -->\n\n> Synthetic reply\n`;let release:(value:any)=>void=()=>{},closes=0,reads=0;
+ p.settings.noteThreads=[{notePath:path,threadId:thread,projectId:'project',environmentId:'env',connectionId:'c',workspaceRoot:'/writing',selectedAt:new Date().toISOString()}];
+ p.inlineThreadAccess=()=>new Promise(resolve=>{release=resolve;});
+ const work=p.recoverSmartReplies(path,document,true);for(let n=0;n<12;n++)await Promise.resolve();
+ p.onunload();await assert.rejects(work,{name:'AbortError'});
+ release({origin:'https://fixture',api:async()=>{reads++;},close:()=>{closes++;}});for(let n=0;n<12;n++)await Promise.resolve();
+ assert.equal(closes,1);assert.equal(reads,0);assert.equal(Object.keys(p.smartData().responses).length,0);
+});
