@@ -60,3 +60,12 @@ test('new footer has exactly three lines and retains ordinary user delivery inst
   assert.equal(visibleInlineInput('Example:\n\n```text'+footer+'\n```'),'Example:\n\n```text'+footer+'\n```');
   assert.equal(obsidianFooter('A\nVault: injected','Task\r.md'),'\n\nSent from Obsidian.\nVault: A Vault: injected\nNote: Task .md');
 });
+
+test('saved task-ID footers remain hidden when old messages are reopened',()=>{
+  const saved='Implement the design.'+obsidianFooter('Synthetic','Design.md')+'\nTaskflow task ID: task-one\nTaskflow task ID: task-two';
+  assert.equal(visibleInlineInput(saved),'Implement the design.');
+  assert.equal(visibleInlineInput(saved+'\n'),'Implement the design.');
+  const example='Example:\n\n```text\n'+saved+'\n```';
+  assert.equal(visibleInlineInput(example),example);
+  assert.match(saved,/Taskflow task ID: task-two$/,'presentation preserves the saved message');
+});

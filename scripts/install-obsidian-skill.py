@@ -35,6 +35,14 @@ def install(home, source=SOURCE, backups=None, check=False):
         if target.exists() and not target.is_dir():
             raise ValueError(f'Refusing an unrelated skill file: {target}')
     results = []
+    former_taskflow = source.parent / 'taskflow'
+    obsolete = [target.with_name('taskflow') for target in targets
+                if target.with_name('taskflow').is_symlink()
+                and target.with_name('taskflow').resolve() == former_taskflow.resolve()
+                and not former_taskflow.exists()]
+    if not check:
+        for target in obsolete:
+            target.unlink()
     for target in targets:
         current = target.is_symlink() and target.resolve() == source
         if not check and not current:
@@ -57,7 +65,9 @@ def install(home, source=SOURCE, backups=None, check=False):
                 temporary.unlink(missing_ok=True)
             current = True
         results.append({'path': str(target), 'current': current})
-    return {'source': str(source / 'SKILL.md'), 'sha256': digest, 'installations': results, 'ok': all(item['current'] for item in results)}
+    return {'source': str(source / 'SKILL.md'), 'sha256': digest, 'installations': results,
+            'obsoleteTaskflowLinks': [str(target) for target in obsolete] if check else [],
+            'ok': all(item['current'] for item in results) and (not check or not obsolete)}
 
 
 def main():
