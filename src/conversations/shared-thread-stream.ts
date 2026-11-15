@@ -49,7 +49,7 @@ export class SharedThreadStreams {
     const routed:ThreadAccess['api']=(path,payload,options)=>{
       // Signals remain owned by their caller. Never combine cancellable reads,
       // dispatches, decisions, tickets or credential mutations.
-      if(options?.signal||!(payload===undefined&&path.startsWith('/api/orchestration/threads/')||path==='/api/orchestration/turn-item'))return api(path,payload,options);
+      if(options?.signal||options?.continueHistory||!(payload===undefined&&path.startsWith('/api/orchestration/threads/')||path==='/api/orchestration/turn-item'))return api(path,payload,options);
       let pending=scopeKey?this.scopedReads.get(scopeKey):this.reads.get(api);
       if(!pending){pending=new Map();if(scopeKey)this.scopedReads.set(scopeKey,pending);else this.reads.set(api,pending);}
       const key=JSON.stringify([path,payload]),old=pending.get(key);if(old)return old;
@@ -170,7 +170,7 @@ export class SharedThreadStreams {
     const read=source.access().then(async access=>{
       try{
         if(controller.signal.aborted)throw Error('T3 response recovery read was cancelled.');
-        return await readInlineSnapshot({...access,api:(path,payload)=>access.api(path,payload,{signal:controller.signal})},source.threadId,undefined,()=>this.targets(source));
+        return await readInlineSnapshot({...access,api:(path,payload,options)=>access.api(path,payload,{...options,signal:controller.signal})},source.threadId,undefined,()=>this.targets(source));
       }finally{await access.close?.();}
     });
     const work=Promise.race([read,expired]).then(snapshot=>{

@@ -173,3 +173,10 @@ test('recovery bounds concurrent reads and cancels queued and late work on dispo
  h.pool.tick(true);await drain();assert.equal(h.reads(),2);h.pending[0].resolve(h.snapshot());await drain();assert.equal(h.reads(),3);
  const before=h.received.length;h.pool.dispose();for(const pending of h.pending)pending.resolve(h.snapshot(100));await drain();assert.equal(h.received.length,before);
 });
+
+test('independent history cancellation predicates are not shared across readers',async()=>{
+ const h=fixture(),observed:unknown[]=[];
+ const access=await h.pool.access(async()=>({origin:'https://synthetic.invalid',api:async(_path,_payload,options)=>{observed.push(options?.continueHistory?.());return {};}}));
+ await Promise.all([access.api('/api/orchestration/threads/thread',undefined,{continueHistory:()=>true}),access.api('/api/orchestration/threads/thread',undefined,{continueHistory:()=>false})]);
+ assert.deepEqual(observed,[true,false]);h.pool.dispose();
+});
