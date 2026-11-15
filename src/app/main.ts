@@ -2713,6 +2713,9 @@ export default class SendToT3 extends Plugin {
     for(const [id,s] of Object.entries(this.pairedSessions))if(s.accountId)delete this.pairedSessions[id];
     this.cloudAccount=null;this.cloudMachines=[];this.accountCandidates.clear();this.registryNextAttempt=0;this.cloudError='';this.machineErrors={};this.connectionSyncComplete=false;this.machineRefreshing=undefined;this.cloudRefreshing=undefined;
     // Clear only device credentials. Keep synced links, bindings and choices.
+    // Cancelled setup readers can return before persistence finishes. Publish
+    // the completed in-memory account transition before yielding to storage.
+    this.cloudChanged?.();
     await this.saveDeviceState();this.syncProjectSources();this.cloudChanged?.();
   }
   async signOutCloud(){
