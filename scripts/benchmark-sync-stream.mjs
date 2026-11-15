@@ -4,6 +4,7 @@ import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {resolve,join} from 'node:path';
 import {execFileSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
 const source=resolve(process.argv[2]??'.'),output=process.argv[3];
 if(!output)throw Error('Supply SOURCE_ROOT and an external output JSON path.');
 const scratch=await mkdtemp(join(tmpdir(),'t3-sync-benchmark-'));
@@ -19,10 +20,10 @@ import {randomUUID} from 'node:crypto';
 const drain=async()=>{for(let i=0;i<12;i++)await new Promise(r=>setImmediate(r));};
 async function recovery(foreground){
  let now=0,reads=0,last=0,starts=0;const pool=new SharedThreadStreams((_id,_a,cb)=>{if(!starts++)queueMicrotask(()=>cb.item({kind:'snapshot',snapshot:{thread:{id:'thread',projectId:'project',messages:[]},snapshotSequence:1}}));return {stop(){}};},2,()=>now);
- pool.forSource('synthetic')('thread',async()=>({origin:'https://synthetic.invalid',api:async()=>{reads++;return {thread:{id:'thread',projectId:'project',messages:[]},snapshotSequence:2};}}),{item:i=>{if(i.kind==='snapshot')last=i.snapshot.snapshotSequence;},reconnecting(){}});
+ pool.forSource('synthetic')('thread',async()=>({origin:'https://synthetic.invalid',api:async()=>{reads++;return {thread:{id:'thread',projectId:'project',messages:[]},snapshotSequence:2};}}),{item:i=>{if(i.kind==='snapshot')last=i.snapshot.snapshotSequence;},reconnecting(){}},undefined,()=>({messageIds:[],turnIds:[]}),{afterSequence:()=>last,pollSnapshots:false});
  await drain();let recoveredAt;
  for(now=foreground?2500:0;now<=60000;now+=150){pool.tick?.(foreground);await drain();if(last===2){recoveredAt=now;break;}if(foreground)break;}
- pool.dispose();return {recovered:last===2,recoveredAtSimulatedMs:recoveredAt??null,observedForSimulatedMs:foreground?2500:60000,canonicalReads:reads};
+ pool.dispose();return {recovered:last===2,recoveredAtSimulatedMs:recoveredAt??null,observedForSimulatedMs:foreground?2500:60000,canonicalReads:reads,foregroundRecoveryLatencySimulatedMs:foreground&&recoveredAt!==undefined?recoveredAt-2500:null};
 }
 async function finalSave(){
  let ready=false,now=0,writes=0,emit,records={};const id=randomUUID(),binding={version:4,localOnly:true,nativeProjection:true,responseContainer:true,initialOwner:randomUUID(),independent:true,id,vaultId:'synthetic',host:{environmentId:'env',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'},notePath:'Synthetic.md',threadId:randomUUID(),projectId:randomUUID(),messageId:randomUUID(),threadEnvironmentId:'env',initialHash:'a'.repeat(64),createdAt:'2026-11-15T00:00:00Z'};
@@ -45,5 +46,6 @@ async function smartSend(){
  const value=JSON.parse(stdout);
  try{value.sourceCommit=execFileSync('git',['rev-parse','HEAD'],{cwd:source,encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();}catch{value.sourceCommit='archived source';}
  value.measuredAt=new Date().toISOString();
- await writeFile(output,JSON.stringify(value,null,2)+'\n');console.log(JSON.stringify(value,null,2));
+ value.sourceFilesSHA256={};for(const name of ['src/conversations/shared-thread-stream.ts','src/responses/local-response-manager.ts','src/notes/smart-send.ts'])value.sourceFilesSHA256[name]=createHash('sha256').update(await readFile(join(source,name))).digest('hex');
+ await writeFile(output,JSON.stringify(value,null,2)+'\n',{flag:'wx'});console.log(JSON.stringify(value,null,2));
 }finally{await rm(scratch,{recursive:true,force:true});}

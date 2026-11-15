@@ -25,3 +25,18 @@ synthetic foreground recovery, a silent feed, a controlled busy-Sync final save,
 and repeated Smart Send preparation. Stream/save latency uses simulated time;
 Smart Send timings use the host's monotonic clock. These are reproducible
 regression measurements, not native iPhone or live network latency claims.
+
+For a disposable native desktop check, build with
+`node scripts/build-sync-stream-lab.mjs EXTERNAL_EVIDENCE [SOURCE_ROOT] [--baseline]`,
+then run `node scripts/run-sync-stream-lab.mjs EXTERNAL_EVIDENCE UNIQUE_SESSION_KEY`.
+The Linux runner needs `t3-session`, Xvfb and `/opt/Obsidian/obsidian`. It starts
+its own display, profile and synthetic vault, and refuses reuse of prior results.
+The fixture tests foreground recovery and busy-Sync final saves, injects an
+atomic-boundary note change, and checks that unsaved typing survives the retry.
+It records source hashes, screenshots and note/process cleanup. Its T3 snapshots
+and busy-Sync hint are controlled inputs; this does not test a native Sync engine.
+
+`node scripts/benchmark-settings-save.mjs SOURCE_ROOT EXTERNAL_REPORT.json` uses
+that root's existing `dist/main.js` with synthetic history and in-memory plugin
+IO/IndexedDB. It records save time, shared writes, serialized bytes and the
+production bundle hash. Build each source root before comparing its results.
