@@ -1,13 +1,48 @@
 from __future__ import annotations
 
 import json
+import errno
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from scripts import change_checks as checks
+
+
+class WindowsValidationLockTests(unittest.TestCase):
+    def test_contention_can_exceed_ten_attempts_before_success(self):
+        runtime = Mock(LK_NBLCK=2)
+        runtime.locking.side_effect = [OSError(errno.EACCES, 'busy')] * 12 + [None]
+        stream = Mock()
+        with patch.object(checks, 'msvcrt', runtime, create=True), patch.object(checks.time, 'monotonic', return_value=0), patch.object(checks.time, 'sleep') as sleep:
+            checks.windows_lock(stream)
+        self.assertEqual(runtime.locking.call_count, 13)
+        self.assertEqual(sleep.call_count, 12)
+        runtime.locking.assert_called_with(stream.fileno(), runtime.LK_NBLCK, 1)
+
+    def test_contention_has_a_deadline_and_unrelated_errors_propagate(self):
+        runtime = Mock(LK_NBLCK=2)
+        for error, expected in [(OSError(errno.EACCES, 'busy'), TimeoutError), (OSError(errno.EBADF, 'bad descriptor'), OSError)]:
+            runtime.locking.side_effect = error
+            with self.subTest(error=error), patch.object(checks, 'msvcrt', runtime, create=True), patch.object(checks.time, 'monotonic', side_effect=[0, 11]), patch.object(checks.time, 'sleep') as sleep:
+                with self.assertRaises(expected) as caught:
+                    checks.windows_lock(Mock(), timeout=10)
+                if expected is OSError:
+                    self.assertIs(caught.exception, error)
+                sleep.assert_not_called()
+
+    def test_windows_lock_releases_after_a_failing_validation(self):
+        runtime = Mock(LK_NBLCK=2, LK_UNLCK=0)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'validation.lock'
+            with patch.object(checks, 'msvcrt', runtime, create=True), patch.object(checks, 'os', SimpleNamespace(name='nt')):
+                with self.assertRaisesRegex(ValueError, 'failed check'):
+                    with checks.lock(path):
+                        raise ValueError('failed check')
+            self.assertEqual([call.args[1] for call in runtime.locking.call_args_list], [runtime.LK_NBLCK, runtime.LK_UNLCK])
 
 
 class ImpactSelectionTests(unittest.TestCase):

@@ -10,7 +10,7 @@ export function reconcileResponseDOM(current:Element,incoming:Element){
   if(current.hasAttribute('data-t3-tool-icon')&&current.getAttribute('data-t3-tool-icon')===incoming.getAttribute('data-t3-tool-icon')&&current.childNodes.length)return;
   const preserveOpen=current.tagName==='DETAILS',open=current.hasAttribute('open');
   // Client decoration must survive token patches so the animation keeps its phase.
-  const clientAttribute=(name:string,value:string)=>name==='data-t3-shine'||name==='data-t3-circle'||
+  const clientAttribute=(name:string,value:string)=>name==='data-t3-shine'||
     name==='style'&&/^\s*--send-to-t3-shine-state:\s*(running|paused);?\s*$/.test(value);
   for(const attribute of Array.from(current.attributes))if(!incoming.hasAttribute(attribute.name)&&!(preserveOpen&&attribute.name==='open')&&!clientAttribute(attribute.name,attribute.value))current.removeAttribute(attribute.name);
   for(const attribute of Array.from(incoming.attributes))if(!(preserveOpen&&attribute.name==='open')&&current.getAttribute(attribute.name)!==attribute.value)current.setAttribute(attribute.name,attribute.value);

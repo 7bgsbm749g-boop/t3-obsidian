@@ -62,6 +62,7 @@ async function folderMenuHarness(initial?:any){
     constructor(public app:any){}
     open(){modals.push(this);(this as any).onOpen?.();}
     close(){this.closed=true;(this as any).onClose?.();}
+    onClose(){}
     setPlaceholder(_value:string){return this;}
   }
   class Base {}
@@ -312,6 +313,15 @@ test('a single paired remote No project works without local CLI discovery or a c
   const reads:any[]=[];h.plugin.readNoProjectProject=async(connection:any)=>{reads.push(connection);return {id:'remote-scratch',title:'No project',workspaceRoot:'/remote-scratch'};};
   const result=await h.plugin.noProjectTarget();assert.equal(result.project.connectionId,'c');assert.equal(reads.length,1);assert.equal(reads[0].transport,'direct');assert.equal(h.modals.length,0);assert.equal(h.notices.length,notices);
   await assert.rejects(h.plugin.noProjectTarget('thread:no-project:local'),/selected local T3/);assert.equal(reads.length,1);
+  h.plugin.defaultNoProjectMachine=()=>undefined;
+  const choosing=h.plugin.noProjectTarget(),picker=h.modals.at(-1);
+  assert.equal(reads.length,1,'Opening the machine picker must not send or read a project');
+  picker.close();picker.onChooseItem(h.plugin.vaultMachines()[0]);
+  assert.equal((await choosing).project.connectionId,'c','Native close-before-choose order must retain the selected machine');
+  assert.equal(reads.length,2);
+  const cancelled=h.plugin.noProjectTarget(),rejected=assert.rejects(cancelled,/Machine selection was cancelled/);
+  h.modals.at(-1).close();await rejected;
+  assert.equal(reads.length,2,'Cancelling must not resolve a project');
  }finally{h.plugin.onunload();}
 });
 
@@ -898,5 +908,25 @@ test('a failed preparation neither stops the old stream nor confirms its added t
   assert.equal(discarded,1);assert.equal(stopped,0);assert.equal(h.document(),before);assert.equal(h.sent.length,1);
   await h.plugin.send(h.file,h.project,{throwOnError:true});
   assert.equal(h.sent.length,2);assert.equal(h.sent.at(-1).inlineSteering.jobId,h.id);assert.match(h.sent.at(-1).inlineSteering.input.text,/Second instruction/);
+ }finally{h.plugin.onunload();}
+});
+
+
+test('ordinary note send preserves YAML task IDs without a Taskflow integration',async()=>{
+ const h=await folderMenuHarness();
+ try{
+  const {file}=h.fileMenu('Notes/Associated.md',false);Object.assign(file,{basename:'Associated',stat:{ctime:123}});
+  const properties='---\ntaskflow-task-ids:\n  - 12345678-1234-4234-8234-123456789abc\naliases: [Example]\n---';
+  let document=properties+'\n\nDo the assigned work.';const sent:any[]=[];
+  h.plugin.app.vault.read=async()=>document;h.plugin.app.vault.getFileByPath=()=>file;
+  h.plugin.app.vault.process=async(_file:any,change:(text:string)=>string)=>document=change(document);
+  h.plugin.settings.autoSettleThreads=false;h.plugin.settings.inlineStreaming.enabled=false;
+  h.plugin.requestTitle=async()=> 'Associated';
+  h.plugin.dispatch=async(request:any)=>{sent.push(request);return 'associated-thread';};
+  await h.plugin.send(file,h.project,{streamReply:false,throwOnError:true});
+  assert.equal(sent.length,1);assert.ok(sent[0].prompt.startsWith(properties));
+  assert.match(sent[0].prompt,/Do the assigned work\./);
+  assert.equal(sent[0].prompt.split('12345678-1234-4234-8234-123456789abc').length-1,1);
+  assert.doesNotMatch(sent[0].prompt,/Taskflow task ID:/);
  }finally{h.plugin.onunload();}
 });

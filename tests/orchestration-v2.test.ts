@@ -207,15 +207,30 @@ test('full recovery follows opaque history cursors without advancing past concur
   assert.equal(full.thread.messages[0].id,'old-prompt');assert.ok(paths.at(-1)?.endsWith('cursor=opaque%20%2F%20cursor'));
 });
 
-test('import metadata uses all canonical run rows and exact root prompt IDs without a host history scan',async()=>{
+test('canonical recovery completes more than one hundred healthy pages and rejects a repeated cursor',async()=>{
+ let pages=0;const api=t3Api(async path=>path.includes('/bounded?')?{...snapshot(),hasMoreHistory:true,historyCursor:'page-0'}:{snapshotSequence:10,items:[],hasMoreHistory:++pages<101,nextCursor:pages<101?'page-'+pages:null},'https://fixture');
+ const result=expectSnapshot(await api('/api/orchestration/threads/thread?importRuns=true'));assert.equal(pages,101);assert.equal(result.page.hasMore,false);
+ let reads=0;const broken=t3Api(async path=>{reads++;return path.includes('/bounded?')?{...snapshot(),hasMoreHistory:true,historyCursor:'same'}:{snapshotSequence:10,items:[],hasMoreHistory:true,nextCursor:'same'};},'https://fixture');
+ await assert.rejects(broken('/api/orchestration/threads/thread?importRuns=true'),/repeated history cursor/);assert.equal(reads,2);
+});
+
+test('deduplicated message bodies restore exactly and cannot be replaced by an absent source',()=>{
+ const text='Complete canonical answer 🧠',item={id:'deduped-answer',type:'assistant_message',messageId:message.id,runId:run.id,text:'',textOmitted:true,ordinal:2,status:'completed'};
+ const raw=snapshot({messages:[{...message,text}],turnItems:[item]});
+ const restored=restoreCompactSnapshot(raw);assert.equal(restored.projection.turnItems?.[0].text,text);assert.equal((restored.projection.turnItems?.[0] as unknown as Record<string,unknown>).textOmitted,undefined);
+ assert.equal(item.text,'','the received object is not overwritten');
+ assert.throws(()=>restoreCompactSnapshot(snapshot({messages:[],turnItems:[item]})),/without its source record/);
+});
+
+test('import metadata uses regular bounded reads and never requests the full projection',async()=>{
  const calls:string[]=[],runs=Array.from({length:19},(_,n)=>({...run,id:'run-'+n,ordinal:n+1,userMessageId:'input-'+n,status:'completed',completedAt:at}));
  const messages=runs.map(r=>({...message,id:r.userMessageId,runId:r.id,text:'Prompt '+r.ordinal}));
- const api=t3Api(async path=>{calls.push(path);assert.equal(path,'/api/orchestration/threads/thread');return snapshot({runs,messages,turnItems:[{id:'huge-tool',type:'command_execution',outputOmitted:true}]});},'https://t3.example',()=>{throw Error('Import metadata must not hydrate tool output');});
+ const api=t3Api(async path=>{calls.push(path);assert.equal(path,'/api/orchestration/threads/thread/bounded?compactTurnItems=1&deferWork=1&dedupeBodies=1');return snapshot({runs,messages,turnItems:[{id:'huge-tool',type:'command_execution',outputOmitted:true}]});},'https://t3.example',()=>{throw Error('Import metadata must not hydrate tool output');});
  const result=expectSnapshot(await api('/api/orchestration/threads/thread?importRuns=true'));
  assert.equal(Object.keys(result.thread.turns).length,19);assert.equal(result.page.hasMore,false);assert.equal(result.thread.activities.length,0);
  const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:result}).state;
  for(const r of runs)assert.equal(turnForMessage(state,r.userMessageId),r.id);
- assert.deepEqual(calls,['/api/orchestration/threads/thread']);
+ assert.deepEqual(calls,['/api/orchestration/threads/thread/bounded?compactTurnItems=1&deferWork=1&dedupeBodies=1']);
 });
 
 test('selected imports reconstruct compact display items and hydrate only the exact run',async()=>{

@@ -2,8 +2,11 @@
 
 The expanded running response block offers a double-down-arrow button at its
 bottom right in Live Preview and Reading, whether follow is on or off. The
-button has its own footer space and does not cover response text or move to
-the header. Each note in a pane starts with follow off. A trusted click, Enter
+button shares the final command/thinking line, with horizontal space reserved
+so it does not cover the indicator or move to the header. Command history stays
+in place when that indicator changes between a command and Thinking. Streamed
+code, tables and unbroken tokens wrap within the box without a horizontal bar.
+Each note in a pane starts with follow off. A trusted click, Enter
 or Space on this button enables follow for its exact active fold identity. Text clicks,
 synthetic clicks, cursor proximity and arriving stream updates do not enable it.
 Source mode has no rendered block button; a mode change cancels follow.
@@ -16,8 +19,9 @@ does not pull the reader up. If the bottom is already below the visible edge
 on activation, a 420 ms trip brings it into view. Subsequent growth is followed
 as needed, using the rendered callout and the active pane's own scroller. A
 visible status bar which overlaps that block is excluded from the available
-space. A virtualized widget is revealed only when its estimated bottom
-overflows, using the minimal native scroll strategy. The button stays at
+space. A missing native widget never supplies a scroll target from its estimated
+source height. The height guard restores its viewport without scrolling; Follow
+waits for the rendered box before applying another correction. The button stays at
 the lower right, then pops and glows Obsidian purple when enabled. Resize and
 DOM observations also realign later native layout changes, such as opened tools
 and loaded images, without waiting for new response bytes. Reading measures
@@ -89,8 +93,9 @@ reader's new position supplies the next target. Normal explicit Follow requests
 still use their normal handler.
 The minimum is removed after the native block and parser
 settle. Completion, note/mode changes, viewport resize, user editing, intentional
-folding, a shorter projection and disposal clear it. A shorter projection must
-be free to remove its old height. Checks stop polling after five seconds; later DOM
+folding and disposal clear it. Shorter source bytes, such as a completed command
+status, retain protection through the redraw. Real compaction releases the old
+height when its smaller native widget and parser settle. Checks stop polling after five seconds; later DOM
 work can wake a still-virtualized guard. The floor is scoped to that pane's
 content and survives native replacement of its inline styles.
 

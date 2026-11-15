@@ -46,7 +46,9 @@ pointer/focus, an active rename and bounded final delivery. Each extra live
 operation must be verified against its saved path and lease before counting it;
 attempted GUI actions that did not take effect are not passing evidence.
 
-Release archives and settings preservation are verified by `release:qlo2`.
+The `release:qlo2` procedure described by this historical validation is retired;
+current work follows [Review and release checks](review-and-release.md).
+Historically, release archives and settings preservation used that local tool.
 Only a completed immutable smoke receipt establishes client delivery. T3's
 service switch and archived cancellation cleanup must follow this active
 turn's saved reply; the delivery worker refuses to interrupt active turns and

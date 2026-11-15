@@ -6,12 +6,15 @@ export const THREAD_REPLY_INSTRUCTION='Answer in the T3 thread.';
 
 /** Hide only the generated trailing delivery footer. Canonical messages and
  * selection receipts retain their exact bytes; old checkpoints use this same
- * presentation path after recovery. Quoted/code examples remain ordinary input. */
-export function visibleInlineInput(text:string):string {
-  const candidate=/\n\nSent from Obsidian\.\nVault: ([^\r\n]+)\nNote: ([^\r\n]+)\n?$/.exec(text);
+ * presentation path after recovery. Quoted/code examples remain ordinary input.
+ * Title seeds may strip the generated suffix even inside unfinished code. */
+export function visibleInlineInput(text:string,options:{stripFooterInsideCode?:boolean}={}):string {
+  // Older saved sends appended task IDs here. Read that format for display;
+  // current sends carry note properties without adding a task-specific suffix.
+  const candidate=/\n\nSent from Obsidian\.\nVault: ([^\r\n]+)\nNote: ([^\r\n]+)(?:\nTaskflow task ID: [\w-]{1,256})*\n?$/.exec(text);
   const clean=candidate&&!candidate.slice(1).some(value=>hasControlCharacters(value,true))?candidate:null;
   const footer=clean??/\n\nSent from Obsidian\.\nObsidian vault: ("(?:[^"\\\r\n]|\\.)*")\nDestination note path: ("(?:[^"\\\r\n]|\\.)*")\s*$/.exec(text);
-  if(!footer||!text.slice(0,footer.index).trim()||markdownCodeRanges(text).some(([from,to])=>footer.index+2>=from&&footer.index+2<to))return text;
+  if(!footer||!text.slice(0,footer.index).trim()||!options.stripFooterInsideCode&&markdownCodeRanges(text).some(([from,to])=>footer.index+2>=from&&footer.index+2<to))return text;
   if(!clean)try{JSON.parse(footer[1]);JSON.parse(footer[2]);}catch{return text;}
   // Full-note sends can already end in a newline before the footer is added.
   // Normalize that boundary before recognizing the generated instruction.

@@ -17,7 +17,7 @@ test('a completed parent stays live while waking children run and renders an act
  const state=initial(),phase=inlineQuestionPhase(state,'source');
  assert.equal(phase,'running');assert.equal(finalResponseKey(state,'source'),undefined);
  const body=renderInlineTurn(state,'source','thread',phase,'collapse');
- assert.match(body,/Research · Waiting for subagents/);assert.match(body,/Waiting for 1 subagent</);assert.match(body,/\[!t3-progress\]\+/);assert.doesNotMatch(body,/· Completed/);
+ assert.match(body,/Research · Waiting for subagents/);assert.match(body,/Waiting for 1 subagent</);assert.match(body,/\[!t3-progress\]\+/);assert.doesNotMatch(body,/· Worked for/);
  const id='a0000000-0000-4000-8000-000000000000',region=initialRegion(id),edit=replaceRegion(region.text,id,region.bodyHash,body)!,document=region.text.slice(0,edit.from)+edit.text+region.text.slice(edit.to);
  assert.deepEqual(activeInlineIds(document),[id]);
 });

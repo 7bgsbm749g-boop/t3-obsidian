@@ -9,8 +9,6 @@ import type {InlineActivity} from '../conversations/inline-thread';
 import type {ThreadAccess} from '../conversations/thread-stream';
 import {abortableRead} from '../connection/t3-api';
 
-export const QUESTION_READ_TIMEOUT_MS=8000;
-
 export interface QuestionCommand {type:'thread.user-input.respond'|'thread.user-input.dismiss';commandId:string;threadId:string;requestId:string;answers?:Record<string,string|string[]>;createdAt:string}
 export interface QuestionAnswerFollow {request:PendingQuestion;command:QuestionCommand;notePath?:string;accepted?:boolean}
 export interface QuestionRecord {target:QuestionTarget;drafts:QuestionDrafts;command?:QuestionCommand;failureIds?:string[];uncertain?:boolean;resolved?:boolean;dismissed?:boolean;answerFollow?:QuestionAnswerFollow}
@@ -95,7 +93,7 @@ export class QuestionController {
   }
   private async read(targetMap:Map<string,QuestionTarget>){
     let access:ThreadAccess|undefined;
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(Error('The question check took too long. Reconnect T3 and retry.')),QUESTION_READ_TIMEOUT_MS);
+    const controller=new AbortController();
     this.readControllers.add(controller);
     try{
       if(this.stopped)return;const first=targetMap.values().next().value!;
@@ -111,7 +109,7 @@ export class QuestionController {
       this.apply([...targetMap.values()],snapshot.thread.activities,snapshot.thread.v2Requests);
       this.checkedAt.set(sequenceKey,Date.now());
     }catch(error){if(!this.stopped)for(const target of targetMap.values()){const old=this.view(target);if(old.status==='resolved')continue;this.views.set(questionKey(target),{...old,status:'error',fresh:false,detail:error instanceof Error?error.message:'Cannot refresh T3 questions.'});}}
-    finally{clearTimeout(timer);this.readControllers.delete(controller);try{await access?.close?.();}catch(error){logFailure('question.read.close',error);}this.notify();}
+    finally{this.readControllers.delete(controller);try{await access?.close?.();}catch(error){logFailure('question.read.close',error);}this.notify();}
   }
   /** Consume the existing direct response feed; never open a second tool stream. */
   observe(environmentId:string,threadId:string,activities:InlineActivity[],sequence?:number){

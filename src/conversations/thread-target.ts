@@ -1,10 +1,10 @@
 import type {TurnStartCommand} from '../connection/send-contracts';
 import {isRecord} from '../shared/values';
 
-export interface ThreadChoice {id:string;projectId:string;title:string;updatedAt:string;status:'Active'|'Idle'}
+export interface ThreadChoice {id:string;projectId:string;title:string;updatedAt:string;status:'Active'|'Idle';branch?:string}
 export interface ThreadSummary {
   id:string;projectId:string;title?:string;updatedAt?:string;archivedAt?:string|null;deletedAt?:string|null;
-  runtimeMode?:string;interactionMode?:string;hasPendingApprovals?:boolean;hasPendingUserInput?:boolean;
+  branch?:string;runtimeMode?:string;interactionMode?:string;hasPendingApprovals?:boolean;hasPendingUserInput?:boolean;
   session?:{activeTurnId?:string|null;status?:string;runtimeMode?:string};
   latestTurn?:{turnId?:string;state?:string};
 }

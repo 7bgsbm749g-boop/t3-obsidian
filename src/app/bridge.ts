@@ -1,5 +1,4 @@
 import {isRecord} from '../shared/values';
-import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import type {SmartCapture} from '../notes/smart-send';
 import type {ResolvedJobOptions} from '../conversations/job-options';
 import type {NoteCommand} from '../notes/note-command';
@@ -17,7 +16,7 @@ export interface Project { id: string; title: string; workspaceRoot: string; con
 export function projectKey(project:Project){return project.connectionId?`${project.connectionId}:${project.id}`:project.id;}
 export function projectLabel(project:Project){return project.title+(project.connectionName?` · ${project.connectionName}`:'');}
 export interface Connection { executable: string; host: string; scriptPath?: string; transport?: 'desktop'|'https'|'direct'; url?: string; native?:boolean; baseDir?:string; stateDir?:string;connectionId?:string;environmentId?:string }
-export interface Request {smartSend?:SmartCapture;acceptedThreadId?:string;jobOptions?:ResolvedJobOptions;agentCommand?:NoteCommand; id: string; project: Project; title: string; prompt: string; connection: Connection; threadId?:string; folderLinkIntent?:FolderLink; attachments?: ImageAttachment[]; context?: ImageContext; completion?: NoteCompletion; noteThread?:Omit<NoteThread,'threadId'|'selectedAt'>;/** Legacy saved request field; only read when resuming old requests. */noteLink?:Omit<NoteThread,'threadId'|'selectedAt'>;directPlan?:DirectPlan;inlineHost?:ResponseRequest;inlineBindings?:ResponseRequest[];inlineSteering?:{jobId:string;host?:ResponseRequest['host'];input:SteeringInput;targets?:Array<{jobId:string;host?:ResponseRequest['host'];notePath:string}>};inlineFollow?:{jobId:string;host?:ResponseRequest['host'];notePath?:string;previousMessageId:string;messageId:string} }
+export interface Request {hideObsidianThread?:boolean;smartSend?:SmartCapture;acceptedThreadId?:string;jobOptions?:ResolvedJobOptions;agentCommand?:NoteCommand; id: string; project: Project; title: string; prompt: string; connection: Connection; threadId?:string; folderLinkIntent?:FolderLink; attachments?: ImageAttachment[]; context?: ImageContext; completion?: NoteCompletion; noteThread?:Omit<NoteThread,'threadId'|'selectedAt'>;/** Legacy saved request field; only read when resuming old requests. */noteLink?:Omit<NoteThread,'threadId'|'selectedAt'>;directPlan?:DirectPlan;inlineHost?:ResponseRequest;inlineBindings?:ResponseRequest[];inlineSteering?:{jobId:string;host?:ResponseRequest['host'];input:SteeringInput;targets?:Array<{jobId:string;host?:ResponseRequest['host'];notePath:string}>};inlineFollow?:{jobId:string;host?:ResponseRequest['host'];notePath?:string;previousMessageId:string;messageId:string} }
 /** A receipt/started plan proves acceptance even if a later local save fails. */
 export function acceptedRequestThread(request?:Request):string|undefined{return request?.acceptedThreadId??(request?.directPlan?.phase==='started'?request.directPlan.turn.threadId:undefined);}
 export class RequestDeliveryError extends Error {
@@ -31,17 +30,12 @@ export function parseProjects(value: unknown): Project[] {
     ids.add(p.id); return {id:p.id,title:p.title,workspaceRoot:p.workspaceRoot};
   });
 }
-interface Runtime {mobile:boolean;access?:(environmentId:string)=>Promise<ThreadAccess>;pairedSession?:(id:string)=>PairedSession|undefined|Promise<PairedSession|undefined>;saveRequest?:(request:Request)=>Promise<void>}
+interface Runtime {beforeThreadCreate?:(request:Request)=>void|Promise<void>;mobile:boolean;access?:(environmentId:string)=>Promise<ThreadAccess>;pairedSession?:(id:string)=>PairedSession|undefined|Promise<PairedSession|undefined>;saveRequest?:(request:Request)=>Promise<void>}
 let runtime:Runtime|undefined;
 export function configureBridge(value:Runtime) {runtime=value;}
 // The retired value remains readable only to reject old persisted work safely.
 export function retiredConnection(c:Connection){return c.transport!=='direct';}
 export const RETIRED_MESSAGE='The old companion mode was removed. Check this request in T3 before sending again through Direct T3 pairing; it may already have started. The note is kept.';
-export async function withTimeout<T>(promise:Promise<T>, milliseconds:number):Promise<T> {
-  let timer:ReturnType<typeof setTimeout>|undefined;
-  try{return await Promise.race([promise,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('Request timed out. Retry the saved request with its original ID.')),milliseconds);})]);}
-  finally{clearTimeout(timer);}
-}
 export async function runBridge(connection:Connection,args:string[],input='',options:DirectReadOptions={}):Promise<unknown> {
   const operation=args[0],started=Date.now();logEvent('transport.operation.started',{operation,control:options.control,transport:connection.transport??'desktop',environmentId:connection.environmentId});
   try{
@@ -58,7 +52,7 @@ export async function sendRequest(request: Request) {
   if(request.connection.transport==='direct'){
     if(!runtime?.saveRequest)throw Error('Direct request storage is unavailable.');
     const access=request.connection.environmentId&&runtime.access?await runtime.access(request.connection.environmentId):undefined;
-    try{return await sendDirect(request,access?undefined:await runtime.pairedSession?.(request.connection.connectionId??''),()=>runtime!.saveRequest!(request),undefined,access);}finally{await access?.close?.();}
+    try{return await sendDirect(request,access?undefined:await runtime.pairedSession?.(request.connection.connectionId??''),()=>runtime!.saveRequest!(request),undefined,access,request.hideObsidianThread?()=>runtime!.beforeThreadCreate?.(request):undefined);}finally{await access?.close?.();}
   }
   throw Error('Reconnect this request through T3 Connect before sending.');
 }

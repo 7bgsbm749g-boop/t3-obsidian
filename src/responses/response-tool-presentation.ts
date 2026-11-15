@@ -47,7 +47,9 @@ function groupAt(text:string,from:number,placeholder=false){
    if(stack.length===2&&stack[1]==='div'&&!placeholder){
     const tool=tag.attrs.class==='send-to-t3-tool'&&!!tag.attrs['data-t3-tool-id']&&!!tag.attrs['data-t3-tool-status'];
     const thought=tag.attrs.class==='send-to-t3-thought';
-    if(tag.name!=='details'||!tag.attrs['data-t3-tool-key']||!tool&&!thought)return;tools++;
+    // Accept legacy tool disclosures for exact saved-note recovery as well as
+    // current flat rows. Canonical history is never rewritten on read.
+    if(!((tool||thought)&&(tag.name==='div'||tag.name==='details'))||!tag.attrs['data-t3-tool-key'])return;tools++;
    }
    if(!voidTags.has(tag.name))stack.push(tag.name);
   }

@@ -1,4 +1,4 @@
-"""Machine-local deployment settings shared by this repository's worktrees."""
+"""Machine-local validation settings shared by this repository's worktrees."""
 from __future__ import annotations
 import argparse
 import json
@@ -28,35 +28,31 @@ def canonical_root(root: Path = ROOT) -> Path:
     return Path(configuration(root)['canonicalRoot']).expanduser().resolve()
 
 
+def linked_worktrees(root: Path = ROOT) -> list[Path]:
+    """Read every linked checkout, with paths left unquoted by Git."""
+    output = subprocess.check_output(['git', 'worktree', 'list', '--porcelain', '-z'],
+                                     cwd=root, timeout=10)
+    paths = [Path(os.fsdecode(field[len(b'worktree '):])).resolve()
+             for field in output.split(b'\0') if field.startswith(b'worktree ')]
+    if not paths:
+        raise ValueError('Could not enumerate source checkouts for the evidence guard.')
+    return paths
+
+
 def evidence_root(root: Path = ROOT) -> Path:
-    """Use the maintainer's external store, with a legacy contributor fallback."""
+    """Resolve an external evidence store before any validation writes."""
     value = configuration(root)
-    path = value.get('evidenceRoot') or str(canonical_root(root) / 'evidence')
+    path = value.get('evidenceRoot') or Path.home() / '.local/state/t3-obsidian/evidence'
     directory = Path(path).expanduser()
-    if value.get('evidenceRoot') and (not directory.is_absolute() or directory.resolve().is_relative_to(canonical_root(root)) or directory.resolve().is_relative_to(root.resolve())):
+    canonical = Path(value['canonicalRoot']).expanduser().resolve()
+    if not directory.is_absolute() or directory.resolve().is_relative_to(canonical) or directory.resolve().is_relative_to(root.resolve()):
         raise ValueError('Configure an absolute evidenceRoot outside source checkouts.')
     for name in ('developmentPlugins', 'productionPlugins'):
         if value.get(name) and directory.resolve().is_relative_to(Path(value[name]).expanduser().resolve().parent.parent):
             raise ValueError('Configure evidenceRoot outside synced vaults.')
+    if any(directory.resolve().is_relative_to(checkout) for checkout in linked_worktrees(root)):
+        raise ValueError('Configure an absolute evidenceRoot outside source checkouts.')
     return directory.resolve()
-
-
-def path_setting(name: str, default: Path, root: Path = ROOT) -> Path:
-    return Path(configuration(root).get(name, str(default))).expanduser()
-
-
-def setting(name: str, default: str, root: Path = ROOT) -> str:
-    value = configuration(root).get(name, default)
-    if not isinstance(value, str) or not value:
-        raise ValueError(f'Invalid maintainer setting: {name}')
-    return value
-
-
-def require_deployment(root: Path = ROOT) -> None:
-    value = configuration(root)
-    missing = [name for name in ('developmentPlugins', 'productionPlugins', 'syncService', 'obsidianCli') if not value.get(name)]
-    if missing:
-        raise SystemExit('Configure local deployment before publication: ' + ', '.join(missing))
 
 
 def main() -> None:

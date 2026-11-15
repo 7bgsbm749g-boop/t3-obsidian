@@ -76,3 +76,12 @@ test('terminal rendering and Stop freeze stage clocks and remove all live animat
  assert.match(stopped,/data-t3-setup-end=/);assert.equal(stoppedResponseBody('```html\n'+live+'\n```'),'```html\n'+live+'\n```');
  assert.doesNotMatch(renderWorktreeSetup(activity,running,false),/data-worktree-setup-status="running"|inline-spinner/);
 });
+
+test('running and pending setup stages use no circular loading icons',()=>{
+ const activity=snapshot().thread.activities.find(a=>a.kind==='response.worktree-setup')!;
+ const running={...completedSetup,phase:'running' as const,endedAt:null,stages:completedSetup.stages.map((stage,index)=>({...stage,status:index===0?'running' as const:'pending' as const,endedAt:null}))};
+ const body=renderWorktreeSetup(activity,running,true);
+ assert.match(body,/data-worktree-setup-status="running"/);
+ assert.match(body,/inline-spinner/,'Canonical loading identities remain available to Stop');
+ assert.doesNotMatch(body,/data-t3-tool-icon="circle"/);
+});

@@ -3,15 +3,15 @@ import {jsonClone} from '../shared/values';
 export type LogLevel='info'|'warning'|'error';
 export interface DiagnosticEvent {at:string;sequence:number;sessionId:string;deviceId:string;event:string;level:LogLevel;fields:Record<string,unknown>}
 export interface DiagnosticState {schema:1;events:DiagnosticEvent[]}
-export type DiagnosticCategory='connection'|'follow'|'response';
-export interface DiagnosticPreferences {connection:boolean;follow:boolean;response:boolean}
-export function diagnosticPreferences(value:unknown):DiagnosticPreferences {return {connection:isRecord(value)&&value.connection===true,follow:isRecord(value)&&value.follow===true,response:isRecord(value)&&value.response===true};}
+export type DiagnosticCategory='connection'|'follow'|'response'|'memory';
+export interface DiagnosticPreferences {connection:boolean;follow:boolean;response:boolean;memory:boolean}
+export function diagnosticPreferences(value:unknown):DiagnosticPreferences {return {connection:isRecord(value)&&value.connection===true,follow:isRecord(value)&&value.follow===true,response:isRecord(value)&&value.response===true,memory:isRecord(value)&&value.memory===true};}
 const connectionEvents=new Set(['stream.connecting','stream.connected','stream.reconnecting','stream.closed','stream.stopped','stream.recovered','stream.poll.failed','stream.poll.recovered','stream.direct.reconnecting','stream.direct.recovered','stream.direct.interruption-verification','stream.direct.completion-verification','stream.direct.reset','connection.client-state','connection.auth.renewing','connection.auth.recovered','connection.auth.failed']);
-export function diagnosticCategory(event:string):DiagnosticCategory|undefined {return connectionEvents.has(event)?'connection':event==='response.follow.changed'?'follow':/^(?:response\.(?:source|recovery|lifecycle|save|render)\.|note\.save\.)/.test(event)?'response':undefined;}
+export function diagnosticCategory(event:string):DiagnosticCategory|undefined {return event==='memory.streaming'?'memory':connectionEvents.has(event)?'connection':event==='response.follow.changed'?'follow':/^(?:response\.(?:source|recovery|lifecycle|save|render|send)\.|note\.save\.)/.test(event)?'response':undefined;}
 export interface DiagnosticPolicy {accept?:(event:string)=>boolean;retain?:(event:string)=>boolean;maxEvents?:number;maxBytes?:number;retentionMs?:number;persistOnRecord?:boolean}
 export const connectionDiagnosticPolicy={maxEvents:512,maxBytes:256_000,retentionMs:7*24*60*60_000,persistOnRecord:true};
 export interface DiagnosticExport extends DiagnosticState {exportedAt:string;context:unknown;storageError:string;enabled?:DiagnosticPreferences}
-export interface DiagnosticIO {load():Promise<unknown>;save(state:DiagnosticState):Promise<void>;publish?(events:DiagnosticEvent[]):Promise<void>;readSynced?():Promise<DiagnosticEvent[]>;now?:()=>number;id:()=>string;context:Record<string,unknown>}
+export interface DiagnosticIO {retain?:(event:DiagnosticEvent)=>void;load():Promise<unknown>;save(state:DiagnosticState):Promise<void>;publish?(events:DiagnosticEvent[]):Promise<void>;readSynced?():Promise<DiagnosticEvent[]>;now?:()=>number;id:()=>string;context:Record<string,unknown>}
 const MAX_EVENTS=10_000,MAX_BYTES=8_000_000;
 const sensitive=/^(prompt|text|content|body|before|after|selection|attachments|context|credentials?|password|secret|token|authorization|cookie|session|ticket|code|url|connection|account|key|draft)$/i;
 export function redact(value:unknown,depth=0):unknown {
@@ -44,13 +44,14 @@ export class EventJournal {
       if(value?.schema===1&&Array.isArray(value.events)&&value.events.every(validEvent)){
         // Migrate the old timeline without restoring incidents, attempts or watchdogs.
         this.state={schema:1,events:value.events.slice(-(this.policy.maxEvents??MAX_EVENTS)).filter(event=>this.policy.retain?.(event.event)??true).map(event=>({...event,fields:redact(event.fields) as Record<string,unknown>,deviceId:event.deviceId??String(this.io.context.deviceId)}))};
+        for(const event of this.state.events)this.io.retain?.(event);
         this.bytes=this.state.events.reduce((sum,event)=>sum+this.size(event),0);this.trim();this.dirty=true;
       }
     }catch(error){this.storageError=JSON.stringify(redact(error));}
   }
   record(event:string,fields:Record<string,unknown>={},level:LogLevel='info'):DiagnosticEvent {
     const entry:DiagnosticEvent={at:new Date(this.now()).toISOString(),sequence:++this.sequence,sessionId:this.sessionId,deviceId:String(this.io.context.deviceId),event,level,fields:redact({pluginVersion:this.io.context.pluginVersion,monotonicMs:typeof performance==='undefined'?undefined:performance.now(),...fields}) as Record<string,unknown>};
-    if(this.accepts(event)){this.state.events.push(entry);this.bytes+=this.size(entry);this.dirty=true;this.trim();if(level==='error'||this.policy.persistOnRecord){this.persistSequence=entry.sequence;this.persistRecords();}}return entry;
+    if(this.accepts(event)){this.io.retain?.(entry);this.state.events.push(entry);this.bytes+=this.size(entry);this.dirty=true;this.trim();if(level==='error'||this.policy.persistOnRecord){this.persistSequence=entry.sequence;this.persistRecords();}}return entry;
   }
   private persistRecords(){
     if(this.urgent)return;

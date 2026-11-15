@@ -25,8 +25,10 @@ Feedback and duplicate-click locking happen before asynchronous work. Commands
 are persisted before dispatch, retain exact IDs and bytes on uncertainty, and
 close the panel only after explicit resolution. Explicit runtime request state
 can resolve an old question whose timeline control is outside the bounded
-window; an absent control alone never proves resolution. Reads have an eight
-second deadline, ignore stale sequences, and stop when the controller disposes.
+window; an absent control alone never proves resolution. Reads accept late
+results, ignore stale sequences, and stop when the controller disposes. Elapsed
+time alone does not reject an action. Explicit cancellation and connection
+errors still apply.
 
 Question widgets, open forms, and pending saved commands retain monitored
 targets independently of note disk contents. Existing direct response feeds

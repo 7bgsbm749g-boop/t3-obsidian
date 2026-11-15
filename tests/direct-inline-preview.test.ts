@@ -35,7 +35,84 @@ const completeV2=(h:ReturnType<typeof fixture>,sequence=2,text='Final reply')=>{
  thread.latestTurn={turnId:'turn',state:'completed',messageId:'prompt',assistantMessageId:'answer',completedAt:'2026-10-06T03:02:00.000Z'};thread.turns={turn:thread.latestTurn};thread.session={status:'ready',activeTurnId:null};return value;
 };
 const finalItem=(text='Final reply')=>({id:'opaque-item',threadId:'thread',runId:'turn',messageId:'answer',type:'assistant_message',text,streaming:false,status:'completed',updatedAt:'2026-10-06T03:01:00.000Z'});
+const importedRun=()=>({thread:{id:'thread',projectId:'project',title:'Selected old run'},runs:[{id:'turn',ordinal:1,userMessageId:'prompt',status:'completed',requestedAt:'2026-10-06T03:00:00Z',completedAt:'2026-10-06T03:02:00Z'}],messages:[{id:'prompt',runId:'turn',role:'user',text:'Selected prompt',streaming:false,createdAt:'2026-10-06T03:00:00Z'},{id:'answer',runId:'turn',role:'assistant',text:'Final reply',streaming:false,createdAt:'2026-10-06T03:01:00Z'}],turnItems:[{...finalItem(),ordinal:2}]});
+const stockImported=(hasMoreHistory=false)=>({snapshotSequence:8,hasMoreHistory,projection:importedRun()});
+
+test('a historical import verifies the exact final item when its old run timestamp is outside the bounded run table',async()=>{
+ const snapshot=stockImported(),p=snapshot.projection;delete (p.runs[0] as {completedAt?:string}).completedAt;
+ p.runs.push({id:'newer',ordinal:2,userMessageId:'later',status:'completed',requestedAt:'2026-10-06T04:00:00Z',completedAt:'2026-10-06T04:01:00Z'});
+ p.messages.push({id:'later',runId:'newer',role:'user',text:'Later prompt',streaming:false,createdAt:'2026-10-06T04:00:00Z'});
+ let verifications=0;const h=fixture(false,async path=>{if(path.startsWith('/api/orchestration/threads/thread?'))return snapshot;assert.equal(path,'/api/orchestration/turn-item');verifications++;return finalItem();});
+ h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed'};
+ h.preview.tick(true);await settle();assert.equal(verifications,1);assert.equal(h.updates.at(-1)?.completionVerified,true);assert.equal(h.streams.length,0);h.preview.dispose();
+});
+
+test('a completed import reads and verifies only the selected canonical run without a later-thread snapshot',async()=>{
+ const paths:string[]=[];const h=fixture(false,async path=>{paths.push(path);if(path.startsWith('/api/orchestration/threads/thread?'))return stockImported();assert.equal(path,'/api/orchestration/turn-item');return finalItem();});
+ h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed',requestedAt:'2026-10-06T03:00:00Z'};
+ h.preview.tick(true);await settle();assert.equal(h.streams.length,0);assert.ok(paths[0].includes('importRuns=true'));assert.equal(h.updates.at(-1)?.completionVerified,true);assert.match(h.updates.at(-1)!.body,/Final reply/);assert.equal(h.updates.at(-1)!.turnId,'turn');h.preview.dispose();
+});
+test('a completed import displays its complete answer while tool history loads and verifies only after that history arrives',async()=>{
+ let release!:(value:unknown)=>void;let verifications=0;const h=fixture(false,async path=>{
+  if(path.includes('importRuns=true'))return stockImported(true);
+  if(path.includes('importRunId=turn'))return new Promise(resolve=>{release=resolve;});
+  assert.equal(path,'/api/orchestration/turn-item');verifications++;return finalItem();
+ });h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed'};
+ h.preview.tick(true);await settle();assert.match(h.updates.at(-1)!.body,/Final reply/);assert.equal(h.updates.at(-1)!.completionVerified,false);assert.equal(verifications,0);
+ release(stockImported());await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(verifications,1);assert.equal(h.streams.length,0);h.preview.dispose();
+});
+test('the registration snapshot displays an exact selected answer without downloading its conversation again',async()=>{
+ let release!:(value:unknown)=>void;const paths:string[]=[];const h=fixture(false,async path=>{
+  paths.push(path);if(path.includes('importRunId=turn'))return new Promise(resolve=>{release=resolve;});
+  assert.equal(path,'/api/orchestration/turn-item');return finalItem();
+ });h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed'};
+ h.preview.seedImport(readThreadSnapshot(normalizeV2Snapshot({snapshotSequence:8,hasMoreHistory:true,projection:importedRun()})));
+ h.preview.tick(true);await settle();assert.match(h.updates.at(-1)!.body,/Final reply/);assert.equal(h.updates.at(-1)!.completionVerified,false);assert.equal(paths.length,1);assert.ok(!paths[0].includes('importRuns=true'));
+ release(stockImported());await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(h.streams.length,0);h.preview.dispose();
+});
+test('a registration snapshot from another thread cannot replace the selected import',async()=>{
+ const paths:string[]=[];const h=fixture(false,async path=>{paths.push(path);return path.startsWith('/api/orchestration/threads/thread?')?stockImported():finalItem();});
+ h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed'};
+ const snapshot=readThreadSnapshot(normalizeV2Snapshot({snapshotSequence:8,projection:importedRun()}));snapshot.thread.id='other';
+ h.preview.seedImport(snapshot);h.preview.tick(true);await settle();assert.ok(paths[0].includes('importRuns=true'));assert.match(h.updates.at(-1)!.body,/Final reply/);h.preview.dispose();
+});
+test('a failed selected history read retries the selected run without adopting the general thread',async()=>{
+ let failures=1;const paths:string[]=[];const h=fixture(false,async path=>{
+  paths.push(path);if(path.includes('importRuns=true'))return stockImported(true);
+  if(path.includes('importRunId=turn')){if(failures-->0)throw Error('Temporary connection loss');return stockImported();}
+  assert.equal(path,'/api/orchestration/turn-item');return finalItem();
+ });h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed'};
+ h.preview.tick(true);await settle();assert.equal(h.updates.at(-1)!.completionVerified,false);
+ h.preview.tick(true);await settle();assert.equal(h.streams.length,0);assert.equal(paths.length,2);
+ h.clock.advance(1000);h.preview.tick(true);await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(h.streams.length,0);assert.equal(paths.filter(path=>path.includes('importRuns=true')).length,2);h.preview.dispose();
+});
+test('stopping a completed import ignores a selected-run read that resolves later',async()=>{
+ let release!:(value:unknown)=>void;const h=fixture(false,async()=>new Promise(resolve=>{release=resolve;}));h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed'};
+ h.preview.tick(true);await settle();h.preview.dispose();release(stockImported());await settle();assert.deepEqual(h.updates,[]);assert.equal(h.streams.length,0);
+});
 const settle=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
+
+test('live thread renames survive completion and a later stream adopts the current T3 title',async()=>{
+ const h=fixture(true,async()=>finalItem());h.record.request.localOnly=true;h.record.request.threadTitle='Original title';h.record.request.intermediateMode='collapse';
+ try{
+  h.preview.tick(true);h.item(h.snapshot());
+  h.item({kind:'event',event:{sequence:3,type:'thread.metadata-updated',payload:{title:'Renamed in T3'}}});
+  assert.match(h.updates.at(-1)!.body,/Renamed in T3 · Working/);
+  const completed=completeV2(h,4);completed.snapshot!.thread.title='Renamed in T3';h.item(completed);await settle();
+  const saved=h.updates.at(-1)!;assert.equal(saved.completionVerified,true);assert.match(saved.body,/Renamed in T3 · Worked for/);assert.doesNotMatch(saved.body,/Original title/);
+  h.preview.dispose();
+  const count=h.updates.length;
+  h.item({kind:'event',event:{sequence:5,type:'thread.metadata-updated',payload:{title:'Later name'}}});assert.equal(h.updates.length,count);
+  const next=fixture(true,async()=>finalItem());next.record.request.localOnly=true;next.record.request.threadTitle='Original title';next.record.request.intermediateMode='collapse';
+  try{
+   next.preview.tick(true);const snapshot=next.snapshot();assert.ok(snapshot.kind==='snapshot');snapshot.snapshot!.thread.title='Later name';next.item(snapshot);
+   assert.match(next.updates.at(-1)!.body,/Later name · Working/);
+   const completed=completeV2(next,3);completed.snapshot!.thread.title='Later name';next.item(completed);await settle();
+   assert.match(next.updates.at(-1)!.body,/Later name · Worked for/);assert.equal(next.updates.at(-1)!.completionVerified,true);
+   assert.match(saved.body,/Renamed in T3 · Worked for/);
+  }finally{next.preview.dispose();}
+ }finally{h.preview.dispose();}
+});
 
 const recoverySnapshot=(sequence:number,status='running',withInput=true):ThreadStreamItem=>({kind:'snapshot',snapshot:readThreadSnapshot(normalizeV2Snapshot({snapshotSequence:sequence,projection:{thread:{id:'thread',projectId:'project'},runtimeRequests:[],runs:[
  {id:'turn',ordinal:1,userMessageId:'prompt',status:'failed',requestedAt:'2026-10-06T03:00:00Z',completedAt:'2026-10-06T03:01:00Z'},
@@ -84,7 +161,7 @@ test('the live preview keeps public thoughts from snapshots and updates outside 
  initial.snapshot.thread.messages.push({id:'reasoning:one',role:'reasoning',turnId:'turn',text:'**First public summary**',streaming:false,createdAt:'2026-10-06T03:00:01Z'});
  h.item(initial);assert.match(h.updates.at(-1)!.body,/class="send-to-t3-thought"/);
  h.item(normalizeV2StreamItem({kind:'event',sequence:3,event:{type:'turn-item.updated',payload:{id:'two',runId:'turn',type:'reasoning',ordinal:2,text:'**Second public summary**',streaming:true,startedAt:'2026-10-06T03:00:02Z'}}}));h.clock.advance(80);
- assert.match(h.updates.at(-1)!.body,/2 thoughts/);assert.match(h.updates.at(-1)!.body,/First public summary[\s\S]*Second public summary/);
+ assert.match(h.updates.at(-1)!.body,/Thought \(×2\)/);assert.match(h.updates.at(-1)!.body,/First public summary[\s\S]*Second public summary/);
  h.item(normalizeV2StreamItem({kind:'event',sequence:4,event:{type:'turn-item.updated',payload:{id:'other',runId:'unrelated',type:'reasoning',text:'Unrelated summary',streaming:false}}}));h.clock.advance(80);
  assert.doesNotMatch(h.updates.at(-1)!.body,/Unrelated summary/);assert.equal(h.updates.at(-1)!.phase,'running');assert.equal(h.updates.at(-1)!.completionVerified,false);h.preview.dispose();
 });
@@ -118,8 +195,9 @@ test('a real handoff chain keeps one response and verifies only the final replac
 
 test('a genuine interruption finalizes after canonical confirmation even when an unrelated run is active',async()=>{
  const canonical=readThreadSnapshot(normalizeV2Snapshot(handoffProjection({runs:[handoffSource,{id:'unrelated',ordinal:2,status:'running',userMessageId:'other'}],messages:[{id:'prompt',role:'user',runId:'source',text:'Question',streaming:false}],turnItems:[]})));
- const h=fixture(false,async()=>canonical);h.record.request.localOnly=true;h.preview.tick(true);h.item({kind:'snapshot',snapshot:canonical});
- assert.equal(h.updates.at(-1)!.completionVerified,false);await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(h.updates.at(-1)!.phase,'interrupted');assert.equal(h.updates.at(-1)!.turnId,'source');h.preview.dispose();
+ canonical.thread.title='Renamed before stop';
+ const h=fixture(false,async()=>canonical);h.record.request.localOnly=true;h.record.request.threadTitle='Original title';h.preview.tick(true);h.item({kind:'snapshot',snapshot:canonical});
+ assert.equal(h.updates.at(-1)!.completionVerified,false);await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(h.updates.at(-1)!.phase,'interrupted');assert.equal(h.updates.at(-1)!.turnId,'source');assert.match(h.updates.at(-1)!.body,/Renamed before stop/);assert.doesNotMatch(h.updates.at(-1)!.body,/Original title/);h.preview.dispose();
 });
 test('a local reply follows two exact delegated deliveries and verifies only the last parent result',async()=>{
  const reads:string[]=[],h=fixture(false,async(_path,payload)=>{reads.push(payload.itemId);return {...finalItem('Combined report'),id:'final-item',runId:'resume-two',messageId:'combined'};});
@@ -150,7 +228,7 @@ test('a local reply follows two exact delegated deliveries and verifies only the
  event('subagent.updated',{...child('two'),status:'completed',completionDelivery:{state:'acknowledged',observedByRunId:'resume-two'}});
  event('turn-item.updated',{id:'final-item',messageId:'combined',threadId:'thread',runId:'resume-two',type:'assistant_message',status:'completed',text:'Combined report',streaming:false,updatedAt:'2026-10-06T03:01:00.000Z'});
  event('run.updated',{...resume('resume-two',4,'delivery-two'),status:'completed',completedAt:'2026-10-06T03:05:00Z'});await settle();
- const update=h.updates.at(-1)!;assert.equal(update.turnId,'resume-two');assert.equal(update.phase,'complete');assert.equal(update.completionVerified,true,JSON.stringify({reads,checkpoint:update.checkpoint,body:update.body}));assert.deepEqual(update.turnIds,['turn','resume-one','resume-two']);assert.deepEqual(reads,['final-item']);assert.match(update.body,/· Completed/);assert.match(update.body,/Combined report/);assert.doesNotMatch(update.body,/Waiting for subagents|Unrelated answer/);
+ const update=h.updates.at(-1)!;assert.equal(update.turnId,'resume-two');assert.equal(update.phase,'complete');assert.equal(update.completionVerified,true,JSON.stringify({reads,checkpoint:update.checkpoint,body:update.body}));assert.deepEqual(update.turnIds,['turn','resume-one','resume-two']);assert.deepEqual(reads,['final-item']);assert.match(update.body,/· Worked for/);assert.match(update.body,/Combined report/);assert.doesNotMatch(update.body,/Waiting for subagents|Unrelated answer/);
  h.preview.dispose();
 });
 test('a local source awaiting final save follows its exact late question answer in the same response',async()=>{
@@ -206,15 +284,15 @@ test('a v2 item verification arriving after suspension cannot finish the respons
  let release!:(value:any)=>void;const h=fixture(false,()=>new Promise(resolve=>{release=resolve;}));h.record.request.deviceCompletion={version:1,actor:randomUUID(),originalHash:'0'.repeat(64)};h.preview.tick(true);h.item(completeV2(h));await settle();const count=h.updates.length;h.preview.tick(false);release(finalItem());await settle();assert.equal(h.updates.length,count);h.preview.dispose();
 });
 
-test('final verification releases access on success, failure, timeout, suspension, and late access',async()=>{
- for(const outcome of ['success','failure','timeout','suspend','late']){
-  const h=fixture(false);h.record.request.localOnly=true;let closes=0,reads=0,resolveAccess!:(access:any)=>void;
-  const access={origin:'https://fixture',api:async()=>{reads++;if(outcome==='failure')throw Error('Synthetic verification failure');if(['timeout','suspend'].includes(outcome))return new Promise(()=>{});return finalItem();},close:()=>{closes++;}};
+test('final verification retains slow work and releases access on completion or suspension',async()=>{
+ for(const outcome of ['success','failure','slow','suspend','late']){
+  const h=fixture(false);h.record.request.localOnly=true;let closes=0,reads=0,finish!:(value:any)=>void,resolveAccess!:(access:any)=>void;
+  const access={origin:'https://fixture',api:async()=>{reads++;if(outcome==='failure')throw Error('Synthetic verification failure');if(['slow','suspend'].includes(outcome))return new Promise(resolve=>{finish=resolve;});return finalItem();},close:()=>{closes++;}};
   (h.preview as any).access=()=>outcome==='late'?new Promise(resolve=>{resolveAccess=resolve;}):Promise.resolve(access);
   h.preview.tick(true);h.item(completeV2(h));await settle();
-  if(outcome==='timeout'||outcome==='late'){h.clock.advance(10_000);await settle();}
-  if(outcome==='suspend')h.preview.tick(false);
-  if(outcome==='late'){resolveAccess(access);await settle();assert.equal(reads,0,'expired access must not start another read');}
+  if(outcome==='slow'){h.clock.advance(80_000);await settle();assert.equal(closes,0);finish(finalItem());await settle();}
+  if(outcome==='suspend'||outcome==='late')h.preview.tick(false);
+  if(outcome==='late'){resolveAccess(access);await settle();assert.equal(reads,0,'disposed access must not start another read');}
   assert.equal(closes,1,outcome);h.preview.dispose();await settle();assert.equal(closes,1,'cleanup must be idempotent');
  }
 });
@@ -318,4 +396,13 @@ test('an omitted question control resolves from its explicit runtime request aft
  h.preview.restore({prose:[],turnIds:['turn'],questionFollows:[{requestId:'old',turnId:'turn',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Old question?',options:[],multiSelect:false}]}]});h.preview.tick(true);
  const item=completeV2(h,3,'Source final') as any;item.snapshot.thread.v2Requests={old:{id:'old',status:'dismissed',resolvedAt:'2026-10-06T03:03:00Z'}};h.item(item);await settle();
  const update=h.updates.at(-1)!;assert.equal(update.questionsPending,false);assert.equal(update.completionVerified,true);assert.doesNotMatch(update.body,/Old question|t3-question:/);assert.ok(update.questionActivities?.some(activity=>activity.kind==='user-input.resolved'));h.preview.dispose();
+});
+
+test('a completed import hands pending questions to a live watch and observes an answered request',async()=>{
+ const h=fixture(false,async path=>path.includes('importRuns=true')?stockImported():finalItem());h.record.request.localOnly=true;h.record.request.importTurn={turnId:'turn',messageId:'prompt',state:'completed'};
+ const pending=readThreadSnapshot(normalizeV2Snapshot(stockImported()));pending.thread.activities=[{id:'asked',kind:'user-input.requested',summary:'Question',turnId:'turn',payload:{requestId:'pending-import',responseMode:'message',questions:[{id:'choice',header:'Choice',question:'Continue?',options:[]}]}}];
+ h.preview.seedImport(pending);h.preview.tick(true);await settle();assert.equal(h.updates.at(-1)?.questionsPending,true);assert.equal(h.streams.length,1,'A one-shot import is not a live subscription');
+ h.preview.tick(true);await settle();assert.equal(h.streams.length,1,'Ticks must not duplicate the shared watcher');
+ const resolved=readThreadSnapshot(normalizeV2Snapshot({...stockImported(),snapshotSequence:9}));resolved.thread.v2Requests={'pending-import':{id:'pending-import',kind:'user-input',status:'dismissed',resolvedAt:'2026-10-06T03:03:00Z'}};
+ h.item({kind:'snapshot',snapshot:resolved});h.clock.advance(80);await settle();assert.equal(h.updates.at(-1)?.questionsPending,false);assert.equal(h.updates.at(-1)?.completionVerified,true);assert.doesNotMatch(h.updates.at(-1)!.body,/Continue\?|t3-question:/);h.preview.dispose();assert.equal(h.streams[0].stopped,true);
 });

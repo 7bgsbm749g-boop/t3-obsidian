@@ -58,6 +58,13 @@ test('thread and note mode changes preserve links and reply streaming',async()=>
  const setting=new h.Setting(new Element());beta.items[0].render(setting);assert.equal(setting.el.controls[0].value,'free');await setting.el.controls[0].change('one-to-one');assert.equal(h.plugin.settings.threadNoteMode,'one-to-one');assert.equal(JSON.stringify(h.plugin.settings.noteThreads),before);assert.equal(h.plugin.settings.inlineStreaming.enabled,true);
 });
 
+test('thread hiding starts off and saves only through its explicit cross-environment action',async()=>{
+ const h=await harness(),row=h.tab.getSettingDefinitions().find((page:any)=>page.name==='Replies').items.find((row:any)=>row.name==='Hide Obsidian threads in T3');
+ const setting=new h.Setting(new Element()),changes:boolean[]=[];h.plugin.setThreadHiding=async(value:boolean)=>{changes.push(value);};row.render(setting);
+ assert.equal(setting.el.controls[0].value,false);assert.match(row.desc,/all connected T3 environments/);assert.deepEqual(changes,[]);
+ await setting.el.controls[0].change(true);assert.deepEqual(changes,[true]);
+});
+
 test('route text updates in place and detached rows stop receiving updates',async()=>{
  const h=await harness(),root=new Element(),setting=new h.Setting(root);let text='Active · Connected';
  const input=root.createEl('input');input.focus();Object.assign(setting.settingEl,{isConnected:true});

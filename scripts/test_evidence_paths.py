@@ -41,6 +41,8 @@ class EvidencePathTests(unittest.TestCase):
     def test_sync_lab_keeps_evidence_in_the_external_project_store(self):
         spec = importlib.util.spec_from_file_location('sync_lab', Path(__file__).with_name('obsidian-sync-lab.py'))
         module = importlib.util.module_from_spec(spec)
+        # The CLI imports its adjacent configuration module by name. Supply
+        # that exact module without depending on another test's import order.
         with patch.dict('sys.modules', {'maintainer_config': maintainer_config}):
             spec.loader.exec_module(module)
         self.assertEqual(module.EVIDENCE.parent, maintainer_config.evidence_root(ROOT))
@@ -50,14 +52,16 @@ class EvidencePathTests(unittest.TestCase):
         evidence.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=evidence, prefix='native-path-contract-') as temporary:
             lab = Path(temporary) / 'native-lab'
-            result = subprocess.run(['node', str(NATIVE_LAB), str(lab), '--run-import'],
+            result = subprocess.run(['node', str(NATIVE_LAB), str(lab), '--run-import', '--check-path'],
                                     cwd=ROOT, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(Path(json.loads(result.stdout)['root']), lab)
-            self.assertTrue((lab / 'ISOLATED-NATIVE-LAB').is_file())
+            checked = json.loads(result.stdout)
+            self.assertEqual(Path(checked['root']), lab)
+            self.assertTrue(checked['checkedOnly'])
+            self.assertFalse(lab.exists(), 'Path checks must not create a vault or runtime profile')
         for path in ['/home/ubuntu/vaults/QLO2/evidence/forbidden-lab',
                      '/home/ubuntu/backups/send-to-t3-code/forbidden-lab']:
-            result = subprocess.run(['node', str(NATIVE_LAB), path, '--run-import'],
+            result = subprocess.run(['node', str(NATIVE_LAB), path, '--run-import', '--check-path'],
                                     cwd=ROOT, capture_output=True, text=True, timeout=20)
             self.assertNotEqual(result.returncode, 0)
             self.assertRegex(result.stderr, 'outside synced vaults|external project evidence root')

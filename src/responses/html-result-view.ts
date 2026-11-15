@@ -21,9 +21,19 @@ const variables:Record<string,string>={
   '--code-background':'--code-background','--code-foreground':'--code-normal','--font-sans':'--font-text','--font-mono':'--font-monospace',
   '--chart-1':'--interactive-accent','--chart-2':'--color-green','--chart-3':'--color-orange','--chart-4':'--color-purple','--chart-5':'--color-red','--chart-6':'--color-cyan','--radius':'--radius-m',
 };
-function themeFor(doc:Document):Theme {
-  const style=doc.defaultView!.getComputedStyle(doc.body),values:Record<string,string>={};
+function themeFor(root:HTMLElement):Theme {
+  const doc=root.ownerDocument,win=doc.defaultView!;
+  const style=win.getComputedStyle(root.isConnected?root:doc.body),values:Record<string,string>={};
   for(const [target,source] of Object.entries(variables)){const value=style.getPropertyValue(source).trim();if(value)values[target]=value;}
+  // Sandboxed documents cannot inherit the note's CSS. Follow transparent
+  // wrappers to the displayed surface, without depending on another plugin's
+  // tokens or changing the theme's background-primary. Detached roots retain
+  // the ordinary theme fallback until the native processor attaches them.
+  if(root.isConnected)for(let surface:HTMLElement|null=root;surface;surface=surface.parentElement){
+    const color=win.getComputedStyle(surface).backgroundColor.trim();
+    if(!color||color==='transparent'||/^(?:rgba|hsla)\([^)]*,\s*0(?:\.0+)?%?\s*\)$/.test(color)||/\/\s*0(?:\.0+)?%?\s*\)$/.test(color))continue;
+    values['--background']=color;break;
+  }
   values['--font-sans']=style.fontFamily;values['--font-mono']=style.getPropertyValue('--font-monospace').trim()||'monospace';
   return {appearance:doc.body.classList.contains('theme-dark')?'dark':'light',variables:values};
 }
@@ -66,6 +76,7 @@ function viewerDocument(html:string,doc:Document):string {
 export class HtmlResultViews {
   private mounted=new Set<Mounted>();private stopped=false;
   private prepared=new Map<string,string>();private preparedCharacters=0;
+  private prefetching=0;
   constructor(private app:App,private store:HtmlResultStore,private options:HtmlResultViewOptions={}){}
   private prepare(html:string,doc:Document){
     const cached=this.prepared.get(html);if(cached!==undefined){this.prepared.delete(html);this.prepared.set(html,cached);return cached;}
@@ -75,6 +86,13 @@ export class HtmlResultViews {
       while(this.prepared.size>16||this.preparedCharacters>8_000_000){const [source,value]=this.prepared.entries().next().value!;this.prepared.delete(source);this.preparedCharacters-=source.length+value.length;}
     }
     return prepared;
+  }
+  /** Warm one explicitly selected result while its import confirmation is
+   * open. Preparing inert bytes creates no iframe or authored script runtime. */
+  async prefetch(reference:HtmlResultReference,doc:Document):Promise<void>{
+    if(this.stopped||this.prefetching>=2)return;
+    this.prefetching++;
+    try{const html=await this.store.get(reference);if(!this.stopped)this.prepare(html,doc);}finally{this.prefetching--;}
   }
   install(plugin:Plugin){
     plugin.registerMarkdownCodeBlockProcessor(HTML_RESULT_LANGUAGE,(source,el,ctx)=>{
@@ -104,22 +122,41 @@ export class HtmlResultViews {
       const pixels=options.passive?Math.min(2000,reference.height,measured):measured;
       root.style.height=state!=='ready'?'auto':expanded?'100%':pixels+'px';
     };
-    let codeHost:HTMLElement|undefined;
+    let codeHost:HTMLElement|undefined,ancestors:HTMLElement[]=[],themeSignature='';
+    const postTheme=(force=false)=>{
+      if(disposed||!frame)return;
+      const theme=themeFor(root),signature=JSON.stringify(theme);frame.style.colorScheme=theme.appearance;
+      if(force||signature!==themeSignature){themeSignature=signature;frame.contentWindow?.postMessage(themeMessage(theme),'*');}
+    };
     const markHost=()=>{
       if(disposed)return;
       const host=root.closest<HTMLElement>('.cm-preview-code-block');
-      if(host){codeHost=host;host.classList.add('send-to-t3-html-code-block');}
+      if(codeHost!==host){codeHost?.classList.remove('send-to-t3-html-code-block');codeHost=host??undefined;}
+      if(host&&!host.classList.contains('send-to-t3-html-code-block'))host.classList.add('send-to-t3-html-code-block');
       const parent=root.parentElement;
       if(parent?.classList.contains('send-to-t3-html-expanded'))parent.classList.toggle('send-to-t3-html-expanded-loading',state!=='ready');
+      const next:HTMLElement[]=[];
+      for(let element:HTMLElement|null=root;element;element=element.parentElement)next.push(element);
+      if(next.length!==ancestors.length||next.some((element,index)=>element!==ancestors[index])){
+        themeObserver.disconnect();ancestors=next;
+        // Observe only this host's chain, not every edit in every open note.
+        // Direct child-list records also catch a moved/replaced host surface.
+        for(const element of ancestors)themeObserver.observe(element,{attributes:true,attributeFilter:['class','style'],childList:true});
+      }
       if(root.isConnected)hostObserver.disconnect();
+      else hostObserver.observe(doc.body,{childList:true,subtree:true});
+      postTheme();
     };
+    const themeObserver=new win.MutationObserver(records=>{
+      if(records.some(record=>record.type==='childList'&&[...Array.from(record.addedNodes),...Array.from(record.removedNodes)].some(node=>node.contains(root))))markHost();
+      else if(records.some(record=>record.type==='attributes'))postTheme();
+    });
     // Native Markdown processors may attach the widget after mount returns.
     const hostObserver=new win.MutationObserver(markHost);hostObserver.observe(doc.body,{childList:true,subtree:true});
     queueMicrotask(markHost);
     const showState=(next:typeof state)=>{state=next;root.dataset.t3HtmlState=next;root.setAttribute('aria-busy',String(next==='loading'));controls.hidden=next!=='ready';markHost();height();};showState('loading');
     if(!expanded&&!options.passive){const expand=controls.createEl('button',{attr:{'aria-label':'Expand HTML','title':'Expand HTML'}});setIcon(expand,'maximize-2');expand.addEventListener('click',()=>new HtmlResultModal(this.app,this,reference).open());}
     if(options.passive){root.classList.add('send-to-t3-html-passive');controls.remove();}
-    const postTheme=()=>frame?.contentWindow?.postMessage(themeMessage(themeFor(doc)),'*');
     const receive=(event:MessageEvent)=>{
       if(disposed||!frame||event.source!==frame.contentWindow||!isRecord(event.data)||event.data.jsonrpc!=='2.0')return;
       const {method,id}=event.data;const params=isRecord(event.data.params)?event.data.params:{};
@@ -142,11 +179,16 @@ export class HtmlResultViews {
       loading=(async()=>{
       try{
         const html=await this.store.get(reference);if(disposed||this.stopped||current!==generation)return;
-        const next=doc.win.createEl('iframe');next.title=reference.title;next.setAttribute('sandbox',options.passive?'allow-scripts':'allow-scripts allow-forms');next.referrerPolicy='no-referrer';next.loading=options.passive?'eager':'lazy';next.className='send-to-t3-html-frame';
+        const next=doc.win.createEl('iframe');next.title=reference.title;next.setAttribute('sandbox',options.passive?'allow-scripts':'allow-scripts allow-forms');next.referrerPolicy='no-referrer';
+        const box=root.isConnected?root.getBoundingClientRect():undefined;
+        // A selected visible result must not wait for the browser's lazy-frame
+        // scheduling window. Off-screen results still defer their runtimes.
+        const visible=box&&box.width>0&&box.height>0&&box.bottom>0&&box.top<win.innerHeight&&box.right>0&&box.left<win.innerWidth;
+        next.loading=options.passive||visible?'eager':'lazy';next.className='send-to-t3-html-frame';
         if(options.passive){next.inert=true;next.tabIndex=-1;}
-        const theme=themeFor(doc);next.style.colorScheme=theme.appearance;
+        const theme=themeFor(root);next.style.colorScheme=theme.appearance;
         blob=win.URL.createObjectURL(new win.Blob([this.prepare(html,doc)],{type:'text/html;charset=utf-8'}));
-        next.src=blob+'#t3-theme='+encodeURIComponent(JSON.stringify(theme));next.addEventListener('load',postTheme);frame=next;surface.replaceChildren(next);showState('ready');
+        next.src=blob+'#t3-theme='+encodeURIComponent(JSON.stringify(theme));next.addEventListener('load',()=>postTheme(true));frame=next;surface.replaceChildren(next);showState('ready');
       }catch(error){
         if(disposed||this.stopped||current!==generation)return;
         if(blob)win.URL.revokeObjectURL(blob);blob=undefined;frame=undefined;
@@ -172,7 +214,7 @@ export class HtmlResultViews {
       recovery=(loading?loading.then(()=>{if(failure?.recoverable)return load();}):failure?.recoverable?load():Promise.resolve()).finally(()=>{recovery=undefined;});
       return recovery;
     };
-    const mounted:Mounted={root,reference,refreshTheme:postTheme,recover,dispose:()=>{if(disposed)return;disposed=true;generation++;resize.disconnect();hostObserver.disconnect();codeHost?.classList.remove('send-to-t3-html-code-block');root.parentElement?.classList.remove('send-to-t3-html-expanded-loading');win.removeEventListener('message',receive);frame?.remove();if(blob)win.URL.revokeObjectURL(blob);this.mounted.delete(mounted);}};
+    const mounted:Mounted={root,reference,refreshTheme:()=>postTheme(),recover,dispose:()=>{if(disposed)return;disposed=true;generation++;resize.disconnect();hostObserver.disconnect();themeObserver.disconnect();ancestors=[];codeHost?.classList.remove('send-to-t3-html-code-block');root.parentElement?.classList.remove('send-to-t3-html-expanded-loading');win.removeEventListener('message',receive);frame?.remove();if(blob)win.URL.revokeObjectURL(blob);this.mounted.delete(mounted);}};
     this.mounted.add(mounted);if(!this.stopped)void load();else mounted.dispose();return mounted;
   }
   dispose(){this.stopped=true;for(const mounted of [...this.mounted])mounted.dispose();this.prepared.clear();this.preparedCharacters=0;this.store.dispose();}
@@ -186,6 +228,8 @@ class HtmlResultModal extends Modal {
     const toolbar=this.contentEl.createDiv({cls:'send-to-t3-html-zoom'}),value=toolbar.createSpan({text:'100%'});
     const adjust=(text:string,label:string,amount:number)=>{const button=toolbar.createEl('button',{text,attr:{'aria-label':label}});button.addEventListener('click',()=>{this.zoom=Math.min(2,Math.max(.5,this.zoom+amount));value.textContent=Math.round(this.zoom*100)+'%';if(this.mounted)this.mounted.root.style.setProperty('zoom',String(this.zoom));});};
     adjust('−','Zoom out',-.25);adjust('+','Zoom in',.25);
+    // Expanded HTML follows the modal's own surface, independent of the note
+    // which opened it (and of later changes to that note's tint).
     const area=this.contentEl.createDiv({cls:'send-to-t3-html-expanded'});this.mounted=this.views.mount(this.reference,this.contentEl.ownerDocument,true,()=>this.close());area.append(this.mounted.root);
   }
   onClose(){this.mounted?.dispose();this.contentEl.empty();}

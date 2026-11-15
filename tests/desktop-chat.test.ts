@@ -38,7 +38,8 @@ if(args[0]==='auth'){
       if(req.url==='/.well-known/t3/environment'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({environmentId:'test-environment',label:'Synthetic local',orchestrationProtocolVersion:2}));return;}
       assert.equal(req.headers.authorization,'Bearer test-only');
       res.setHeader('Content-Type','application/json');
-      if(req.url?.endsWith('/shell')){
+      if(req.url==='/api/auth/session')res.end(JSON.stringify({authenticated:true,permissions:['orchestration:read']}));
+      else if(req.url?.endsWith('/shell')){
         const projects=JSON.parse(await readFile(catalogPath,'utf8')).map((p:any)=>({...p,defaultModelSelection:{instanceId:'codex',model:'test'}}));
         res.end(JSON.stringify({projects,threads:[]}));
       }else if(req.url?.endsWith('/websocket-ticket'))res.end(JSON.stringify({ticket:'ephemeral'}));

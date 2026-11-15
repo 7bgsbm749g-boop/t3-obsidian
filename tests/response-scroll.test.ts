@@ -149,12 +149,26 @@ test('hidden widgets from another native mode cannot supply the scroll target',(
 test('an overlapping Obsidian status bar reduces the visible bottom; a bar beside the pane does not',()=>{
   for(const [left,expected] of [[500,628],[800,608]]){const h=fixture();h.view.contentEl.ownerDocument.querySelectorAll=()=>[{getBoundingClientRect:()=>({top:680,bottom:700,left,right:left+200,width:200,height:20})}];h.scroll.toggle(key);h.flush();assert.equal(h.scroller.scrollTop,expected);h.scroll.dispose();}
 });
-test('a virtualized native block is revealed with a scroll effect before rendered geometry is used',()=>{
-  const h=fixture();h.rendered(false);h.scroll.toggle(key);h.flush();assert.equal(h.effects.length,1);assert.deepEqual(Object.keys(h.effects[0]),['effects']);h.scroller.scrollTop+=50;h.event('scroll','response',{target:h.scroller});assert.equal(h.scroll.control(key)?.active,true);h.rendered(true);h.scroll.updated();h.flush();assert.equal(h.scroller.scrollTop,608);h.scroll.dispose();
+test('a missing native block never scrolls to its temporary source estimate',()=>{
+  const h=fixture();h.rendered(false);h.scroll.toggle(key);h.flush();assert.equal(h.effects.length,0);assert.equal(h.scroller.scrollTop,200);h.grow(4000);h.flush();assert.equal(h.effects.length,0);assert.equal(h.scroller.scrollTop,200);h.grow(-4000);h.flush();h.scroller.scrollTop+=50;h.event('scroll','response',{target:h.scroller});assert.equal(h.scroll.control(key)?.active,true);h.rendered(true);h.scroll.updated();h.flush();assert.equal(h.scroller.scrollTop,608);h.scroll.dispose();
 });
 test('completed, duplicate or unknown fold identities cannot enable follow',()=>{
   const h=fixture();h.scroll.toggle('thread:complete');h.scroll.toggle('unknown:active');h.flush();assert.equal(h.scroller.scrollTop,200);assert.equal(h.scroll.control('thread:complete'),undefined);h.scroll.dispose();
 });
 test('completion, mode changes, conflicts and disposal cancel work and clean listeners',()=>{
   for(const stop of ['completion','mode','conflict','dispose'] as const){const h=fixture();h.scroll.toggle(key);if(stop==='completion')h.remove();else if(stop==='mode'){h.mode('preview');h.scroll.updated();}else if(stop==='conflict')h.scroll.suspend();else h.scroll.dispose();h.flush();assert.equal(h.scroller.scrollTop,200);h.scroll.dispose();assert.ok([...h.handlers.values()].every(set=>set.size===0));}
+});
+
+
+test('a transient missing block during active Follow cannot jump ahead of the real stream',()=>{
+  const h=fixture();h.grow(-600);h.scroll.toggle(key);h.flush();
+  h.rendered(false);h.grow(20000);h.flush();assert.equal(h.scroller.scrollTop,200);assert.equal(h.effects.length,0);
+  h.rendered(true);h.grow(-20000);h.flush();assert.equal(h.scroller.scrollTop,200);
+  h.grow(200);h.flush();assert.equal(h.scroller.scrollTop,208);h.scroll.dispose();
+});
+
+test('status bars below or beside the pane never attract the response to their position',()=>{
+  const h=fixture();h.grow(-600);h.view.contentEl.ownerDocument.querySelectorAll=()=>[{getBoundingClientRect:()=>({top:780,bottom:800,left:100,right:700,width:600,height:20})}];
+  h.scroll.toggle(key);h.flush();assert.equal(h.scroller.scrollTop,200);
+  h.grow(100);h.flush();assert.equal(h.scroller.scrollTop,200);h.scroll.dispose();
 });

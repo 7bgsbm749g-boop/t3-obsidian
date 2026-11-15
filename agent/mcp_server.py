@@ -42,7 +42,7 @@ def tool(name, description, properties=None, required=(), readonly=False):
 
 
 TOOLS = [
-    dict(name='instructions', description='Read the complete safe Obsidian editing skill before changing notes. Normal streamed answers need no note edit.',
+    dict(name='instructions', description='Read the complete safe Obsidian editing and continuation skill. Before waiting for an automatic next turn, register its reply stream in the same note.',
          inputSchema=dict(type='object', properties={}, additionalProperties=False), annotations=dict(readOnlyHint=True)),
     tool('connected_clients', 'List matching live Obsidian device identities on this T3 machine. No note scan or tokens are returned.', readonly=True),
     tool('note_context', 'Find the exact source note and response destinations for a send. Supply a note or exact T3 send identity.',
@@ -59,6 +59,13 @@ TOOLS = [
     tool('response_recovery_info', 'Inspect a frozen final reply and current note checksum before a reviewed save retry.', dict(bindingId=BINDING), ['bindingId'], True),
     tool('retry_response_save', 'Retry the checked save of a retained frozen reply after reviewing the current hash. Never sends another prompt or remote Stop.', dict(bindingId=BINDING, hash=HASH), ['bindingId', 'hash']),
     tool('client_status', 'Read the selected running Obsidian client version and connection status.', readonly=True),
+    tool('stream_thread', 'Register replies from later turns of this exact thread in the existing destination notes, without sending a prompt. Required before yielding for automatic continuation of Obsidian work. Check thread_streams first and reuse a matching active registration.',
+         dict(threadId=string('Exact source thread ID from note_context.'), projectId=string('Exact source project ID from note_context.'), environmentId=string('Exact source environment ID from note_context.'), scope=dict(type='string', enum=['thread']), destinations=dict(type='array', items=NOTE), start=dict(type='string', enum=['future', 'after', 'history'], description='Use future before waiting. Use after with the original prompt ID to catch up a continuation that already started. History imports all prior runs only when requested.'), afterMessageId=string('Original user-message ID; required only for start=after.'), destinationSection=string('Reuse an existing exact destination heading when known; otherwise append to the note.')), ['threadId', 'projectId', 'environmentId', 'scope', 'destinations', 'start']),
+    tool('thread_streams', 'Inspect saved thread-follow registrations. Reuse an enabled, uncancelled registration for the exact thread, project, environment and destination notes; inspect errors before claiming continuation is registered.', readonly=True),
+    tool('pause_thread_stream', 'Pause an exact reply-follow registration. Existing replies continue; runs started while paused are skipped on resume.', dict(subscriptionId=string('Exact registration UUID from thread_streams.')), ['subscriptionId']),
+    tool('resume_thread_stream', 'Resume an exact paused reply-follow registration. Skips runs already started; use stream_thread with an after boundary if catch-up is needed.', dict(subscriptionId=string('Exact registration UUID from thread_streams.')), ['subscriptionId']),
+    tool('cancel_thread_stream', 'Cancel an exact reply-follow registration without deleting saved replies. Do not cancel a user-owned follow merely because one task finished.', dict(subscriptionId=string('Exact registration UUID from thread_streams.')), ['subscriptionId']),
+    tool('remove_stream_destination', 'Remove one exact destination note from an existing reply-follow registration without deleting its replies.', dict(subscriptionId=string('Exact registration UUID from thread_streams.'), destination=NOTE), ['subscriptionId', 'destination']),
     tool('send_note', 'Only on an explicit user request: send this note to T3, starting agent work. Do not use for answering an existing conversation or saving edits.', dict(notePath=NOTE, destinations=dict(type='array', items=NOTE), streamReply=dict(type='boolean'), destinationSection=string('Optional target heading.')), ['notePath', 'destinations', 'streamReply']),
     tool('attach_response', 'Only on an explicit user request: import an existing exact reply without dispatching another prompt.', dict(notePath=NOTE, threadId=string('Exact T3 thread ID.'), messageId=string('Exact T3 message ID.'), destinations=dict(type='array', items=NOTE), streamReply=dict(type='boolean')), ['notePath', 'threadId', 'messageId', 'destinations', 'streamReply']),
     tool('inspect_folder', 'Inspect the routing of one exact folder; / means the vault root.', dict(folderPath=string('Exact vault-relative folder or /.')), ['folderPath'], True),
@@ -100,6 +107,8 @@ def call_tool(name, arguments, root):
     request = str(uuid.UUID(arguments.pop('requestId', str(uuid.uuid4()))))
     retry = arguments.pop('retry', False)
     command = dict(version=1, id=request, kind=name.replace('_', '-'), **arguments)
+    if name == 'stream_thread':
+        command['source'] = {key: command.pop(key) for key in ('threadId', 'projectId', 'environmentId')}
     result = send_command(vault, command, root=root, client_id=client, retry=retry, timeout=45)
     if result is None:
         result = dict(id=request, ok=False, error='No matching Obsidian client is connected. Open the intended vault and connect this T3 machine. No command was sent.')

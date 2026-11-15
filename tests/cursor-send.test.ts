@@ -26,16 +26,18 @@ async function fixture(document='First paragraph.\n\nLater paragraph.'){
   return {plugin,app,view,editor,file,exports:module.exports,value:()=>value,cursor:(offset:number)=>{cursor=offset;selection=undefined;},select:(from:number,to:number)=>{selection=[from,to];},active:(yes:boolean)=>{active=yes;},mode:(next:string)=>{mode=next;}};
 }
 
-test('whole-note Send starts the indicator synchronously before project lookup and clears failed preparation',async()=>{
+test('whole-note Send waits for its destination before showing the indicator and clears failed preparation',async()=>{
   const h=await fixture(),document=h.value(),events:string[]=[];
   h.plugin.sendPreviews={begin:()=>{events.push('show');return ()=>events.push('clear');}};
-  let reject!:(error:Error)=>void;const gate=new Promise((_resolve,fail)=>{reject=fail;});
+  let resolve!:(target:any)=>void;const gate=new Promise(done=>{resolve=done;});
   h.plugin.chatTarget=async()=>{events.push('lookup');return gate;};
+  h.plugin.projectReadinessError=()=>undefined;
+  h.plugin.send=async()=>{events.push('send');throw Error('Synthetic preparation failure');};
   const sending=h.plugin.sendNote(h.file,undefined,undefined,true);
-  assert.equal(events[0],'show');assert.equal(h.value(),document);
-  await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(events,['show','lookup']);
-  reject(Error('Synthetic project failure'));await assert.rejects(sending,/Synthetic project failure/);
-  assert.deepEqual(events,['show','lookup','clear']);assert.equal(h.value(),document);
+  assert.equal(h.value(),document);
+  await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(events,['lookup']);
+  resolve({project:{id:'scratch'},link:{id:'no-project'}});await assert.rejects(sending,/Synthetic preparation failure/);
+  assert.deepEqual(events,['lookup','show','send','clear']);assert.equal(h.value(),document);
 });
 
 test('Inline Off does not create a preparation block',async()=>{
@@ -46,14 +48,14 @@ test('Inline Off does not create a preparation block',async()=>{
   assert.equal(h.value(),original);
 });
 
-test('Ask shows the indicator before preparation and hands off to one real block',async()=>{
+test('Ask waits for its destination then shows the indicator and hands off to one real block',async()=>{
   const h=await fixture(),original=h.value(),events:string[]=[],manager=new h.exports.InlineChatManager(h.app,'jobs',async()=>undefined);
   h.plugin.sendPreviews={begin:()=>{events.push('show');return ()=>events.push('clear');},hide:()=>events.push('handoff')};
   manager.prepare=async()=>{};manager.start=()=>{};h.plugin.inlineChat=manager;
   let ready!:()=>void;const gate=new Promise<void>(resolve=>{ready=resolve;});
-  h.plugin.sendChat=async(_prompt:any,_note:any,options:any)=>{await gate;await options.onPrepared({id:options.requestId,title:'Synthetic'});};
+  h.plugin.sendChat=async(_prompt:any,_note:any,options:any)=>{await gate;options.onTargetResolved();assert.deepEqual(events,['show']);await options.onPrepared({id:options.requestId,title:'Synthetic'});};
   const sending=h.plugin.sendInlineChat('Explain',{path:h.file.path},{editor:h.editor,view:h.view,insertion:captureCursorInsertion(original,3)},{newThread:true});
-  assert.deepEqual(events,['show']);assert.equal(h.value(),original);
+  assert.deepEqual(events,[]);assert.equal(h.value(),original);
   ready();await sending;
   assert.deepEqual(events,['show','handoff','clear']);assert.equal(h.value().split('<!-- t3-inline:start:').length-1,1);
   assert.ok(h.value().indexOf('t3-inline:end:')<h.value().indexOf('Later paragraph.'));manager.dispose();
@@ -83,15 +85,31 @@ test('a changed selection without a captured anchor cannot silently append a res
   const h=await fixture();h.cursor(h.value().length);
   h.plugin.openChatWithNote=()=>assert.fail('a stale selection must not send');
   await assert.rejects(h.plugin.openManualAction(h.file,'Why?','First paragraph.'),/selected text changed/);
+  h.select(0,'First paragraph.'.length);
+  const captured=h.plugin.capturePaletteSource().context.editor;
+  h.view.file={...h.file,path:'Other.md'};
+  await assert.rejects(h.plugin.openManualAction(h.file,'Why?','First paragraph.',captured),/original note is no longer open/);
+  await assert.rejects(h.plugin.openManualAction(h.file,'Explain without a selection','',captured),/original note is no longer open/);
 });
 
 test('a selection used as reference keeps its position instead of falling back to the note end',async()=>{
-  const h=await fixture(),original=h.value(),manager=new h.exports.InlineChatManager(h.app,'jobs',async()=>undefined);
-  h.select(0,'First paragraph.'.length);
+  const prefix='Earlier material.\n'.repeat(12),h=await fixture(prefix+'First paragraph.\n\nLater paragraph.'),manager=new h.exports.InlineChatManager(h.app,'jobs',async()=>undefined);
+  h.select(prefix.length,prefix.length+'First paragraph.'.length);
   const context=h.plugin.capturePaletteSource().context.editor;context.referenceSelection=true;
   manager.prepare=async()=>{};manager.start=()=>{};h.plugin.inlineChat=manager;
-  h.plugin.sendChat=async(_prompt:any,_note:any,options:any)=>options.onPrepared({id:randomUUID(),title:'Synthetic'});
-  h.cursor(original.length);await h.plugin.sendInlineChat('Explain',{path:h.file.path},context,{newThread:true});
+  const data=loadSmartSend(undefined),sent:any[]=[];h.plugin.settings.pending=[];
+  h.plugin.chatTarget=async()=>({project:{id:'scratch'},link:{}});h.plugin.projectReadinessError=()=>undefined;
+  h.plugin.connection=()=>({});h.plugin.assertNoteMode=async()=>{};h.plugin.recoverSmartReplies=async()=>{};
+  h.plugin.smartData=()=>data;h.plugin.smartKey=async()=> 'synthetic';h.plugin.requestTitle=async()=> 'Synthetic';
+  h.plugin.prepareImages=async(markdown:string)=>({markdown,attachments:[]});h.plugin.noteThreadIntent=()=>undefined;h.plugin.folderLinkIntent=()=>({});
+  h.plugin.prepareNoteSteering=async()=>false;h.plugin.dispatch=async(request:any)=>{sent.push(request);};
+  h.plugin.openChatWithNote=(note:any,prompt:any,current:any)=>{
+    assert.equal(current.smartDocument.slice(...current.smartScope),'First paragraph.');
+    return h.plugin.sendInlineChat(prompt,note,current,{newThread:true});
+  };
+  h.editor.replaceRange('New preceding text.\n',0);h.cursor(h.value().length);
+  await h.plugin.openManualAction(h.file,'Explain','First paragraph.',context);
+  assert.equal(sent.length,1);assert.match(sent[0].prompt,/Selected text:\nFirst paragraph\./);assert.doesNotMatch(sent[0].prompt,/Later paragraph/);
   assert.ok(h.value().indexOf('t3-inline:end:')<h.value().indexOf('Later paragraph.'));
   manager.dispose();
 });

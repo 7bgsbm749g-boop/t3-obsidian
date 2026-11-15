@@ -12,6 +12,8 @@ class Element {
   children:Element[]=[];textContent='';value='';checked=false;disabled=false;hidden=false;name='';type='';selectionStart=0;dataset:Record<string,string>={};onclick?:()=>void;oninput?:()=>void;onchange?:()=>void;onfocus?:()=>void;
   constructor(public tag='div',public options:any={}){this.textContent=options.text??'';this.type=options.type??'';}
   closest(){return null;}
+  focus(){}
+  click(){this.checked=this.type==='checkbox'?!this.checked:true;this.onchange?.();this.onclick?.();}
   addClass(){} addEventListener(){} empty(){this.children=[];}replaceChildren(){this.children=[];}
   createEl(tag:string,options?:any){const child=new Element(tag,options);this.children.push(child);return child;}
   createDiv(options?:any){return this.createEl('div',options);}
@@ -35,7 +37,7 @@ async function harness(){
 }
 
 test('dialog shows descriptions and keeps drafts, input DOM, and selection through streaming refreshes',async()=>{
-  const h=await harness();const form=h.modal.contentEl.children[2],inputs=form.querySelectorAll('input'),areas=form.querySelectorAll('textarea');
+  const h=await harness();const form=h.modal.contentEl.children[3],inputs=form.querySelectorAll('input'),areas=form.querySelectorAll('textarea');
   assert.equal(inputs.length,4);assert.equal(inputs[0].checked,true);assert.ok(form.querySelectorAll('small').some((e:Element)=>e.textContent==='First description'));assert.equal(h.sent.length,0);
   inputs[2].checked=true;inputs[2].onchange!();inputs[3].checked=true;inputs[3].onchange!();areas[2].value='My draft';areas[2].selectionStart=3;areas[2].oninput!();
   const before=form.children.slice();await h.controller.refresh([target]);assert.deepEqual(form.children,before);assert.equal(form.querySelectorAll('textarea')[2],areas[2]);assert.equal(areas[2].value,'My draft');assert.equal(areas[2].selectionStart,3);
@@ -141,4 +143,15 @@ test('native HTML question links become tracked controls and mismatched targets 
  assert.ok(bound);assert.equal(bound.disabled,false);assert.equal(h.controller.watchedTargets().filter((item:any)=>item.requestId==='request').length,1);
  h.activities.push({id:'answered',kind:'user-input.resolved',payload:{requestId:'request',answers:{text:'Yes'}}});await h.controller.refresh([target]);assert.equal(row.hidden,true);assert.equal(bound.disabled,true);assert.equal(opens,0);
  dispose();h.modal.close();h.controller.dispose();
+});
+
+test('question navigation and numeric choices advance only single select and never submit',async()=>{
+ const h=await harness(),form=h.modal.form,sections=form.querySelectorAll('fieldset');
+ assert.equal(sections[0].hidden,false);assert.equal(sections[1].hidden,true);
+ h.modal.contentEl.onkeydown({key:'2',target:{closest:()=>null},preventDefault(){}});
+ assert.equal(sections[0].hidden,true);assert.equal(sections[1].hidden,false);assert.equal(h.sent.length,0);
+ h.modal.contentEl.onkeydown({key:'1',target:{closest:()=>null},preventDefault(){}});
+ assert.equal(sections[1].hidden,false);assert.equal(h.sent.length,0);
+ h.modal.previous.onclick();assert.equal(sections[0].hidden,false);
+ h.modal.close();h.controller.dispose();
 });

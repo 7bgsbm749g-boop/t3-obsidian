@@ -44,6 +44,19 @@ export class QuestionModal extends NoteTabPanel {
   private dismissButton?:HTMLButtonElement;
   private signature='';
   private opened=false;
+  private questionIndex=0;
+  private progress?:HTMLElement;
+  private previous?:HTMLButtonElement;
+  private next?:HTMLButtonElement;
+  private navigate(index:number,focus=false){
+    const sections=Array.from(this.form?.querySelectorAll<HTMLFieldSetElement>('fieldset')??[]);
+    this.questionIndex=Math.max(0,Math.min(index,sections.length-1));
+    sections.forEach((section,index)=>{section.hidden=index!==this.questionIndex;});
+    if(this.progress)this.progress.textContent=sections.length?`Question ${this.questionIndex+1} of ${sections.length}`:'';
+    if(this.previous)this.previous.disabled=this.questionIndex===0;
+    if(this.next)this.next.disabled=this.questionIndex>=sections.length-1;
+    if(focus){const section=sections[this.questionIndex];if(section){section.tabIndex=-1;section.focus();}}
+  }
   constructor(app:App,private controller:QuestionController,readonly target:QuestionTarget,private sourceNotePath?:string){super(app);}
   onOpen(){
     this.opened=true;
@@ -51,7 +64,21 @@ export class QuestionModal extends NoteTabPanel {
     this.contentEl.empty();this.untrack?.();this.untrack=this.controller.track(this.target);
     this.signature='';
     this.contentEl.addClass('send-to-t3-question-dialog');this.contentEl.createEl('h2',{text:'Answer T3 question'});
-    this.status=this.contentEl.createEl('p',{attr:{'aria-live':'polite'}});this.form=this.contentEl.createDiv();
+    this.status=this.contentEl.createEl('p',{attr:{'aria-live':'polite'}});
+    const navigation=this.contentEl.createDiv({cls:'send-to-t3-question-navigation'});
+    this.previous=navigation.createEl('button',{text:'Previous question'});this.previous.onclick=()=>this.navigate(this.questionIndex-1,true);
+    this.progress=navigation.createSpan({attr:{'aria-live':'polite'}});
+    this.next=navigation.createEl('button',{text:'Next question'});this.next.onclick=()=>this.navigate(this.questionIndex+1,true);
+    this.form=this.contentEl.createDiv();
+    this.contentEl.onkeydown=event=>{
+      if(event.defaultPrevented||event.ctrlKey||event.metaKey||event.altKey||event.isComposing||event.repeat)return;
+      const element=event.target as HTMLElement;
+      if(element.closest('textarea, [contenteditable="true"], input:not([type="radio"]):not([type="checkbox"])'))return;
+      if(!/^[1-9]$/.test(event.key))return;
+      const section=this.form?.querySelectorAll('fieldset')[this.questionIndex];
+      const option=section?.querySelectorAll<HTMLInputElement>('input')[Number(event.key)-1];
+      if(option&&!option.disabled){event.preventDefault();option.click();}
+    };
     const actions=this.contentEl.createDiv({cls:'send-to-t3-question-actions'});
     this.submitButton=actions.createEl('button',{text:'Submit answer',cls:'mod-cta'});this.submitButton.onclick=()=>this.send(false);
     this.dismissButton=actions.createEl('button',{text:'Dismiss'});this.dismissButton.onclick=()=>this.send(true);
@@ -69,7 +96,7 @@ export class QuestionModal extends NoteTabPanel {
     // Streaming refreshes update status only. Keep DOM, focus, selection, and drafts intact.
     if(signature!==this.signature){
       this.signature=signature;this.form!.replaceChildren();
-      for(const question of view.request?.questions??[]){
+      for(const [questionIndex,question] of (view.request?.questions??[]).entries()){
         const section=this.form!.createEl('fieldset');section.createEl('legend',{text:question.header});section.createEl('p',{text:question.question});
         let draft=record.drafts[question.id]??{};
         const inputs:HTMLInputElement[]=[];
@@ -78,8 +105,16 @@ export class QuestionModal extends NoteTabPanel {
           input.name=`t3-question-${question.id}`;input.value=option.value??option.label;input.checked=draft.selected?.includes(input.value)??(index===0&&!draft.text&&!question.multiSelect&&!record.command);
           // A default choice is a draft only, never an implicit submission.
           if(input.checked&&!draft.selected?.length){draft={...draft,selected:[input.value]};if(!record.command)this.controller.draft(this.target,question.id,draft);}
-          inputs.push(input);label.createSpan({text:option.label});if(option.description)label.createEl('small',{text:option.description});
-          input.onchange=()=>{draft={...draft,selected:inputs.filter(i=>i.checked).map(i=>i.value),mode:'options'};this.controller.draft(this.target,question.id,draft);updateCustom();};
+          inputs.push(input);label.createSpan({text:`${index<9?`${index+1}. `:''}${option.label}`});if(option.description)label.createEl('small',{text:option.description});
+          input.onchange=()=>{
+            draft={...draft,selected:inputs.filter(i=>i.checked).map(i=>i.value),mode:'options'};this.controller.draft(this.target,question.id,draft);updateCustom();
+          };
+          input.onclick=()=>{
+            if(!question.multiSelect&&input.checked&&!input.disabled){
+              if(questionIndex<(view.request?.questions.length??0)-1)this.navigate(questionIndex+1,true);
+              else this.submitButton?.focus();
+            }
+          };
         }
         const textarea=question.allowCustomAnswer!==false?section.createEl('textarea',{attr:{'aria-label':question.options.length?`Custom answer for ${question.header}`:question.header,placeholder:question.options.length?'Or write your own answer':'Your answer'}}):undefined;
         const hint=textarea?section.createEl('small',{cls:'send-to-t3-custom-answer-hint'}):undefined;
@@ -95,6 +130,7 @@ export class QuestionModal extends NoteTabPanel {
           textarea.onfocus=activate;textarea.oninput=activate;updateCustom();
         }
       }
+      this.navigate(this.questionIndex);
     }
     const locked=!!record.command||!view.request||view.status==='submitting';
     for(const input of Array.from(this.form!.querySelectorAll<HTMLInputElement|HTMLTextAreaElement>('input,textarea')))input.disabled=locked;

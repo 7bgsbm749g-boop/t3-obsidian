@@ -30,3 +30,28 @@ test('completion handles the real RPC item envelope from authentication through 
  const api=t3Api(async path=>{assert.equal(path,'/api/auth/websocket-ticket');return {ticket:'ticket'};},'https://fixture',url=>new Socket(url) as any);
  const checked=await checkFinalResponse({origin:'https://fixture',api},'thread',state(),'run');assert.equal(checked.verified,true);assert.equal(calls[0].tag,'orchestration.getTurnItem');assert.equal(calls[0].payload.itemId,'opaque-item');
 });
+
+function historical():InlineThreadState{
+ const current=state();delete current.turns!.run.completedAt;current.turns!.run.messageId='root';
+ current.historyComplete=true;current.latestTurn={turnId:'next',state:'completed',messageId:'next-root',requestedAt:'2026-10-11T13:00:00.000Z'};
+ current.messages=[{id:'root',role:'user',turnId:'run',text:'Exact source prompt',streaming:false,createdAt:'2026-10-11T11:00:00.000Z'},{...current.messages[0],createdAt:at},{id:'next-root',role:'user',turnId:'next',text:'Later prompt',streaming:false,createdAt:current.latestTurn.requestedAt}];
+ return current;
+}
+test('an explicit historical import can verify a closed canonical boundary without inventing a run timestamp',async()=>{
+ const current=historical(),calls:unknown[]=[],access={origin:'',api:async(_path:string,payload?:unknown)=>{calls.push(payload);return item();}};
+ assert.equal(finalResponseKey(current,'run'),undefined,'live completion keeps the persisted timestamp requirement');
+ assert.equal((await checkFinalResponse(access,'thread',current,'run')).verified,false);assert.equal(calls.length,0);
+ assert.ok(finalResponseKey(current,'run',{historicalImport:true}));
+ assert.equal((await checkFinalResponse(access,'thread',current,'run',{historicalImport:true})).verified,true);assert.equal(calls.length,1);assert.equal(current.turns!.run.completedAt,undefined);
+});
+test('partial, unbound, active, late and failed history cannot authorize a historical import save',async()=>{
+ const changes:Array<(current:InlineThreadState)=>void>=[
+  current=>{current.historyComplete=false;},current=>{current.latestTurn=undefined;},
+  current=>{current.messages=current.messages.filter(m=>m.id!=='root');},current=>{current.messages=current.messages.filter(m=>m.id!=='next-root');},
+  current=>{current.session={status:'running',activeTurnId:'run'};},current=>{current.messages[1].streaming=true;},
+  current=>{current.messages[1].createdAt=current.latestTurn!.requestedAt;},current=>{current.messages[1].updatedAt=undefined;},
+  current=>{current.activities=[{id:'error',kind:'runtime.error',summary:'Failure',turnId:'run',createdAt:'2026-10-11T12:30:00.000Z'}];},
+ ];
+ for(const change of changes){const current=historical();change(current);assert.equal(finalResponseKey(current,'run',{historicalImport:true}),undefined);}
+ await assert.rejects(checkFinalResponse({origin:'',api:async()=>({...item(),runId:'unrelated'})},'thread',historical(),'run',{historicalImport:true}));
+});

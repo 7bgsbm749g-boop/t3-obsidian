@@ -33,11 +33,9 @@ test('selector shows no block until Send, then shows it while the exact check is
  assert.deepEqual(h.previews,['show','clear']);assert.equal(h.sent.length,1);
 });
 
-test('no new content and destination timeout clear the pending block',async()=>{
+test('no new content clears the pending block',async()=>{
  const empty=await fixture(undefined,false,false,true,false,false);await empty.opening;
  assert.deepEqual(empty.previews,[]);assert.equal(empty.sent.length,0);empty.modals[0].close();
- const timeout=await fixture(undefined,false,false,true);await timeout.opening;
- assert.deepEqual(timeout.previews,['show','clear']);assert.equal(timeout.sent.length,0);
 });
 test('same project redraw coalesces one pending check and obsolete UI cannot update the new project',async()=>{
  const h=await fixture();h.modal.onOpen();await Promise.resolve();assert.equal(h.calls.length,1);
@@ -50,8 +48,11 @@ test('close cancels a check and late result cannot dispatch or reopen the dialog
  const h=await fixture();const ready=h.modal.ready;h.modal.close();assert.equal(h.calls[0].signal.aborted,true);await ready;
  h.calls[0].resolve({label:'Continue',threadId:'old'});await Promise.resolve();assert.equal(h.modal.opened,false);assert.equal(h.sent.length,0);assert.deepEqual(h.notices,[]);
 });
-test('deadline resolves stalled check with retry state',async()=>{
- const h=await fixture();const result=await h.modal.ready;assert.equal(result.unavailable,true);assert.equal(h.calls[0].signal.aborted,true);assert.match(result.detail,/took too long/);assert.equal(h.modal.defaultButton.disabled,true);h.modal.close();
+test('a slow destination check remains available and accepts its late result',async()=>{
+ const h=await fixture();let finished=false;void h.modal.ready.then(()=>{finished=true;});
+ await new Promise(resolve=>setTimeout(resolve,50));assert.equal(finished,false);assert.equal(h.calls[0].signal.aborted,false);
+ h.calls[0].resolve({label:'Continue late',threadId:'late'});const result=await h.modal.ready;
+ assert.equal(result.threadId,'late');assert.equal(h.modal.defaultButton.disabled,false);h.modal.close();
 });
 test('New thread uses captured routing without awaiting old check and refuses unknown routing',async()=>{
  const h=await fixture('captured-project');h.modal.projectKey=undefined;await h.modal.choose('new');assert.equal(h.sent[0].key,'captured-project');assert.equal(h.calls[0].signal.aborted,true);
@@ -131,12 +132,12 @@ test('a remembered imported thread still requires a first-send choice',async()=>
  await h.modals[1].choose('default');assert.equal(h.sent[0].d.threadId,'imported');
 });
 
-test('an unavailable or timed-out automatic default sends nothing and never falls back to New thread',async()=>{
+test('an unavailable automatic default sends nothing and a slow valid default completes once',async()=>{
  const unavailable=await fixture(undefined,false,false,true);unavailable.calls[0].resolve({label:'Thread unavailable',unavailable:true,detail:'Missing thread'});await unavailable.opening;
  assert.equal(unavailable.sent.length,0);assert.equal(unavailable.modals.length,0);assert.match(unavailable.notices[0],/Missing thread/);
- const timeout=await fixture(undefined,false,false,true);await timeout.opening;
- assert.equal(timeout.sent.length,0);assert.equal(timeout.calls[0].signal.aborted,true);assert.match(timeout.notices[0],/took too long/);
- timeout.calls[0].resolve({label:'Late thread',threadId:'late'});await Promise.resolve();assert.equal(timeout.sent.length,0);
+ const slow=await fixture(undefined,false,false,true);await new Promise(resolve=>setTimeout(resolve,50));
+ assert.equal(slow.sent.length,0);assert.equal(slow.calls[0].signal.aborted,false);
+ slow.calls[0].resolve({label:'Late thread',threadId:'late'});await slow.opening;assert.equal(slow.sent.length,1);assert.equal(slow.sent[0].d.threadId,'late');
 });
 
 

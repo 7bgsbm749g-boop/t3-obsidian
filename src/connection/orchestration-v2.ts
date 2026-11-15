@@ -10,9 +10,40 @@ import {workspacePreparation} from '../projects/worktree-setup';
 export const T3_PROTOCOL_VERSION=2;
 export const T3_PROTOCOL_HEADER='x-t3-orchestration-protocol';
 const array=<T>(value:readonly T[]|null|undefined):T[]=>Array.isArray(value)?value as T[]:[];
+/** Restore the public dedupeBodies wire format before reducers see it. Only
+ * equal bodies are omitted by T3; missing source records remain an error. */
+function restoreSnapshotBodies(snapshot:WireSnapshot):WireSnapshot {
+ const p=snapshot.projection;if(!p)return snapshot;
+ const messages=new Map(p.messages.map(message=>[message.id,message.text]));
+ const extra=p as typeof p&Record<string,unknown>;
+ const checkpoints=Array.isArray(extra.checkpoints)?extra.checkpoints:[];
+ const mapped=new Map<WireTurnItem,WireTurnItem>();
+ const restore=(item:WireTurnItem)=>{
+  const cached=mapped.get(item);if(cached)return cached;
+  const value=item as WireTurnItem&Record<string,unknown>,next={...value};let changed=false;
+  const copy=(marker:string,field:string,body:unknown)=>{
+   if(value[marker]!==true)return;
+   if(body===undefined)throw Error('T3 omitted a response body without its source record.');
+   next[field]=body;delete next[marker];changed=true;
+  };
+  if(['user_message','assistant_message'].includes(item.type))copy('textOmitted','text',messages.get(item.messageId??''));
+  if(item.type==='checkpoint'){
+   const source:unknown=checkpoints.find((entry:unknown)=>isRecord(entry)&&entry.id===value.checkpointId);
+   copy('filesOmitted','files',isRecord(source)?source.files:undefined);
+  }
+  if(item.type==='subagent'){
+   const source=array(p.subagents).find(entry=>entry.id===value.subagentId);
+   copy('promptOmitted','prompt',isRecord(source)&&source.promptOmitted!==true?source.prompt:undefined);
+   copy('resultOmitted','result',isRecord(source)&&source.resultOmitted!==true?source.result:undefined);
+  }
+  const result=changed?next:item;mapped.set(item,result);return result;
+ };
+ return {...snapshot,projection:{...p,turnItems:array(p.turnItems).map(restore),visibleTurnItems:array(p.visibleTurnItems).map(row=>row.visibility==='local'||row.sourceThreadId===p.thread.id?{...row,item:restore(row.item)}:row)}};
+}
 /** Compact snapshots omit duplicate local entries, not their contents. Restore
  * the same item references before hydration, reducers or display consume them. */
 export function restoreCompactSnapshot(snapshot:WireSnapshot):WireSnapshot {
+ snapshot=restoreSnapshotBodies(snapshot);
   if(snapshot?.turnItemsOmitLocalVisible!==true||!snapshot.projection)return snapshot;
   const p=snapshot.projection,local=array(p.visibleTurnItems).filter(row=>row.visibility==='local'||row.sourceThreadId===p.thread?.id).map(row=>row.item);
   const items=[...new Map([...local,...array(p.turnItems)].map(item=>[item.id,item])).values()];
@@ -70,11 +101,11 @@ export function itemActivities(item:WireTurnItem,requests:Record<string,WireRunt
   if(['user_message','assistant_message','reasoning','checkpoint'].includes(item.type))return [];
   const status=terminal(item.status)?item.status==='failed'?'failed':item.status==='interrupted'||item.status==='cancelled'?'stopped':'completed':'inProgress';
   if(['compaction','proposed_plan','todo_list','notification','error'].includes(item.type))return [{...base,id:`v2:${item.id}`,
-    kind:item.type==='compaction'?'context-compaction':['proposed_plan','todo_list'].includes(item.type)?'response.plan':'response.notification',
-    summary:item.title??item.type.replace(/_/g,' '),payload:{status,text:item.text??item.summary??item.failure?.message,steps:item.steps,error:item.type==='error'}}];
+    kind:item.type==='compaction'?'context-compaction':item.type==='proposed_plan'?'response.proposed-plan':item.type==='todo_list'?'response.plan':'response.notification',
+    summary:item.title??item.type.replace(/_/g,' '),payload:{status,completedAt:item.completedAt,beforeTokenCount:item.beforeTokenCount,afterTokenCount:item.afterTokenCount,text:item.text??item.summary??item.failure?.message,markdown:item.markdown,planId:item.planId,streaming:item.streaming,steps:item.steps,error:item.type==='error'}}];
   return [{...base,id:`v2:${item.id}`,kind:terminal(item.status)?'tool.completed':'tool.updated',summary:item.title??item.toolName??item.type.replace(/_/g,' '),
     payload:{toolCallId:item.id,itemType:item.type,status,title:item.title??item.toolName,
-      files:item.fileName?[item.fileName]:undefined,data:{toolName:item.toolName??item.type,kind:item.type,
+      files:item.fileName?[item.fileName]:undefined,data:{toolSource:item.toolSource,toolIcon:item.toolIcon,toolName:item.toolName??item.type,kind:item.type,
         input:item.type==='command_execution'?{command:item.input}:item.input,
         command:item.type==='command_execution'?item.input:undefined,
         output:item.output??(item.outputOmitted?'Output details are not available yet.':undefined),exitCode:item.exitCode,path:item.fileName??item.viewedImagePath,

@@ -38,14 +38,14 @@ export default class ImportSaveLab extends Plugin {
     subject.connection=()=>({environmentId:source.environmentId});
     subject.localResponseTarget=async()=>({environmentId:source.environmentId,workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'});
     subject.readImportHistory=async()=>({source,state:applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state,title:snapshot.thread.title});
-    let syncReady=false;const completionReads:any[]=[];
+    let saveReady=false;const finalNotes=deviceFinalNoteIO(this.app,()=>true);const completionReads:any[]=[];
     const local=new LocalResponseManager('synthetic-native-client',subject.settings.vaultId,{
       ...deviceNoteIO(this.app),localBindings:()=>responseBindingRequests(subject.settings.responseBindings),saveLocalBinding:async request=>{subject.settings.responseBindings=updateResponseBindingData(subject.settings.responseBindings,request,'synthetic');},
       openedNotes:()=>this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file).map(view=>({path:view.file!.path,document:native.view(view)?.saved()??view.getViewData()})),
-      syncReady:()=>syncReady,receiveCoordinated:record=>native.receive(record),receiveDirect:update=>native.stream(update),localCompleted:(id,note)=>native.localCompleted(id,note),
+      receiveCoordinated:record=>native.receive(record),receiveDirect:update=>native.stream(update),localCompleted:(id,note)=>native.localCompleted(id,note),
       completionFailed:error=>write('SAVE-ERROR.json',{error:String(error)}),
       access:async()=>({origin:'https://synthetic.invalid',api:async(route,payload)=>{completionReads.push({route,itemId:expectRecord(payload).itemId});if(route!=='/api/orchestration/turn-item')throw Error('Unexpected synthetic request.');return {id:'synthetic-final-item',threadId:source.threadId,runId:turnId,messageId:'synthetic-answer',type:'assistant_message',text:marker,streaming:false,status:'completed',updatedAt:at};}}),
-    },deviceFinalNoteIO(this.app,()=>true),Date.now,(record,access,receive)=>new DirectInlinePreview(record,access,receive,(_thread,_access,callbacks)=>{queueMicrotask(()=>callbacks.item({kind:'snapshot',snapshot}));return {stop:()=>{}};}));
+    },{...finalNotes,read:async path=>saveReady?finalNotes.read(path):undefined},Date.now,(record,access,receive)=>new DirectInlinePreview(record,access,receive,(_thread,_access,callbacks)=>{queueMicrotask(()=>callbacks.item({kind:'snapshot',snapshot}));return {stop:()=>{}};},undefined,undefined,async()=>({snapshot,state:applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state})));
     this.register(()=>local.dispose());this.registerInterval(window.setInterval(()=>{native.refresh();local.tick();},100));
     let dialog:ImportRunModal|undefined,dialogSaveChecked=false,followChecked=false;
     subject.deviceInline={register:(request:any)=>local.register(request),waitForSave:async(id:string)=>{
@@ -81,8 +81,8 @@ export default class ImportSaveLab extends Plugin {
     const request=responseBindingRequests(subject.settings.responseBindings)[0],pendingDisk=await this.app.vault.read(imported),pendingVisible=(leaf.view as MarkdownView).editor.getValue();
     write('PENDING.json',{pending,diskHasPlaceholder:pendingDisk.includes(':::send-to-t3-response'),editorHasFinal:pendingVisible.includes(marker)});
     await capture('pending.png');
-    if(pending.saveState!=='pending'||pending.pendingReason!=='sync'||!pendingDisk.includes(':::send-to-t3-response')||!pendingVisible.includes(marker))throw Error('The native pending import was not represented honestly.');
-    leaf.detach();syncReady=true;local.tick();
+    if(pending.saveState!=='pending'||pending.pendingReason!=='note-unavailable'||!pendingDisk.includes(':::send-to-t3-response')||!pendingVisible.includes(marker))throw Error('The native pending import was not represented honestly.');
+    leaf.detach();saveReady=true;local.changed(imported.path);local.tick();
     const saved=await local.waitForSave(request.id,5000),final=await this.app.vault.read(imported);
     if(!saved.saved||final.includes(':::send-to-t3-response')||!final.includes(marker)||!final.includes('Ordinary text before.'))throw Error('The imported final was not saved after its native tab closed.');
     const retry=await subject.importRun(imported.path,{id:source.projectId},source.threadId,messageId,false);

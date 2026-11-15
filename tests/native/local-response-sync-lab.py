@@ -117,7 +117,17 @@ try:
     assert finals['a'].count('LOCAL_FINAL_SAVE_LAB_ANSWER') == 1
     assert 't3-response-binding:' not in finals['a'] and 'data-t3-response=' not in finals['a']
     checks.append('Identical independent local final saves converged to one ordinary Markdown answer')
-    (evidence / 'result.md').write_text(finals['a'])
+    peer = fixture('peer-save', dict(settings=read('a')))
+    write('a', peer['settings'])
+    (vaults['a'] / names[0]).write_text(peer['document'])
+    transfer()
+    result = fixture('reconcile', dict(binding=peer['binding'], settings=read('b'), document=(vaults['b'] / names[0]).read_text()))
+    assert result['status']['finalSaved'] and not result['status']['finalWriterPending']
+    assert not result['health']['pending'] and result['writes'] == 1
+    assert result['document'] == peer['document']
+    checks.append('Stopped refused save verified peer completion and exact output after real Sync without rewriting user text')
+    (evidence / 'peer-reconciliation.json').write_text(json.dumps(result, indent=2) + '\n')
+    (evidence / 'result.md').write_text(peer['document'])
     (evidence / 'synced-plugin-data.json').write_text(json.dumps(read('a'), indent=2) + '\n')
     receipt = dict(status='passed', checks=checks, transport='official Obsidian Headless Sync',
                    plugin='Actual LocalResponseManager and settings merge, replayed against transferred synthetic bytes',

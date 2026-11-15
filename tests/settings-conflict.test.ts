@@ -1,3 +1,4 @@
+import {loadSmartSend,prepareSmartSend,rememberResponse,smartDestination} from '../src/notes/smart-send';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -15,10 +16,67 @@ async function harness(initial:any,deviceId=randomUUID()){
   }
   const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base};
   const module={exports:{} as any};
-  runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console},{timeout:5000});
+  runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},URL,TextEncoder,TextDecoder,AbortController,crypto:webcrypto,setTimeout,clearTimeout,console},{timeout:5000});
   const plugin=new module.exports.default();await plugin.onload();
   return {plugin,deviceId,saves:()=>saves,current:()=>current,setCurrent:(value:any)=>{current=value;}};
 }
+
+async function noteRoutingHarness(){
+  const h=await harness({vaultId:randomUUID(),inlineStreaming:{enabled:false}}),p=h.plugin;
+  const project={id:'project',title:'Synthetic project',workspaceRoot:'/synthetic/project',connectionId:'connection'};
+  const notePath='Synthetic/Discussion.md',threadId='previous-thread';
+  p.app.vault={adapter:{}};p.noteNeedsRelink=async()=>false;
+  p.settings.directProjects=[project];p.settings.paired=[{id:'connection',name:'Synthetic machine',url:'https://synthetic.invalid',environmentId:'environment'}];
+  p.projects=()=>[project];p.syncProjectSources=()=>{};
+  const data=loadSmartSend(undefined),plan=await prepareSmartSend(data,notePath,smartDestination('environment',project.id,threadId),'Original request.');
+  p.settings.smartSend=data;
+  const request={id:randomUUID(),project,connection:{connectionId:'connection',environmentId:'environment'},noteThread:p.noteThreadIntent(notePath,project,{environmentId:'environment'}),smartSend:plan.capture};
+  p.rememberStarted(request,threadId);
+  p.settings.noteThreads[0].selectedAt='2026-01-01T00:00:00.000Z';
+  await p.save();
+  p.readChatThread=async(_connection:unknown,_project:unknown,id:string)=>({id,projectId:project.id,title:'Existing discussion'});
+  p.hasSmartContent=async()=>true;p.previewSend=()=>()=>{};
+  const sends:Array<{threadId?:string;projectKey?:string;newThread:boolean;overrideKey?:string}>=[];
+  p.sendNote=async(_file:unknown,threadId:string|undefined,projectKey:string|undefined,newThread:boolean,overrideKey:string|undefined)=>{sends.push({threadId,projectKey,newThread,overrideKey});};
+  return {...h,project,notePath,threadId,request,sends};
+}
+
+function pauseIdentityPublication(plugin:any){
+  let release!:()=>void,entered!:()=>void;
+  const waiting=new Promise<void>(resolve=>{release=resolve;}),ready=new Promise<void>(resolve=>{entered=resolve;});
+  plugin.publishVaultIdentity=async()=>{entered();await waiting;};
+  return {ready,release};
+}
+
+test('a direct note send keeps its previous thread while a stale Sync settings refresh is waiting',async()=>{
+  const h=await noteRoutingHarness(),p=h.plugin;
+  const other={...p.settings.noteThreads[0],notePath:'Synthetic/Other.md',noteId:'a'.repeat(64),threadId:'remote-thread'};
+  h.setCurrent({...h.current(),noteThreads:[other]});
+  const pause=pauseIdentityPublication(p),refresh=p.onExternalSettingsChange();
+  try{
+    await pause.ready;
+    await p.openNoteSend({path:h.notePath},false,null);
+    assert.deepEqual(h.sends,[{threadId:h.threadId,projectKey:'connection:project',newThread:false,overrideKey:'connection:project'}]);
+    assert.equal(p.noteThread('Synthetic/Other.md')?.threadId,other.threadId,'new remote links are available during the refresh');
+  }finally{pause.release();await refresh;}
+  assert.equal(h.current().noteThreads.some((entry:any)=>entry.threadId===h.threadId),true);
+  assert.equal(h.current().noteThreads.some((entry:any)=>entry.threadId===other.threadId),true);
+});
+
+test('a send confirmed during a Sync settings refresh stays remembered after refresh and restart',async()=>{
+  const h=await noteRoutingHarness(),p=h.plugin;
+  h.setCurrent({...h.current(),noteThreads:[]});
+  const pause=pauseIdentityPublication(p),refresh=p.onExternalSettingsChange();
+  try{
+    await pause.ready;
+    p.rememberStarted({...h.request,id:randomUUID()},'newly-selected-thread');
+  }finally{pause.release();await refresh;}
+  assert.equal(p.noteThread(h.notePath)?.threadId,'newly-selected-thread');
+  await p.openNoteSend({path:h.notePath},false,null);
+  assert.equal(h.sends[0]?.threadId,'newly-selected-thread');assert.equal(h.sends[0]?.newThread,false);
+  const restarted=await harness(h.current(),h.deviceId);
+  assert.equal(restarted.plugin.noteThread(h.notePath)?.threadId,'newly-selected-thread');
+});
 
 test('established vault startup and device-only saves do not rewrite synced settings',async()=>{
   const h=await harness({vaultId:'vault'});
@@ -27,6 +85,69 @@ test('established vault startup and device-only saves do not rewrite synced sett
   assert.equal(h.saves(),0,'device-local request state must not touch data.json');
   h.plugin.settings.threadTitleGeneration='always';await h.plugin.save();
   assert.equal(h.saves(),1,'an actual shared setting change is persisted');
+});
+
+test('automatic thread settlement requires an explicit saved opt-in on startup and Sync refresh',async()=>{
+  for(const value of [undefined,false,null,'true',1,true]){
+    const initial=value===undefined?{vaultId:'vault'}:{vaultId:'vault',autoSettleThreads:value};
+    const h=await harness(initial);
+    assert.equal(h.plugin.settings.autoSettleThreads,value===true);
+    assert.equal(h.saves(),0,'loading a default must not rewrite synced settings');
+    h.plugin.settings.threadTitleGeneration='always';await h.plugin.save();
+    assert.equal(h.current().autoSettleThreads,value===true);
+    const restarted=await harness(h.current());assert.equal(restarted.plugin.settings.autoSettleThreads,value===true);
+    h.setCurrent({...h.current(),autoSettleThreads:true});await h.plugin.onExternalSettingsChange();
+    assert.equal(h.plugin.settings.autoSettleThreads,true);
+    h.plugin.settings.settlementJobs.push({requestId:'pending'});
+    const incoming={...h.current()};delete incoming.autoSettleThreads;h.setCurrent(incoming);
+    await h.plugin.onExternalSettingsChange();
+    assert.equal(h.plugin.settings.autoSettleThreads,false);assert.equal(h.plugin.settings.settlementJobs.length,0);
+  }
+});
+
+test('disabled automatic settlement does not restore device jobs or settle a new send',async()=>{
+  const h=await harness({vaultId:'vault',autoSettleThreads:true});
+  h.plugin.settings.settlementJobs.push({requestId:'pending',messageId:'message',threadId:'thread',projectId:'project',connection:{executable:'',host:'',transport:'direct',environmentId:'environment'}});await h.plugin.saveDeviceState();
+  const enabled=await harness(h.current(),h.deviceId);assert.equal(enabled.plugin.settings.settlementJobs.length,1);
+  const restarted=await harness({vaultId:'vault'},h.deviceId);
+  assert.equal(restarted.plugin.settings.settlementJobs.length,0);
+  restarted.plugin.rememberSettlement({connection:{}},'thread');
+  assert.equal(restarted.plugin.settings.settlementJobs.length,0);
+});
+
+for(const queued of [false,true])for(const missing of [false,true])test(`a shared save adopting disabled settlement discards persisted jobs (queued=${queued}, missing=${missing})`,async()=>{
+  const h=await harness({vaultId:'vault',autoSettleThreads:true});
+  h.plugin.settings.completionJobs.push({id:'keep-device-work'});
+  h.plugin.settings.settlementJobs.push({requestId:'old',messageId:'message',threadId:'thread',projectId:'project',connection:{transport:'direct',environmentId:'environment'}});
+  await h.plugin.saveDeviceState();
+  const incoming={...h.current(),autoSettleThreads:false};if(missing)delete incoming.autoSettleThreads;h.setCurrent(incoming);
+  h.plugin.settings.threadTitleGeneration='always';
+  const saving=h.plugin.save();if(queued)await Promise.all([saving,h.plugin.save()]);else await saving;
+  assert.equal(h.plugin.settings.autoSettleThreads,false);
+  assert.equal(h.current().autoSettleThreads,false);
+  assert.equal(h.plugin.settings.settlementJobs.length,0,'the save must clear jobs without waiting for a separate Sync refresh');
+  assert.equal(h.plugin.settings.completionJobs[0]?.id,'keep-device-work','clearing settlement must preserve unrelated device work');
+  const restarted=await harness({...h.current(),autoSettleThreads:true},h.deviceId);
+  assert.equal(restarted.plugin.settings.settlementJobs.length,0,'re-enabling on another device must not restore old jobs');
+});
+
+test('saved job changes and reply completion drive settlement without waiting for a timer',async()=>{
+  const h=await harness({vaultId:'vault',autoSettleThreads:true}),synced:unknown[][]=[],wakes:Array<string|undefined>=[];
+  h.plugin.settlementEvents={sync:(jobs:unknown[])=>synced.push([...jobs]),wake:(id?:string)=>wakes.push(id)};
+  const job={requestId:'pending',messageId:'message',threadId:'thread',projectId:'project',connection:{executable:'',host:'',transport:'direct',environmentId:'environment'}};
+  h.plugin.settings.settlementJobs.push(job);await h.plugin.save();assert.equal(synced.at(-1)?.[0],job);
+  h.plugin.busy=true;h.plugin.busy=false;assert.deepEqual(wakes,[undefined]);
+  h.plugin.app.workspace.getLeavesOfType=()=>[];
+  h.plugin.deviceInline.io.localCompleted('binding','Note.md');assert.deepEqual(wakes,[undefined,'binding']);
+  h.setCurrent({...h.current(),autoSettleThreads:false});await h.plugin.onExternalSettingsChange();assert.equal(synced.at(-1)?.length,0);
+});
+
+test('thread hiding leaves T3 unchanged by default and syncs explicit hide and show choices',async()=>{
+  const h=await harness({vaultId:'vault'});assert.equal(h.plugin.settings.hideObsidianThreads,undefined);assert.equal(h.saves(),0);
+  h.plugin.settings.threadTitleGeneration='always';await h.plugin.save();assert.equal(Object.hasOwn(h.current(),'hideObsidianThreads'),false);
+  h.setCurrent({...h.current(),hideObsidianThreads:true});await h.plugin.onExternalSettingsChange();assert.equal(h.plugin.settings.hideObsidianThreads,true);
+  await h.plugin.setThreadHiding(false);assert.equal(h.current().hideObsidianThreads,false);
+  const restarted=await harness(h.current());assert.equal(restarted.plugin.settings.hideObsidianThreads,false);
 });
 
 test('project creation locations sync as complete machine/path choices and persist through restart',async()=>{
@@ -158,4 +279,36 @@ for(const format of [undefined,'formatted','raw-markdown','invalid'])test(`final
   h.plugin.settings.inlineStreaming.finalAnswerFormat='raw-markdown';await h.plugin.save();
   assert.equal(h.current().inlineStreaming.finalAnswerFormat,'raw-markdown');
   assert.equal(h.current().inlineStreaming.intermediateMode,'collapse');
+});
+
+test('Smart Send-only Sync adoption notifies pending peer-save proof without a binding or note change',async()=>{
+ const h=await harness({vaultId:'vault'});let proofs=0,bindings=0;
+ h.plugin.deviceInline.savedResponsesChanged=()=>proofs++;h.plugin.deviceInline.localBindingsChanged=()=>bindings++;
+ const incoming=loadSmartSend(undefined);await rememberResponse(incoming,'Synthetic.md',randomUUID(),'Stored peer output','','',0);
+ h.setCurrent({...h.current(),smartSend:incoming});await h.plugin.onExternalSettingsChange();assert.equal(proofs,1);assert.equal(bindings,0);
+ await h.plugin.onExternalSettingsChange();assert.equal(proofs,1,'Identical settings do not restart proof checks');
+});
+
+test('reply provenance is durable locally before one combined shared publication',async()=>{
+ const h=await harness({vaultId:randomUUID()}),p=h.plugin;
+ for(let n=0;n<2;n++)await p.retainSmartChange(()=>rememberResponse(p.smartData(),'Synthetic.md','reply-'+n,'Generated '+n,'','',0));
+ assert.equal(h.saves(),0,'Pre-write provenance must not rewrite the whole shared file');
+ const restarted=await harness(h.current(),h.deviceId);assert.equal(Object.keys(restarted.plugin.smartData().responses).length,2,'Local provenance survives restart before shared publication');
+ await p.checkExternalSettings();assert.equal(h.saves(),1);assert.equal(Object.keys(h.current().smartSend.responses).length,2);
+});
+test('a new provenance record during shared IO remains pending for the next publication',async()=>{
+ const h=await harness({vaultId:randomUUID()}),p=h.plugin;
+ await p.retainSmartChange(()=>rememberResponse(p.smartData(),'Synthetic.md','first','First body.','','',0));
+ const save=p.saveData.bind(p);let entered!:()=>void,release!:()=>void;const ready=new Promise<void>(resolve=>entered=resolve),gate=new Promise<void>(resolve=>release=resolve);
+ p.saveData=async(value:any)=>{entered();await gate;await save(value);};
+ const saving=p.save(true);await ready;
+ await p.retainSmartChange(()=>rememberResponse(p.smartData(),'Synthetic.md','second','Second body.','','',0));
+ release();await saving;assert.ok(p.smartHistoryRevision>p.smartHistoryPublished);
+ p.saveData=save;await p.checkExternalSettings();assert.equal(Object.keys(h.current().smartSend.responses).length,2);
+});
+test('shared snapshots keep immutable receipt membership while later history grows',async()=>{
+ const h=await harness({vaultId:randomUUID()}),p=h.plugin;
+ await p.retainSmartChange(()=>rememberResponse(p.smartData(),'Synthetic.md','first','First body.','','',0));
+ const snapshot=p.sharedSnapshot();await p.retainSmartChange(()=>rememberResponse(p.smartData(),'Synthetic.md','later','Later body.','','',0));
+ assert.equal(Object.keys(snapshot.smartSend.responses).length,1);assert.equal(Object.keys(p.smartData().responses).length,2);
 });

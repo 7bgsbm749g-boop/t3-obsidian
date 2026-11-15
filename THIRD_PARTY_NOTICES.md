@@ -2,7 +2,7 @@
 
 The T3 Code bundle includes the following open-source dependencies. Obsidian supplies the editor runtime separately. These notices are also included in the distributed JavaScript bundle.
 
-## @codemirror/autocomplete 6.20.3, @codemirror/commands 6.10.0, @codemirror/lang-css 6.3.1, @codemirror/lang-html 6.4.12, @codemirror/lang-java 6.0.2, @codemirror/lang-javascript 6.2.5, @codemirror/lang-json 6.0.2, @codemirror/lang-php 6.0.2, @codemirror/lang-python 6.2.1, @codemirror/lang-rust 6.0.2, @codemirror/lang-sql 6.10.0, @codemirror/lang-xml 6.1.0, @codemirror/language 6.12.4, @codemirror/legacy-modes 6.5.4, @codemirror/lint 6.9.7, @codemirror/state 6.5.0, @codemirror/state 6.7.6, @codemirror/view 6.38.6, @codemirror/view 6.43.13
+## @codemirror/autocomplete 6.20.3, @codemirror/commands 6.10.0, @codemirror/lang-css 6.3.1, @codemirror/lang-html 6.4.12, @codemirror/lang-java 6.0.2, @codemirror/lang-javascript 6.2.5, @codemirror/lang-json 6.0.2, @codemirror/lang-php 6.0.2, @codemirror/lang-python 6.2.1, @codemirror/lang-rust 6.0.2, @codemirror/lang-sql 6.10.0, @codemirror/lang-xml 6.1.0, @codemirror/language 6.12.4, @codemirror/legacy-modes 6.5.4, @codemirror/lint 6.9.7, @codemirror/state 6.7.6, @codemirror/view 6.43.13
 
 MIT License
 

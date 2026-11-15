@@ -120,23 +120,93 @@ desktop mobile styling, and this lab's GUI keyboard input are not phone proof.
 
 ## Mobile emulation
 
-Android Emulator is a possible next capability on this Linux VPS. A read-only
-hardware feasibility check successfully opened KVM API version 12 and created
-and closed an empty VM under `sudo`; the normal `ubuntu` process lacks `/dev/kvm`
-access. No Android SDK, emulator, Android system image, or Obsidian APK has been
-installed or boot-tested by this setup. Full accelerator verification remains
-`emulator -accel-check`, followed by a bounded actual boot/app smoke.
+An on-demand Android lab is available through `scripts/obsidian-mobile-lab.py`.
+It installs checksum-pinned official Android Emulator 37.2.13, Android 15/API 35
+x86_64 and Obsidian 1.15.0. KVM API 12 acceleration, native Obsidian launch,
+the mobile editor, private IndexedDB and app/WebView process suspension were
+verified on 2026-11-10. The test WebView reports Chromium 124.
 
-An Android setup would need scoped KVM access, the official SDK emulator and an
-appropriate system image, the official Obsidian APK, a working software keyboard,
-private Sync sign-in, and automation/screenshot control. Run it on demand with a
-memory budget after checking available memory and disk; this VPS has 7.6 GiB RAM
-and already carries production T3 and Obsidian. Android emulation would provide
-Android mobile evidence, not evidence for iPhone WKWebView/keyboard behavior.
+The default private state directory is
+`~/.local/share/t3-obsidian-mobile-lab`; `T3_MOBILE_LAB_ROOT` can select a dedicated
+alternative. Its marker prevents adoption of an unrelated directory. The host
+user needs membership in the `kvm` group; the launcher uses `sg kvm` so a T3
+restart is unnecessary after an administrator grants that membership. No
+production vault, plugin settings or credentials are copied into the device.
+The test vault is **T3 Mobile Lab**, in Android Obsidian's private app storage.
+
+The emulator owns console port 5580 and a separate loopback ADB server on 5041.
+Both run under `t3-session`; the lab uses an operation lock to serialize runs.
+The VM has 1536 MiB guest RAM and a 768 MiB explicitly provisioned data image,
+with a 2300 MiB host test budget. The official `-lowram` option keeps that guest
+budget explicit. This is a small functional test device, not a performance
+reference. Check disk headroom before setup. The command refuses unsafe archive
+paths, wrong artifact sizes and checksum mismatches.
+
+Use a new external evidence directory for each attempt:
+
+```sh
+python3 scripts/obsidian-mobile-lab.py setup --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-setup
+python3 scripts/obsidian-mobile-lab.py start --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-start
+python3 scripts/obsidian-mobile-lab.py status --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-status
+python3 scripts/obsidian-mobile-lab.py install-app --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-install
+```
+
+Wait for `bootCompleted: true` before installing the app. On first use, create
+the synthetic **T3 Mobile Lab** vault in App storage, continue without Sync, and
+exit Restricted mode through Obsidian's normal UI. Exiting Restricted mode can
+automatically load previously enabled plugins; do not enable the same plugin a
+second time during that load. These controls can be operated through the owned
+Android accessibility tree or its WebView, without a physical phone.
+
+Install a reviewed three-file plugin artifact directory, then restart only the
+owned Android app. Never use production `data.json`:
+
+```sh
+python3 scripts/obsidian-mobile-lab.py install-plugin --plugin-dir /absolute/reviewed-artifacts --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-plugin
+python3 scripts/obsidian-mobile-lab.py restart-app --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-restart
+python3 scripts/obsidian-mobile-lab.py run --scenario suspension --freeze-seconds 10 --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-suspension
+python3 scripts/obsidian-mobile-lab.py run --scenario pane-gap --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-pane-gap
+python3 scripts/obsidian-mobile-lab.py run --scenario closed-destination --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-closed
+python3 scripts/obsidian-mobile-lab.py stop --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-stop
+```
+
+`run` waits for plugin startup, installs the guarded native fixture, captures
+the actual editor and saved bytes, and deletes its notes through Obsidian even
+after a failed assertion. `recover-existing` checks an intentionally retained
+old fixture after an artifact upgrade. A failure must retain its evidence and
+report any unfinished cleanup; do not count it as a completed smoke.
+
+`suspension` backgrounds Obsidian and sends `SIGSTOP` to the exact owned app and
+WebView renderer processes. It checks their stopped states, stages synthetic
+canonical completion while they cannot execute, then resumes the same process
+identities with `SIGCONT`. A recycled PID never receives the resume signal.
+`freeze` and `thaw` expose those steps separately for longer controlled tests;
+always thaw in a `finally` path or stop the owned emulator. The unchanged
+0.0.415 plugin passed a basic 16-second freeze/resume case. Suspension alone
+was therefore not proven as the original report's trigger.
+
+`pane-gap` controls the native manager's observation of one temporarily empty
+editor while the actual saved anchor remains intact. On 0.0.415 this reproduced
+an unsaved permanent retirement and a blank response after a full Android app
+restart. This is fault injection into the real mobile application, not proof
+that a particular iPhone/Sync event caused the original gap.
+
+`attach` creates a fresh loopback forwarding port for the current app process.
+`scripts/mobile-cdp.mjs` refuses non-loopback endpoints and checks the debugger's
+`Android-Package` is `md.obsidian` before evaluating a fixture. It does not attach
+to a Chrome profile. Obtain a new attachment after an app restart or ADB restart.
+`capture` retains the native screenshot, accessibility tree and bounded logcat.
+
+These tests exercise real Android mobile Obsidian and its native note IO, with
+synthetic canonical T3 input. They do not claim a provider round trip or built-in
+Obsidian Sync propagation. Configure the dedicated Sync test vault separately
+through normal sign-in when that transport is under test; never connect QLO2.
+Android suspension approximates the stopped-execution part of iOS background
+freezing, but does not reproduce WKWebView, iOS storage or Apple's lifecycle.
 
 Apple's iOS Simulator requires Xcode on macOS. It cannot run directly on this
-Ubuntu VPS; genuine iPhone validation needs a phone or an appropriate Apple test
-environment, and an emulator/simulator result must be labelled as such.
+Ubuntu VPS. Exact iOS coverage needs an appropriate Apple test environment;
+the Android lab does not make the user's phone a routine test dependency.
 
 Primary references:
 

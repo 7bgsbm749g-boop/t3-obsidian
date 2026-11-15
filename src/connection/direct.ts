@@ -2,8 +2,7 @@ import {browserFetch} from './browser-fetch';
 import type {CreateThreadCommand,TurnStartCommand} from './send-contracts';
 import {isRecord,parseJson} from '../shared/values';
 import {readWireProjects,readThreadList,readMetadataSnapshot} from './wire-readers';
-import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
-import {T3_RESPONSE_MAX_BYTES,T3ResponseTooLargeError} from './t3-response-limits';
+import {StreamingJson,omitImportField} from './streaming-json';
 import {Buffer} from 'buffer/';
 import {sha1} from '@noble/hashes/legacy';
 import {sha256} from '@noble/hashes/sha2';
@@ -19,12 +18,14 @@ import type {ThreadAccess} from '../conversations/thread-stream';
 import type {SocketFactory} from './t3-rpc';
 import {PLUGIN_PERMISSIONS,hasPluginPermissions} from './environment-permissions';
 import {ensureNoProject} from '../projects/no-project';
-import {AUTO_THREAD_TITLE} from '../conversations/thread-title';
+import {AUTO_THREAD_TITLE,promptThreadTitle} from '../conversations/thread-title';
+import {ThreadCatalogCache} from './thread-catalog';
 export interface RemoteEnvironmentDescriptor extends Record<string,unknown>{environmentId:string;label:string;orchestrationProtocolVersion:2}
 export interface PairedConnection {id:string;name:string;url:string;environmentId:string;managed?:boolean;routeKind?:'local'|'https'|'ssh'}
 export interface PairedSession {token:string;expiresAt:number;environmentId:string;url:string;dpopKeyId?:string;accountId?:string;permissions?:string[]}
 export interface DirectPlan {protocolVersion?:2;launch?:boolean;generateTitle?:boolean;workspaceStrategy?:import('../conversations/model-defaults').WorkspaceStrategy;hash:string;environmentId:string;phase:'prepared'|'created'|'started';create:CreateThreadCommand|null;turn:TurnStartCommand;observedActiveTurnId?:string;delivery?:InlineStartRequest}
 export type Fetcher=typeof fetch;
+const threadCatalogs=new WeakMap<Fetcher,ThreadCatalogCache>();
 export function endpoint(value:string):string {
  let u:URL;try{u=new URL(value.trim());}catch{throw Error('Enter a T3 HTTPS address or pairing link.');}
  const local=['localhost','127.0.0.1','[::1]'].includes(u.hostname);
@@ -41,23 +42,27 @@ export function pairingInput(address:string,code=''):{url:string;code:string}{
  if(!['/','/pair',''].includes(u.pathname)||u.search)throw Error('Use a T3 address or its /pair link. Companion addresses are not T3 pairing links.');
  u.hash='';u.pathname='/';return {url:endpoint(u.href),code:token};
 }
-export async function jsonHttp(url:string,options:RequestInit={},fetcher:Fetcher=browserFetch):Promise<unknown>{
- const controller=new AbortController(),cancel=()=>controller.abort(options.signal?.reason);const timer=setTimeout(()=>controller.abort(),30000);
+export async function jsonHttp(url:string,options:RequestInit={},fetcher:Fetcher=browserFetch,compactImport=false):Promise<unknown>{
+ const controller=new AbortController(),cancel=()=>controller.abort(options.signal?.reason);
  if(options.signal?.aborted)cancel();else options.signal?.addEventListener('abort',cancel,{once:true});
  try{
   requestAborted(controller.signal);
   const r=await abortableRead(fetcher(url,{...options,credentials:'omit',redirect:'error',cache:'no-store',signal:controller.signal}),controller.signal);
   if(!r.ok){if(r.status===401||r.status===403)throw new T3HttpError(r.status,'T3 access denied or expired. Create a fresh pairing link in T3 and pair this device again.');throw new T3HttpError(r.status,`T3 returned HTTP ${r.status}.`);}
-  if(Number(r.headers.get('content-length')||0)>T3_RESPONSE_MAX_BYTES){controller.abort();throw new T3ResponseTooLargeError();}
+  if(compactImport&&r.body?.getReader){
+   const reader=r.body.getReader(),decoder=new TextDecoder('utf-8',{ignoreBOM:true}),parser=new StreamingJson(omitImportField);let complete=false;
+   try{for(;;){const {done,value}=await abortableRead(reader.read(),controller.signal);if(done){complete=true;break;}parser.write(decoder.decode(value,{stream:true}));}parser.write(decoder.decode());return parser.finish();}
+   finally{if(!complete)void reader.cancel().catch(()=>{});reader.releaseLock();}
+  }
   let body='';
-  if(r.body?.getReader){const reader=r.body.getReader();const parts:Uint8Array[]=[];let size=0;try{for(;;){const {done,value}=await abortableRead(reader.read(),controller.signal);if(done)break;size+=value.byteLength;if(size>T3_RESPONSE_MAX_BYTES){await reader.cancel();throw new T3ResponseTooLargeError();}parts.push(value);}}finally{if(controller.signal.aborted)void reader.cancel().catch(()=>{});reader.releaseLock();}
+  if(r.body?.getReader){const reader=r.body.getReader();const parts:Uint8Array[]=[];try{for(;;){const {done,value}=await abortableRead(reader.read(),controller.signal);if(done)break;parts.push(value);}}finally{if(controller.signal.aborted)void reader.cancel().catch(()=>{});reader.releaseLock();}
    // The platform decoder avoids the browser Buffer polyfill's large temporary
-   // code-point arrays. Preserve BOM handling and the existing byte limit.
+   // code-point arrays. Preserve BOM handling.
    body=new TextDecoder('utf-8',{ignoreBOM:true}).decode(Buffer.concat(parts));}
-  else {body=await abortableRead(r.text(),controller.signal);if(Buffer.byteLength(body)>T3_RESPONSE_MAX_BYTES)throw new T3ResponseTooLargeError();}
+  else body=await abortableRead(r.text(),controller.signal);
   try{return parseJson(body);}catch{throw Error('T3 returned an invalid response; response contents withheld.');}
  }catch(e){requestAborted(options.signal??undefined);if(e instanceof Error && (e.message.startsWith('T3 ')||e.message.startsWith('Use ')))throw e;throw Object.assign(Error('Cannot reach T3 directly. Check its public address, network access, and that T3 is running. Nothing is queued.'),{cause:e});}
- finally{clearTimeout(timer);options.signal?.removeEventListener('abort',cancel);}
+ finally{options.signal?.removeEventListener('abort',cancel);}
 }
 export async function descriptor(url:string,fetcher?:Fetcher,signal?:AbortSignal){
  const d=await jsonHttp(endpoint(url)+'/.well-known/t3/environment',{signal},fetcher);
@@ -82,7 +87,25 @@ export async function environmentApi(c:Connection,s:PairedSession|undefined,fetc
  if(s.expiresAt<=Date.now()+5000)throw Error('T3 pairing session expired. Pair this device again using a fresh T3 link.');
  const d=await descriptor(url,fetcher,signal);if(d.environmentId!==c.environmentId)throw Error('The address now points to a different T3 environment. Nothing was sent; add it as a new connection.');
  const key=s.dpopKeyId?await proofKey(s.dpopKeyId,false):undefined;
- return t3Api(async(path:string,payload?:unknown,options?:T3RequestOptions)=>{requestAborted(options?.signal);if(!path.startsWith('/api/')||path.includes('..')||path.includes('\\'))throw Error('Invalid T3 API path.');const target=url+path;const method=payload===undefined?'GET':'POST';return jsonHttp(target,{method,signal:options?.signal,headers:{Authorization:(key?'DPoP ':'Bearer ')+s.token,'Content-Type':'application/json',[T3_PROTOCOL_HEADER]:String(T3_PROTOCOL_VERSION),...(key?{DPoP:await proof(key,method,target,s.token)}:{})},...(payload===undefined?{}:{body:JSON.stringify(payload)})},fetcher);},url,makeSocket);
+ const api=t3Api(async(path:string,payload?:unknown,options?:T3RequestOptions)=>{requestAborted(options?.signal);if(!path.startsWith('/api/')||path.includes('..')||path.includes('\\'))throw Error('Invalid T3 API path.');const target=url+path;const method=payload===undefined?'GET':'POST';return jsonHttp(target,{method,signal:options?.signal,headers:{Authorization:(key?'DPoP ':'Bearer ')+s.token,'Content-Type':'application/json',[T3_PROTOCOL_HEADER]:String(T3_PROTOCOL_VERSION),...(key?{DPoP:await proof(key,method,target,s.token)}:{})},...(payload===undefined?{}:{body:JSON.stringify(payload)})},fetcher,options?.compactImport===true);},url,makeSocket);
+ const transport=fetcher??browserFetch;let catalog=threadCatalogs.get(transport);if(!catalog){catalog=new ThreadCatalogCache();threadCatalogs.set(transport,catalog);}
+ const identity=JSON.stringify([url,c.environmentId,s.token,s.expiresAt,s.dpopKeyId,s.accountId,s.permissions]),cache=catalog;
+ const routed:import('./t3-rpc').T3Api=async(path,payload,options)=>{
+  try{
+   const work=api(path,payload,options).then(value=>{if(path==='/api/orchestration/shell'&&payload===undefined){try{cache.remember(identity,value,s.expiresAt);}catch{cache.delete(identity);}}return value;});
+   if(path==='/api/orchestration/shell'&&payload===undefined)cache.observe(identity,work);
+   return await work;
+  }
+  catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403))cache.delete(identity);throw error;}
+ };
+ routed.cachedImportThreads=projectId=>cache.read(identity,projectId);
+ routed.importCacheIdentity=cache.scope(identity);
+ routed.prepareImportCatalog=signal=>{requestAborted(signal);return cache.prepare(identity,()=>routed('/api/orchestration/shell',undefined,{signal}));};
+ routed.watchImportThreads=(projectId,changed)=>{
+  let previous=JSON.stringify(cache.read(identity,projectId));
+  return cache.watch(identity,()=>{const next=JSON.stringify(cache.read(identity,projectId));if(next!==previous){previous=next;changed();}});
+ };
+ return routed;
 }
 interface CachedReadApi {work:Promise<AbortableT3Api>;controller:AbortController;users:number;settled:boolean;expires:number}
 const readApis=new WeakMap<Fetcher,Map<string,CachedReadApi>>();
@@ -121,9 +144,10 @@ export function commandId(id:string,name:string){
  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))throw Error('Invalid request ID.');
  const b=Buffer.from(sha1(Buffer.concat([Buffer.from(id.replace(/-/g,''),'hex'),Buffer.from(name)]))).slice(0,16);b[6]=(b[6]&15)|80;b[8]=(b[8]&63)|128;const h=b.toString('hex');return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
 }
-export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Promise<void>,fetcher?:Fetcher,access?:ThreadAccess){
+export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Promise<void>,fetcher?:Fetcher,access?:ThreadAccess,beforeThreadCreate?:()=>void|Promise<void>){
  const environment=access?.api??await environmentApi(r.connection,s,fetcher);
- const api=(path:string,payload?:unknown)=>environment('/api/orchestration/'+path,payload);
+ const requestOptions=beforeThreadCreate?{beforeThreadCreate}:undefined;
+ const api=(path:string,payload?:unknown)=>environment('/api/orchestration/'+path,payload,requestOptions);
  const hash=Buffer.from(sha256(Buffer.from(JSON.stringify({project:r.project.id,title:r.title,prompt:r.prompt,attachments:r.attachments??[],context:r.context??null,...(r.threadId?{threadId:r.threadId}:{})})))).toString('hex');
  if(r.directPlan&&(r.directPlan.hash!==hash||r.directPlan.environmentId!==r.connection.environmentId))throw Error('Saved request no longer matches its original content or environment.');
  if(!r.directPlan){
@@ -136,7 +160,8 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
   const defaults=await readNewThreadDefaults(environment,access?.origin??endpoint(r.connection.url||''),project);
   const {workspaceStrategy,...accessDefaults}=defaults;
   const common={threadId:commandId(r.id,'thread'),...accessDefaults,interactionMode:'default',createdAt:new Date().toISOString()};
-  r.directPlan={protocolVersion:2,...(r.title===AUTO_THREAD_TITLE||workspaceStrategy?.type==='worktree'?{launch:true,generateTitle:r.title===AUTO_THREAD_TITLE,workspaceStrategy}:{}),hash,environmentId:r.connection.environmentId!,phase:'prepared',create:{...common,type:'thread.create',commandId:commandId(r.id,'create'),projectId:project.id,title:r.title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:commandId(r.id,'turn'),message:{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})}}};
+  const generateTitle=r.title===AUTO_THREAD_TITLE,title=generateTitle?promptThreadTitle(r.prompt,r.attachments):r.title;
+  r.directPlan={protocolVersion:2,...(generateTitle||workspaceStrategy?.type==='worktree'?{launch:true,generateTitle,workspaceStrategy}:{}),hash,environmentId:r.connection.environmentId!,phase:'prepared',create:{...common,type:'thread.create',commandId:commandId(r.id,'create'),projectId:project.id,title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:commandId(r.id,'turn'),message:{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})}}};
   }
  }
  // Persist the complete commands before their first attempt AND on every retry.
@@ -148,7 +173,7 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
   if(!plan.create)throw Error('The saved T3 creation command is missing. Nothing was sent.');
   const {commandId,threadId,projectId,title,modelSelection,runtimeMode,interactionMode}=plan.create;
   const {messageId,text,attachments,context}=plan.turn.message;
-  await environment('/api/orchestration/launch',{commandId,threadId,projectId,title,generateTitle:plan.generateTitle??true,modelSelection,runtimeMode,interactionMode,creationSource:'web',workspaceStrategy:plan.workspaceStrategy??{type:'root'},initialMessage:{messageId,text,attachments,...(context?{context}:{})}});
+  await environment('/api/orchestration/launch',{commandId,threadId,projectId,title,generateTitle:plan.generateTitle??true,modelSelection,runtimeMode,interactionMode,creationSource:'web',workspaceStrategy:plan.workspaceStrategy??{type:'root'},initialMessage:{messageId,text,attachments,...(context?{context}:{})}},requestOptions);
   plan.phase='started';await save();
  }
  if(plan.phase==='prepared'){await api('dispatch',{...plan.create,...(plan.protocolVersion===2?{}:{__legacyV1:true})});plan.phase='created';await save();}

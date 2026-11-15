@@ -48,11 +48,11 @@ test('a late rejection from the old credential cannot revoke the replacement',as
   }finally{gate.resolve();await cache.dispose();}
 });
 
-for(const timeout of [false,true])test(`stopping a borrowed response ${timeout?'at its deadline':'successfully'} keeps every other reader authorized`,async()=>{
-  let closes=0,creates=0,canonicalReads=0;const commands:any[]=[],releases:string[]=[];
+for(const slow of [false,true])test(`stopping a borrowed response ${slow?'after a slow acknowledgement':'successfully'} keeps every other reader authorized`,async()=>{
+  let closes=0,creates=0,canonicalReads=0,ack!:()=>void;const commands:any[]=[],releases:string[]=[];
   const cache=new ThreadAccessCache(async()=>{
     creates++;return {origin:'https://test',api:async(_path,payload)=>{
-      if(payload){commands.push(payload);if(timeout)return new Promise(()=>{});return {};}
+      if(payload){commands.push(payload);if(slow)return new Promise<void>(resolve=>{ack=resolve;});return {};}
       assert.equal(closes,0,'the shared session is still valid');
       if(_path.startsWith('/api/orchestration/threads/stopped-thread?')){canonicalReads++;return {thread:{id:'stopped-thread',projectId:'project',messages:[],activities:[],latestTurn:{turnId:'turn',state:'running'},session:{status:'running',activeTurnId:'turn'}}};}
       return {progress:'Other response still streams'};
@@ -60,10 +60,11 @@ for(const timeout of [false,true])test(`stopping a borrowed response ${timeout?'
   });
   try{
     const work=interruptStoppedResponse(()=>cache.get('env'),randomUUID(),'stopped-thread','turn',5);
-    if(timeout)await assert.rejects(work,/did not acknowledge/);else await work;
+    if(slow){for(let i=0;i<30;i++)await Promise.resolve();assert.equal(closes,0);assert.deepEqual(await (await cache.get('env')).api('/other'),{progress:'Other response still streams'});ack();}
+    await work;
     assert.equal(canonicalReads,1);assert.equal(commands.length,1);assert.equal(commands[0].type,'thread.turn.interrupt');assert.equal(commands[0].turnId,'turn');
     assert.deepEqual(await (await cache.get('env')).api(path),{progress:'Other response still streams'});
-    assert.equal(creates,1);assert.equal(closes,0);assert.deepEqual(releases,[timeout?'stop-timeout':'stop-complete']);
+    assert.equal(creates,1);assert.equal(closes,0);assert.deepEqual(releases,['stop-complete']);
   }finally{await cache.dispose();assert.equal(closes,1);}
 });
 
@@ -140,4 +141,18 @@ test('expiry follows the actual credential deadline and shutdown closes a late f
   gate.resolve({origin:'https://test',api:async()=>({}),close:(reason:string)=>{closes.push(reason);}});
   await assert.rejects(renewal,/host has stopped/);await closing;await cache.dispose();
   assert.deepEqual(closes,['cache-expired','late-access']);await assert.rejects(cache.get('env'),/host has stopped/);
+});
+test('cancelling one borrowed read forwards its signal and keeps the other readers authorized',async()=>{
+ let received:AbortSignal|undefined,closes=0;
+ const cache=new ThreadAccessCache(async()=>({origin:'test',api:async(path,_payload,options)=>{
+  if(path==='/fast')return 'still authorized';
+  received=options?.signal;
+  return new Promise((_resolve,reject)=>received?.addEventListener('abort',()=>reject(received!.reason),{once:true}));
+ },close:()=>{closes++;}}));
+ const access=await cache.get('env'),controller=new AbortController();
+ const pending=access.api('/slow',undefined,{signal:controller.signal});
+ for(let i=0;i<12;i++)await Promise.resolve();
+ assert.equal(received,controller.signal);const rejected=assert.rejects(pending,/User cancelled/);
+ controller.abort(Error('User cancelled'));await rejected;
+ assert.equal(await access.api('/fast'),'still authorized');assert.equal(closes,0);await cache.dispose();assert.equal(closes,1);
 });

@@ -12,6 +12,10 @@ Keep desktop APIs behind explicit platform guards. Preserve mobile support,
 Obsidian 1.8.7 compatibility, native rendering and the HTML sandbox. Include
 relevant test results in your pull request.
 
-Read [the development checks](docs/review-and-release.md) and
-[version policy](docs/versioning.md) before preparing a release. Release and
-production installation steps belong to the maintainer's release queue.
+Complete the affected checks in the development run, review and commit your
+changes, then push the task branch and open a PR. Include the results and any
+remaining limits; use a draft if required checks are incomplete. Do not defer
+validation to publication. Read [the development checks](docs/review-and-release.md)
+and [version policy](docs/versioning.md). Release work stays on GitHub after
+PR review. Prepare the newer aligned version required by the GitHub PR check;
+do not install the plugin as a completion step.

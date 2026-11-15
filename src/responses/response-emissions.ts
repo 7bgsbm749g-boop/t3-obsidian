@@ -1,8 +1,16 @@
 import type {InlineThreadState} from '../conversations/inline-thread';
 import {renderWorktreeSetup,worktreeSetupPhase} from '../projects/worktree-setup';
+import {runTimer} from './response-presentation';
 import {renderResponseTasks} from './response-tasks';
+import {renderProposedPlan} from './response-plan';
 
 export interface ResponseEmission {id:string;turnId:string|null;createdAt?:string;sequence:number;body:string;active:boolean;kind:string}
+const compactionTokens=(count:number)=>{
+  for(const [scale,unit] of [[1e12,'T'],[1e9,'B'],[1e6,'M'],[1e3,'K']] as const){
+    if(count>=scale){const value=count/scale;return value.toFixed(value>=100?0:value>=10?1:2).replace(/\.0+$/,'')+unit;}
+  }
+  return String(Math.round(count));
+};
 const html=(text:string)=>text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\n/g,'&#10;');
 // Blank lines alone let consecutive Markdown quotes merge. A zero-size HTML
 // block makes each native callout a separate block, including inside progress.
@@ -31,15 +39,21 @@ export function responseEmissions(state:InlineThreadState,turns:string[],markdow
       result.push({id:activity.id,turnId:activity.turnId,createdAt:activity.createdAt,sequence:activity.sequence??0,body,active:active&&body.includes('data-worktree-setup-phase="running"'),kind:activity.kind});
       continue;
     }
-    if(!turns.includes(activity.turnId??'')||!['context-compaction','response.plan','response.notification'].includes(activity.kind))continue;
+    if(!turns.includes(activity.turnId??'')||!['context-compaction','response.plan','response.proposed-plan','response.notification'].includes(activity.kind))continue;
     const p=activity.payload??{};let body:string,active=false;
     if(activity.kind==='context-compaction'){
       const running=p.status==='inProgress';
       active=running&&!!activeTurn&&activity.turnId===activeTurn;
-      const label=running?(active?'Compacting context':'Context compaction'):p.status==='failed'?'Context compaction failed':p.status==='stopped'?'Context compaction stopped':'Context compacted';
-      body=`<span class="send-to-t3-context" data-t3-emission-id="${html(activity.id)}"><span data-t3-tool-icon="minimize-2" aria-hidden="true"></span><span>${label}</span>${active?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':''}</span>`;
+      const before=p.beforeTokenCount,after=p.afterTokenCount;
+      const counts=typeof before==='number'&&Number.isFinite(before)&&before>=0&&typeof after==='number'&&Number.isFinite(after)&&after>=0?` ${compactionTokens(before)} → ${compactionTokens(after)} tokens`:'';
+      const timer=activity.createdAt?runTimer({startedAt:activity.createdAt,...(typeof p.completedAt==='string'?{finishedAt:p.completedAt}:{})}):'';
+      const label=running?(active?'Compacting for':'Context compaction'):p.status==='failed'?'Context compaction failed':p.status==='stopped'?'Context compaction stopped':'Context compacted'+counts;
+      body=`<span class="send-to-t3-context" data-t3-emission-id="${html(activity.id)}"><span data-t3-tool-icon="minimize-2" aria-hidden="true"></span><span>${label}${active&&timer?' '+timer:''}</span>${active?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':''}</span>`;
+    }else if(activity.kind==='response.proposed-plan'){
+      body=renderProposedPlan(activity.id,p);
+      if(!body)continue;
     }else if(activity.kind==='response.plan'){
-      body=renderResponseTasks(activity.turnId??activity.id,p);
+      body=renderResponseTasks(activity.id,p);
       if(!body)continue;
     }else{
       const text=typeof p.text==='string'?p.text:activity.summary;if(!text.trim())continue;
