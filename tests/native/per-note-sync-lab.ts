@@ -67,18 +67,14 @@ export default class PerNoteSyncLab extends Plugin {
     const leaf=this.app.workspace.getLeaf(false);await leaf.openFile(file);await leaf.setViewState({type:'markdown',state:{file:note,mode:'source',source:false}});
     const imported=await subject.importRun(note,{id:config.projectId},config.threadId,config.messageId,false);
     const request=responseBindingRequests(subject.settings.responseBindings)[0];
-    const pending=await local.waitForSave(request.id,1000),before=await this.app.vault.read(file);
-    write('PENDING.json',{imported,pending,globalStatus:sync.getStatus(),noteStillHasPlaceholder:before.includes(':::send-to-t3-response'),state:local.record(request.id)?.state,calls});
-    if(pending.saved||pending.reason!=='sync'||!before.includes(':::send-to-t3-response'))throw Error('The pending note update did not block saving.');
-    await this.capture(root,'pending.png');
-    // The incoming file arrives before metadata acknowledgement. It must still
-    // be combined with current native ordinary edits by the product note IO.
-    await this.app.vault.modify(file,before.replace('Ordinary text.','Ordinary text.\n\nIncoming remote paragraph.'));await pause(250);
-    const editor=(leaf.view as MarkdownView).editor;editor.replaceRange(' Local typing retained.',editor.offsetToPos(editor.getValue().indexOf('Typing stays here.')+'Typing stays here.'.length));
-    let release!:()=>void;sync.server.notifyQueue.promise=new Promise<void>(resolve=>{release=resolve;});
-    sync.newServerFiles=sync.newServerFiles.filter((item:any)=>item.path!==note);await baseline();
-    local.tick();await pause(250);if(!(await this.app.vault.read(file)).includes(':::send-to-t3-response'))throw Error('Unprocessed metadata allowed an early write.');
-    release();const result=await local.waitForSave(request.id,8000),saved=await this.app.vault.read(file);
+    const result=await local.waitForSave(request.id,8000),before=await this.app.vault.read(file);
+    write('BUSY-SYNC-SAVE.json',{imported,result,globalStatus:sync.getStatus(),noteStillPending:sync.newServerFiles.some((item:any)=>item.path===note),calls});
+    if(!result.saved||before.includes(':::send-to-t3-response'))throw Error('Sync blocked the checked local final save.');
+    const editor=(leaf.view as MarkdownView).editor;
+    editor.replaceRange(' Local typing retained.',editor.offsetToPos(editor.getValue().indexOf('Typing stays here.')+'Typing stays here.'.length));
+    await this.app.vault.modify(file,before.replace('Ordinary text.','Ordinary text.\n\nIncoming remote paragraph.'));
+    await pause(1500);
+    const saved=await this.app.vault.read(file);
     const visible=(leaf.view as MarkdownView).editor.getValue();
     const checks={saved:result.saved,realAnswer:saved.includes(config.expectedAnswer),placeholderRemoved:!saved.includes(':::send-to-t3-response'),
       remoteParagraph:saved.includes('Incoming remote paragraph.'),localTyping:saved.includes('Local typing retained.'),visibleFinal:visible.includes(config.expectedAnswer),

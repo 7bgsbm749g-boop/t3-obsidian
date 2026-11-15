@@ -4,10 +4,33 @@ import {scheduleTimeout,cancelTimeout} from '../shared/clock';
 import {logEvent,logFailure} from '../app/diagnostics';
 import {streamMemory} from '../app/stream-memory-diagnostics';
 import {responseTooLarge} from '../connection/t3-response-limits';
+import {applyThreadItem} from './inline-thread';
+import {isRecord} from '../shared/values';
+import {contentHash} from '../responses/completion';
+
+/** JSON object key order is not a thread change. Missing optional fields and
+ * undefined fields are equivalent; array order and actual values are not. */
+function sameThreadValue(a:unknown,b:unknown):boolean {
+  if(a===b)return true;
+  if(Array.isArray(a)||Array.isArray(b))return Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((value,index)=>sameThreadValue(value,b[index]));
+  if(isRecord(a)&&isRecord(b))return [...new Set([...Object.keys(a),...Object.keys(b)])].every(key=>sameThreadValue(a[key],b[key]));
+  return false;
+}
+function replayState(snapshot:ThreadStreamItem,events:ThreadStreamItem[]){
+  let state=applyThreadItem({messages:[],activities:[]},snapshot).state;
+  for(const event of events)state=applyThreadItem(state,event).state;
+  return state;
+}
+/** Retain 64 characters of comparison evidence when replay text is evicted.
+ * Local binding checkpoints and global cursors are not canonical content. */
+function threadFingerprint(state:ReturnType<typeof replayState>){
+  const {sequence,bindings,starts,inputBoundaries,inputTurns,failedContinuations,...content}=state;
+  return contentHash(JSON.stringify(content,(_key,value:unknown)=>isRecord(value)?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b))):value));
+}
 
 type Watch=typeof watchThread;
 type Reader={callbacks:ThreadStreamCallbacks;targets?:()=>InlineHistoryTargets;replay?:Parameters<Watch>[5];completed:boolean;priority:()=>number};
-type Source={key:string;threadId:string;access:Parameters<Watch>[1];readers:Set<Reader>;watch?:ReturnType<Watch>;snapshot?:ThreadStreamItem;events:ThreadStreamItem[];characters:number;slot?:()=>void;timeout?:ReturnType<typeof scheduleTimeout>;refresh?:Promise<void>;started:boolean;retry?:ReturnType<typeof scheduleTimeout>;attempt?:number;refreshAgain?:boolean;controller?:AbortController};
+type Source={key:string;threadId:string;access:Parameters<Watch>[1];readers:Set<Reader>;watch?:ReturnType<Watch>;snapshot?:ThreadStreamItem;events:ThreadStreamItem[];characters:number;comparison?:string;comparisonDirty?:boolean;slot?:()=>void;timeout?:ReturnType<typeof scheduleTimeout>;refresh?:Promise<void>;started:boolean;retry?:ReturnType<typeof scheduleTimeout>;attempt?:number;refreshAgain?:boolean;controller?:AbortController;freshAt:number;sequence:number;retryAt:number;readAt?:number;expire?:()=>void;refreshWanted?:boolean;recovery?:boolean;fatal?:boolean};
 
 /** One source connection per authenticated environment/project/thread. Each
  * consumer still owns its exact run binding, projection and final save. */
@@ -15,10 +38,11 @@ export class SharedThreadStreams {
   private sources=new Map<string,Source>();
   private pending:Source[]=[];
   private opening=0;
+  private refreshing=0;
   private stopped=false;
   private reads=new WeakMap<ThreadAccess['api'],Map<string,Promise<unknown>>>();
   private scopedReads=new Map<string,Map<string,Promise<unknown>>>();
-  constructor(private watch:Watch=watchThread,private maxOpening=2){}
+  constructor(private watch:Watch=watchThread,private maxOpening=2,private now=()=>Date.now()){}
 
   access=async(factory:()=>Promise<ThreadAccess>,scope?:string):Promise<ThreadAccess>=>{
     const access=await factory(),api=access.api,scopeKey=scope?JSON.stringify([scope,access.origin,access.diagnosticRoute?.routeId]):undefined;
@@ -41,7 +65,7 @@ export class SharedThreadStreams {
     return (threadId,access,callbacks,_socket,targets,replay)=>{
       if(this.stopped)return {stop(){}};
       let source=this.sources.get(key);
-      if(!source){source={key,threadId,access,readers:new Set(),events:[],characters:0,started:false};this.sources.set(key,source);}
+      if(!source){source={key,threadId,access,readers:new Set(),events:[],characters:0,started:false,freshAt:this.now(),sequence:0,retryAt:0};this.sources.set(key,source);}
       const current=source,reader:Reader={callbacks,targets,replay,completed,priority};current.readers.add(reader);this.memory('start',current);
       logEvent('response.source.readers',{threadId,sourceKey:key,readers:current.readers.size,sources:this.sources.size});
       if(current.started&&!current.watch&&!completed){current.slot?.();if(current.retry)cancelTimeout(current.retry);current.retry=undefined;current.started=false;}
@@ -51,12 +75,12 @@ export class SharedThreadStreams {
         if(current.snapshot){callbacks.item(current.snapshot);for(const item of current.events){if(!current.readers.has(reader))break;callbacks.item(item);}}
         // A joining old run may lie outside the retained recent snapshot.
         // A union-target read supplies it without opening another watcher.
-        if(current.readers.has(reader))this.refresh(current);
+        if(current.readers.has(reader))this.refresh(current,true);
       });
       return {stop:()=>{
         if(!current.readers.delete(reader)||current.readers.size)return;
         this.sources.delete(key);this.pending=this.pending.filter(value=>value!==current);
-        current.watch?.stop();current.slot?.();current.controller?.abort();if(current.retry)cancelTimeout(current.retry);if(current.timeout)cancelTimeout(current.timeout);
+        current.watch?.stop();current.slot?.();current.controller?.abort();current.expire?.();if(current.retry)cancelTimeout(current.retry);if(current.timeout)cancelTimeout(current.timeout);
         current.events=[];current.snapshot=undefined;current.characters=0;this.memory('end',current);
       }};
     };
@@ -73,47 +97,107 @@ export class SharedThreadStreams {
   }
   private deliver(source:Source,item:ThreadStreamItem){
     source.slot?.();
+    const sequence=item.kind==='snapshot'?item.snapshot.snapshotSequence:item.kind==='event'?item.event.sequence:undefined;
+    if(typeof sequence==='number'&&sequence>=source.sequence){source.sequence=sequence;source.freshAt=this.now();}
     // Bound late-reader replay. Existing readers have already consumed earlier
     // events; new readers use a canonical read if this window is exceeded.
     const size=JSON.stringify(item).length;
     if(item.kind==='snapshot'){
       const sequence=item.snapshot?.snapshotSequence??0,previous=source.snapshot?.kind==='snapshot'?source.snapshot.snapshot.snapshotSequence??0:0;
       if(sequence>=previous){
-        source.snapshot=size<=8_000_000?item:undefined;
+        source.snapshot=item;source.comparison=undefined;source.comparisonDirty=false;
         source.events=source.events.filter(event=>event.kind==='event'&&(event.event.sequence??0)>sequence);
         source.characters=size+source.events.reduce((total,event)=>total+JSON.stringify(event).length,0);
-        if(source.characters>8_000_000){source.snapshot=undefined;source.events=[];source.characters=0;}
+        if(source.characters>8_000_000)this.evictReplay(source);
       }
     }
-    else if(source.snapshot){source.events.push(item);source.characters+=size;if(source.events.length>256||source.characters>8_000_000){source.snapshot=undefined;source.events=[];source.characters=0;}}
+    else if(source.snapshot){source.events.push(item);source.characters+=size;if(source.events.length>256||source.characters>8_000_000)this.evictReplay(source);}
+    else if(item.kind==='event')source.comparisonDirty=true;
     for(const reader of [...source.readers])if(source.readers.has(reader))try{reader.callbacks.item(item);}catch(error){logFailure('response.render.failed',error,{threadId:source.threadId});}
+  }
+  private evictReplay(source:Source){
+    const state=replayState(source.snapshot!,source.events);
+    source.comparison=threadFingerprint(state);source.comparisonDirty=(state.sequence??0)<source.sequence;
+    source.snapshot=undefined;source.events=[];source.characters=0;
   }
   private issue(source:Source,error:Error,fatal=false){
     for(const reader of [...source.readers])try{if(fatal)reader.callbacks.failure?.(error);else reader.callbacks.reconnecting(error);}catch(failure){logFailure('response.render.failed',failure,{threadId:source.threadId});}
   }
-  private refresh(source:Source){
-    if(!source.readers.size||this.stopped)return;
-    if(source.refresh){source.refreshAgain=true;return;}
+  /** Foreground events and the existing response tick share one bounded read
+   * per source. Socket pings do not certify that transcript data is current. */
+  tick(foreground=false){
+    if(this.stopped)return;
+    for(const source of this.sources.values()){
+      if(source.readAt!==undefined&&this.now()-source.readAt>=30_000)source.expire?.();
+      if(!source.watch||source.fatal||source.retryAt>this.now())continue;
+      // Enqueue the entire eligible set before assigning the limited slots so
+      // a later visible source can precede earlier background sources.
+      if(foreground||this.now()-source.freshAt>=10_000){source.recovery=true;if(!source.refresh)source.refreshWanted=true;}
+    }
+    this.drainRefresh();
+  }
+  private refresh(source:Source,again=false){
+    if(!source.readers.size||this.stopped||source.fatal)return;
+    if(source.refresh){if(again)source.refreshAgain=true;return;}
+    source.refreshWanted=true;this.drainRefresh();
+  }
+  private drainRefresh(){
+    const waiting=[...this.sources.values()].filter(source=>source.refreshWanted&&!source.refresh&&source.retryAt<=this.now())
+      .sort((a,b)=>Math.max(...[...b.readers].map(reader=>reader.priority()),0)-Math.max(...[...a.readers].map(reader=>reader.priority()),0));
+    for(const source of waiting){if(this.refreshing>=this.maxOpening)break;this.startRefresh(source);}
+  }
+  private missedThreadUpdate(source:Source,snapshot:Awaited<ReturnType<typeof readInlineSnapshot>>){
+    if((snapshot.snapshotSequence??0)<=source.sequence)return false;
+    if(!source.snapshot){
+      // Live events without retained text make the digest incomplete. Adopt
+      // this canonical baseline first; subsequent missed content can repair
+      // the subscription without retaining the large transcript.
+      return !!source.comparison&&!source.comparisonDirty&&source.comparison!==threadFingerprint(replayState({kind:'snapshot',snapshot},[]));
+    }
+    // Use the already bounded replay window only while checking a recovery.
+    // Do not retain another transcript or compare a global cursor as content.
+    const current=replayState(source.snapshot,source.events);
+    const next=applyThreadItem(current,{kind:'snapshot',snapshot}).state;
+    return !sameThreadValue({...current,sequence:undefined},{...next,sequence:undefined});
+  }
+  private startRefresh(source:Source){
+    source.refreshWanted=false;this.refreshing++;source.readAt=this.now();
+    const recovery=source.recovery;source.recovery=false;
     const controller=source.controller=new AbortController();
-    const work=source.access().then(async access=>{
+    let expire!:()=>void;
+    const expired=new Promise<never>((_resolve,reject)=>{expire=()=>{controller.abort();reject(Error('T3 response recovery read expired.'));};});
+    source.expire=expire;
+    const read=source.access().then(async access=>{
       try{
         if(controller.signal.aborted)throw Error('T3 response recovery read was cancelled.');
-        const snapshot=await readInlineSnapshot({...access,api:(path,payload)=>access.api(path,payload,{signal:controller.signal})},source.threadId,undefined,this.targets(source));
-        source.attempt=0;if(source.readers.size&&!this.stopped&&!controller.signal.aborted)this.deliver(source,{kind:'snapshot',snapshot});
+        return await readInlineSnapshot({...access,api:(path,payload)=>access.api(path,payload,{signal:controller.signal})},source.threadId,undefined,this.targets(source));
       }finally{await access.close?.();}
+    });
+    const work=Promise.race([read,expired]).then(snapshot=>{
+      if(!source.readers.size||this.stopped||controller.signal.aborted)return;
+      const behind=recovery&&this.missedThreadUpdate(source,snapshot);
+      source.attempt=0;source.retryAt=0;source.freshAt=this.now();
+      this.deliver(source,{kind:'snapshot',snapshot});
+      if(recovery&&behind&&source.watch&&source.readers.size){
+        source.watch.stop();source.watch=undefined;source.started=false;source.slot?.();
+        if(!this.pending.includes(source))this.pending.push(source);this.drain();
+      }
     }).catch(error=>{
       source.slot?.();if(!source.readers.size||this.stopped)return;
-      if(responseTooLarge(error)){this.issue(source,error as Error,true);return;}
+      if(responseTooLarge(error)){source.fatal=true;this.issue(source,error as Error,true);return;}
       this.issue(source,error instanceof Error?error:Error(String(error)));
+      const delay=Math.min(30_000,(source.watch?5000:1000)*2**Math.min(source.attempt??0,5));source.attempt=(source.attempt??0)+1;
+      source.retryAt=this.now()+delay;
       if(!source.watch&&[...source.readers].every(reader=>reader.completed)){
-        const delay=Math.min(30_000,1000*2**Math.min(source.attempt??0,5));source.attempt=(source.attempt??0)+1;
         logEvent('response.source.retry',{threadId:source.threadId,delayMs:delay,reason:'completed-read-failed'});
-        source.retry=scheduleTimeout(()=>{source.retry=undefined;if(!source.readers.size||this.stopped||source.watch)return;source.started=false;this.pending.push(source);this.drain();},delay);
+        source.retry=scheduleTimeout(()=>{source.retry=undefined;if(!source.readers.size||this.stopped||source.watch)return;source.retryAt=0;source.started=false;this.pending.push(source);this.drain();},delay);
       }
     }).finally(()=>{
+      this.refreshing--;source.readAt=undefined;source.expire=undefined;
       if(source.controller===controller)source.controller=undefined;
       if(source.refresh===work)source.refresh=undefined;
       if(source.refreshAgain){source.refreshAgain=false;if(!source.retry)this.refresh(source);}
+      this.drainRefresh();
     });
     source.refresh=work;void work.catch(()=>{});
   }
@@ -139,5 +223,5 @@ export class SharedThreadStreams {
     }
   }
   status(){return {sources:this.sources.size,readers:[...this.sources.values()].reduce((count,source)=>count+source.readers.size,0),opening:this.opening,queued:this.pending.length,canonicalReads:[...this.sources.values()].filter(source=>!!source.refresh).length,retryTimers:[...this.sources.values()].filter(source=>!!source.retry).length,cacheCharacters:[...this.sources.values()].reduce((sum,source)=>sum+source.characters,0)};}
-  dispose(){this.stopped=true;for(const source of this.sources.values()){source.readers.clear();source.watch?.stop();source.slot?.();source.controller?.abort();if(source.retry)cancelTimeout(source.retry);if(source.timeout)cancelTimeout(source.timeout);}this.sources.clear();this.scopedReads.clear();this.pending=[];this.memory('dispose');}
+  dispose(){this.stopped=true;for(const source of this.sources.values()){source.readers.clear();source.watch?.stop();source.slot?.();source.controller?.abort();source.expire?.();if(source.retry)cancelTimeout(source.retry);if(source.timeout)cancelTimeout(source.timeout);}this.sources.clear();this.scopedReads.clear();this.pending=[];this.memory('dispose');}
 }

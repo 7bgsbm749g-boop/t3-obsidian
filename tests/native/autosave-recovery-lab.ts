@@ -78,15 +78,15 @@ export default class AutosaveRecoveryLab extends Plugin {
     let records:any={},emit!:(update:DirectInlineUpdate)=>void,ready=false;
     const openedNotes=()=>this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).filter(view=>view.file).map(view=>({path:view.file!.path,document:native.view(view)?.recoveryDocument()??view.getViewData()}));
     this.local=new LocalResponseManager('native-lab',binding.vaultId,{
-      ...notes,localBindings:()=>responseBindingRequests(records),saveLocalBinding:async request=>{records=updateResponseBindingData(records,request,'lab');},openedNotes,syncReady:()=>ready,
+      ...notes,localBindings:()=>responseBindingRequests(records),saveLocalBinding:async request=>{records=updateResponseBindingData(records,request,'lab');},openedNotes,
       receiveCoordinated:record=>native.receive(record),receiveDirect:update=>native.stream(update),localCompleted:(key,note)=>native.localCompleted(key,note),completionFailed:error=>this.errors.push(String(error)),
       access:async()=>{throw Error('Synthetic reply has no network.');},
-    },io,Date.now,((_record:any,_access:any,receive:any)=>{emit=receive;return {tick(){},update(){},delivery(){},suspend(){},reconnect(){},dispose(){}};}) as any);
+    },{read:io.read,compareAndSet:async(...args)=>ready?io.compareAndSet(...args):false},Date.now,((_record:any,_access:any,receive:any)=>{emit=receive;return {tick(){},update(){},delivery(){},suspend(){},reconnect(){},dispose(){}};}) as any);
     await this.local.register(binding);await io.read(second.file.path);const base=native.view(second.view)!.saved();
     this.type(second.view,'a');await this.until(async()=>!(second.view as any).saving&&(await this.app.vault.read(second.file)).includes('Type here: a\n'),'recovery native autosave');
     this.type(second.view,'b');emit({request:binding,body:'RECOVERED_FINAL_REPLY',phase:'complete',sequence:1,completionVerified:true,messageId:binding.messageId,turnId:crypto.randomUUID()});
     const adapter=native.view(second.view)!;adapter.preserveConflict({base,local:adapter.saved(),incoming:await this.app.vault.read(second.file),reason:'Generated and ordinary edits overlap or touch. Both versions are preserved.'});
-    ready=true;this.local.tick();const recovered=await this.local.waitForSave(binding.id,10_000);
+    ready=true;this.local.changed(second.file.path);const recovered=await this.local.waitForSave(binding.id,10_000);
     this.check('staleConflictRetriesAutomatically',recovered.saved&&!adapter.conflictRecord());
     this.check('recoveryPreservesTyping',(await this.app.vault.read(second.file)).includes('Type here: ab\n')&&second.view.editor.getValue().includes('RECOVERED_FINAL_REPLY'));
     await this.capture('recovered.png');this.local.dispose();this.local=undefined;

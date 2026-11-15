@@ -10,6 +10,9 @@ import {responseAnchor} from '../src/responses/native-response-projection';
 import {localResponseRange} from '../src/responses/local-response-binding';
 import {updateResponseBindingData} from '../src/responses/response-binding-data';
 import {runImportResultMessage} from '../src/conversations/run-import';
+import type {LocalResponseSaveResult} from '../src/responses/local-response-save';
+
+type SaveOutcome=LocalResponseSaveResult|((id:string)=>LocalResponseSaveResult|Promise<LocalResponseSaveResult>);
 
 const drain=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
 async function fixture(){
@@ -23,14 +26,14 @@ async function fixture(){
   plugin.app={loadLocalStorage:()=>undefined,saveLocalStorage:()=>{},workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:(path:string)=>path===file.path?file:undefined,getMarkdownFiles:()=>assert.fail('Vault enumeration is retired'),read:async()=>document,process:async(_file:any,change:(value:string)=>string)=>document=change(document)}};
   plugin.settings={vaultId:randomUUID(),inlineStreaming:{enabled:true},responseBindings:{},noteThreads:[]};
   plugin.save=async()=>{};
-  let saveResult:any={saved:false,reason:'sync'};
+  let saveResult:SaveOutcome={saved:false,reason:'note-changed'};
   plugin.deviceInline={register:async(request:any)=>{assert.ok(localResponseRange(document,request.id,[request]));registered.push(request);plugin.settings.responseBindings=updateResponseBindingData(plugin.settings.responseBindings,request,'synthetic');},waitForSave:async(id:string)=>{waits.push(id);return typeof saveResult==='function'?saveResult(id):saveResult;}};
   plugin.connection=()=>({environmentId:source.environmentId});
   plugin.localResponseTarget=async()=>({environmentId:source.environmentId,workspaceRoot:'/synthetic',directory:'.obsidian/inline'});
   const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:{messages:[{id:messageId,role:'user',text:'Synthetic prompt',createdAt:'2026-10-20T00:00:00Z',turnId:'synthetic-run',streaming:false},{id:'answer',role:'assistant',text:'Synthetic final',createdAt:'2026-10-20T00:01:00Z',turnId:'synthetic-run',streaming:false}],activities:[],latestTurn:{turnId:'synthetic-run',messageId,requestedAt:'2026-10-20T00:00:00Z',completedAt:'2026-10-20T00:01:00Z',state:'completed'},session:{status:'ready',activeTurnId:null}}}}).state;
   const readHistory=plugin.readImportHistory.bind(plugin);
   plugin.readImportHistory=async()=>({source,state,title:'Synthetic completed run'});
-  return {plugin,source,messageId,registered,waits,readHistory,read:()=>document,write:(text:string)=>{document=text;},move:(path:string)=>{moveSmartNotes(plugin.smartData(),file.path,path);file.path=path;},saveResult:(value:any)=>{saveResult=value;},import:()=>plugin.importRun(file.path,{id:source.projectId},source.threadId,messageId,false)};
+  return {plugin,source,messageId,registered,waits,readHistory,read:()=>document,write:(text:string)=>{document=text;},move:(path:string)=>{moveSmartNotes(plugin.smartData(),file.path,path);file.path=path;},saveResult:(value:SaveOutcome)=>{saveResult=value;},import:()=>plugin.importRun(file.path,{id:source.projectId},source.threadId,messageId,false)};
 }
 
 test('picker registration reuses its catalog and reads the complete selected answer once',async()=>{
@@ -50,15 +53,15 @@ test('a stale picker root cannot import another canonical source prompt',async()
 });
 
 test('a completed import cannot report success before its checked save finishes',async()=>{
-  const h=await fixture();let release!:(value:any)=>void;const save=new Promise(resolve=>{release=resolve;});h.saveResult(()=>save);
+  const h=await fixture();let release!:(value:LocalResponseSaveResult)=>void;const save=new Promise<LocalResponseSaveResult>(resolve=>{release=resolve;});h.saveResult(()=>save);
   let returned=false;const pending=h.import().then((result:any)=>{returned=true;return result;});await drain();
   assert.equal(returned,false);assert.equal(h.waits.length,1);assert.equal(h.registered.length,1);assert.match(h.read(),/:::send-to-t3-response/);
   const id=h.registered[0].id;h.write(h.read().replace(responseAnchor(id),'Synthetic final'));release({saved:true});
   const result=await pending;assert.equal(result.saveState,'saved');assert.equal(runImportResultMessage(result),'Response imported and saved.');assert.doesNotMatch(h.read(),/:::send-to-t3-response/);
 });
-test('a Sync wait reports a pending import, and reimport resumes its settings binding without another block',async()=>{
+test('a checked note-change refusal reports a pending import, and reimport resumes its binding without another block',async()=>{
   const h=await fixture(),first=await h.import(),original=h.read();
-  assert.equal(first.saveState,'pending');assert.equal(first.pendingReason,'sync');assert.match(runImportResultMessage(first),/not saved yet.*Sync/);
+  assert.equal(first.saveState,'pending');assert.equal(first.pendingReason,'note-changed');assert.match(runImportResultMessage(first),/not saved yet.*destination changed/);
   const second=await h.import();assert.equal(second.duplicate,true);assert.equal(second.saveState,'pending');assert.equal(h.registered.length,2);assert.equal(h.waits.length,2);
   assert.equal(h.registered[0].id,h.registered[1].id);assert.equal(h.read(),original);assert.equal(h.read().match(/:::send-to-t3-response /g)?.length,1);
 });

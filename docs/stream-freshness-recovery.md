@@ -1,25 +1,54 @@
 # Recovery from a stalled response feed
 
-An owning response writer checks T3's canonical snapshot when it has not
-accepted a snapshot for ten seconds. The check runs from the same coordination
-tick as lease renewal. On desktop that tick uses Node timers, so background
-renderer throttling cannot keep ownership alive while indefinitely postponing
-response recovery. Stream events do not postpone the snapshot deadline.
+Device-local responses share one source per environment, project and thread.
+Returning to the foreground requests one current canonical snapshot per active
+source. The existing response tick also checks sources with no transcript data
+for ten seconds, including protocol v2 streams. Socket pings do not postpone this
+check. A successful quiet snapshot starts a fresh ten-second window.
 
-Each response has at most one current snapshot request. Initial reads,
-periodic recovery and final completion validation share it. Snapshot sequence
-checks preserve newer stream state. Ownership epochs, stop requests and
-disposal fence late results. A request that hangs for thirty seconds is
-expired by coordination ticks; failures retry after five seconds, doubling
-up to thirty seconds. Failed reads never manufacture completion.
+Recovery reads are shared across attached views. Each tick queues all eligible
+sources before assigning its two read slots, so the visible note can precede
+background notes regardless of source insertion order. Each source has at most
+one in-flight read. A read
+that hangs for thirty seconds is expired by the existing tick; late results are
+fenced even when its transport ignores cancellation. Failures back off from five
+to thirty seconds. Completed-only history retains its bounded one-shot retry.
+Stopping the last reader or disposing the plugin cancels pending recovery.
 
-The check updates the stream cache and schedules the ordinary writer. Existing
-exact-message and question-turn bindings, save verification, completion proof
-cleanup and lease protections still decide whether it can finalize. A quiet
-healthy response is checked at most once per ten seconds; accepted stream
-snapshots avoid redundant recovery reads.
+A higher global snapshot cursor alone does not prove a missed thread update.
+Recovery compares the canonical thread content with the already bounded cached
+snapshot and live events, ignoring cursor changes and object key order. It does
+not retain a second transcript. A snapshot that proves the live feed missed
+newer thread state refreshes the ordinary
+response projection, then reopens the subscription at the readers' current
+cursors. A current quiet stream keeps its socket. Exact-message bindings,
+sequence checks, canonical final-item verification and checked native note IO
+continue to decide completion; recovery does not grant write authority or reload
+the app.
 
-Regression tests cover a stale running cache with no incoming events,
-outage retry, a hung request and its late result, sequence and ownership
-races, and completion with all renderer timers suspended in the desktop
-bundle.
+If the replay text exceeds its size or event bound, recovery retains only a
+64-character content digest. Cursor-only changes still keep the socket, while
+changed canonical content can restore a stalled large-thread subscription.
+Live events received after eviction invalidate that digest; the next canonical
+read establishes a new baseline before judging subsequent missed changes.
+
+`scripts/benchmark-sync-stream.mjs SOURCE_ROOT EXTERNAL_REPORT.json` records
+synthetic foreground recovery, a silent feed, a controlled busy-Sync final save,
+and repeated Smart Send preparation. Stream/save latency uses simulated time;
+Smart Send timings use the host's monotonic clock. These are reproducible
+regression measurements, not native iPhone or live network latency claims.
+
+For a disposable native desktop check, build with
+`node scripts/build-sync-stream-lab.mjs EXTERNAL_EVIDENCE [SOURCE_ROOT] [--baseline]`,
+then run `node scripts/run-sync-stream-lab.mjs EXTERNAL_EVIDENCE UNIQUE_SESSION_KEY`.
+The Linux runner needs `t3-session`, Xvfb and `/opt/Obsidian/obsidian`. It starts
+its own display, profile and synthetic vault, and refuses reuse of prior results.
+The fixture tests foreground recovery and busy-Sync final saves, injects an
+atomic-boundary note change, and checks that unsaved typing survives the retry.
+It records source hashes, screenshots and note/process cleanup. Its T3 snapshots
+and busy-Sync hint are controlled inputs; this does not test a native Sync engine.
+
+`node scripts/benchmark-settings-save.mjs SOURCE_ROOT EXTERNAL_REPORT.json` uses
+that root's existing `dist/main.js` with synthetic history and in-memory plugin
+IO/IndexedDB. It records save time, shared writes, serialized bytes and the
+production bundle hash. Build each source root before comparing its results.

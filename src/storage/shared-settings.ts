@@ -15,3 +15,11 @@ export function mergeSharedSettings<T>(baseline:T,disk:T,intended:T):T {
   }
   return disk;
 }
+
+/** Relation stores use their own union/clock protocols. Do not recursively
+ * compare their large payloads in a preference merge that discards that result. */
+export function mergeSharedSettingsExcept<T extends object>(baseline:T,disk:T,intended:T,keys:readonly (keyof T)[]):T {
+  const omit=(value:T)=>{const preferences={...value};for(const key of keys)delete preferences[key];return preferences;};
+  const excluded:Partial<T>={};for(const key of keys)if(Object.hasOwn(intended,key))excluded[key]=intended[key];
+  return {...excluded,...mergeSharedSettings(omit(baseline),omit(disk),omit(intended))};
+}

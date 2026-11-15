@@ -27,8 +27,10 @@ export default class ConnectNoteEditsLab extends Plugin {
     if(!this.subject)throw Error('The actual product plugin did not load.');
     if(!this.app.vault.getFolderByPath('Settled'))await this.app.vault.createFolder('Settled');
     for(const name of ['Completion.md','Stop.md','Conflict.md','Ordinary.md'])if(!this.app.vault.getFileByPath(name))await this.app.vault.create(name,`# ${name}\n\nAGENT FIELD: before\n\nUSER TAIL: before\n\nSynthetic bounded plugin test. Do not inspect files, use tools, or delegate. Reply exactly NATIVE_CHECKED_EDIT_OK.\n`);
-    const io=this.subject.deviceInline.io,normalSync=io.syncReady;
-    io.syncReady=(note:string)=>this.held.has(note)?false:normalSync?.(note)??true;
+    const notes=this.subject.deviceInline.io.localFinalNotes;
+    if(!notes)throw Error('The checked final-note writer is unavailable.');
+    const normalWrite=notes.compareAndSet.bind(notes);
+    notes.compareAndSet=(note:string,...args:unknown[])=>this.held.has(note)?Promise.resolve(false):normalWrite(note,...args);
     await this.open('Completion.md');
     this.timer=window.setInterval(()=>{if(this.working)return;const file=path.join(this.root,'action.json');if(!fs.existsSync(file))return;this.working=true;void(async()=>{
       const input=JSON.parse(fs.readFileSync(file,'utf8'));fs.unlinkSync(file);if(!/^[a-f0-9-]{36}$/.test(input.id))throw Error('Invalid action ID.');
@@ -46,7 +48,7 @@ export default class ConnectNoteEditsLab extends Plugin {
   private async action(input:any):Promise<unknown>{
     if(input.kind==='state')return this.state();
     if(input.kind==='open'){await this.open(input.note);return this.state();}
-    if(input.kind==='hold-final'){if(!this.owned.has(input.note))throw Error('Unknown fixture.');if(input.hold)this.held.add(input.note);else this.held.delete(input.note);this.subject.deviceInline.resume();return {held:[...this.held],faultInjection:'Only the isolated fixture final-save Sync gate is held; network and rendering remain real.'};}
+    if(input.kind==='hold-final'){if(!this.owned.has(input.note))throw Error('Unknown fixture.');if(input.hold)this.held.add(input.note);else this.held.delete(input.note);this.subject.deviceInline.changed(input.note);return {held:[...this.held],faultInjection:'Only the isolated fixture checked writer refuses the final save until released; network and rendering remain real.'};}
     if(input.kind==='edit'){
       const view=await this.open(input.note),text=view.editor.getValue(),at=text.indexOf(input.before);if(at<0||text.indexOf(input.before,at+1)>=0)throw Error('The fixture edit is not unique.');view.editor.replaceRange(input.after,view.editor.offsetToPos(at),view.editor.offsetToPos(at+input.before.length));await view.save();return this.state();
     }
