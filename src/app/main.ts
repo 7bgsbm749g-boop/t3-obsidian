@@ -667,7 +667,7 @@ export default class SendToT3 extends Plugin {
       const resume=()=>{
         if(this.stopped||document.hidden)return;
         const now=performance.now();if(now-lastResume<250)return;lastResume=now;
-        refreshNative();this.deviceInline?.resume();
+        refreshNative();this.deviceInline?.foreground();
       };
       if(typeof document.addEventListener==='function')this.registerDomEvent(document,'visibilitychange',()=>{if(!document.hidden)resume();});
       if(typeof window.addEventListener==='function'){this.registerDomEvent(window,'focus',resume);this.registerDomEvent(window,'online',resume);}

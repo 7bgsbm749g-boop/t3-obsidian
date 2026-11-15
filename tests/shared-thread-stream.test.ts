@@ -93,3 +93,41 @@ test('a slow shared recovery read survives elapsed time and stops on its last re
   release({thread:{id:'thread',projectId:'project',messages:[],activities:[]},snapshotSequence:2});await drain();
   assert.equal(received.length,1);assert.equal(errors.length,0);h.pool.dispose();
 });
+
+function recoveryFixture(limit=2){
+ let now=0,reads=0,sequence=1;const starts:Array<Parameters<typeof watchThread>>=[],received:any[]=[],pending:Array<{resolve:(value:any)=>void;reject:(error:Error)=>void}>=[];
+ const pool=new SharedThreadStreams((...args)=>{starts.push(args);return {stop(){}};},limit,()=>now);
+ const snapshot=(value=sequence)=>({thread:{id:'thread',projectId:'project',messages:[],activities:[]},snapshotSequence:value});
+ const access=async()=>({origin:'https://synthetic.invalid',api:async()=>{reads++;return new Promise((resolve,reject)=>pending.push({resolve,reject}));}}) as ThreadAccess;
+ const subscribe=(key='same',priority=0)=>pool.forSource(key,false,()=>priority)('thread',access,{item:item=>received.push(item),reconnecting:()=>{}},undefined,()=>({messageIds:['prompt'],turnIds:[]}),{afterSequence:()=>0,pollSnapshots:false});
+ return {pool,starts,received,pending,subscribe,snapshot,reads:()=>reads,time:(value:number)=>now=value,sequence:(value:number)=>sequence=value};
+}
+test('foreground recovers one shared v2 feed immediately without waiting for a socket close',async()=>{
+ const h=recoveryFixture();h.subscribe();await drain();h.subscribe();await drain();
+ h.starts[0][2].item({kind:'snapshot',snapshot:h.snapshot()} as any);
+ await drain();h.pending[0].resolve(h.snapshot());await drain();const before=h.reads();
+ h.pool.tick(true);h.pool.tick(true);await drain();assert.equal(h.reads(),before+1);
+ h.pending.at(-1)!.resolve(h.snapshot(3));await drain();
+ assert.equal(h.received.at(-1).snapshot.snapshotSequence,3);assert.equal(h.starts.length,2,'A proven stale subscription reconnects after recovery');h.pool.dispose();
+});
+test('silent v2 sources recover after ten seconds, while live events and pings remain distinct',async()=>{
+ const h=recoveryFixture();h.subscribe();await drain();h.starts[0][2].item({kind:'snapshot',snapshot:h.snapshot()} as any);
+ h.time(9999);h.pool.tick();await drain();assert.equal(h.reads(),0);
+ h.starts[0][2].item({kind:'synchronized'});h.time(10000);h.pool.tick();await drain();assert.equal(h.reads(),1);
+ h.pending[0].resolve(h.snapshot());await drain();assert.equal(h.starts.length,1,'A current quiet feed keeps its socket');
+ h.time(19000);h.starts[0][2].item({kind:'event',event:{sequence:2,type:'thread.metadata-updated',payload:{title:'Current'}}} as any);
+ h.time(20000);h.pool.tick();await drain();assert.equal(h.reads(),1);h.pool.dispose();
+});
+test('hung recovery expires, backs off, and fences late results without blocking other sources',async()=>{
+ const h=recoveryFixture();h.subscribe();await drain();h.pool.tick(true);await drain();assert.equal(h.reads(),1);
+ h.time(30000);h.pool.tick();await drain();h.time(34999);h.pool.tick();await drain();assert.equal(h.reads(),1);
+ h.time(35000);h.pool.tick();await drain();assert.equal(h.reads(),2);
+ h.pending[0].resolve(h.snapshot(99));await drain();assert.equal(h.received.length,0);
+ h.pending[1].resolve(h.snapshot(2));await drain();assert.equal(h.received.at(-1).snapshot.snapshotSequence,2);h.pool.dispose();
+});
+test('recovery bounds concurrent reads and cancels queued and late work on disposal',async()=>{
+ const h=recoveryFixture(2);h.subscribe('one');h.subscribe('two');h.subscribe('three',2);await drain();
+ for(const start of h.starts)start[2].item({kind:'synchronized'});await drain();
+ h.pool.tick(true);await drain();assert.equal(h.reads(),2);h.pending[0].resolve(h.snapshot());await drain();assert.equal(h.reads(),3);
+ const before=h.received.length;h.pool.dispose();for(const pending of h.pending)pending.resolve(h.snapshot(100));await drain();assert.equal(h.received.length,before);
+});

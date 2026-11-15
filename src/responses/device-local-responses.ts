@@ -78,6 +78,7 @@ export class DeviceResponseManager {
   steer(_host:ResponseStorageTarget,id:string,input:SteeringInput){return this.manager().steer(id,input);}
   discardSteering(id:string,messageId:string){return this.local?.discardSteering(id,messageId)??Promise.resolve();}
   resume(){if(!this.stopped)this.manager().resume();}
+  foreground(){if(!this.stopped)this.manager().foreground();}
   reconnect(){if(!this.stopped)this.manager().reconnect();}
   savedResponsesChanged(){if(!this.stopped)this.local?.savedResponsesChanged();}
   localBindingsChanged(){if(!this.stopped)this.manager().resume();}

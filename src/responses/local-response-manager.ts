@@ -226,7 +226,8 @@ export class LocalResponseManager {
     for(const runtime of this.jobs.values())if(!runtime.done&&this.io.savedResponse&&this.io.knownCompleted?.(runtime.request)&&(runtime.stopped||runtime.detached||runtime.update?.completionVerified))runtime.attemptRevision=undefined;
     this.resume();
   }
-  tick(){this.resume();}
+  foreground(){this.resume();this.sources.tick(true);}
+  tick(){this.resume();this.sources.tick();}
   reconnect(){if(this.closed)return;for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.suspend();for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped){runtime.attemptRevision=undefined;if(!runtime.restoring&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.reconnect(this.io.isOpen(runtime.request.notePath));}this.resume();}
   private detach(runtime:Runtime){if(runtime.done||runtime.stopped)return;runtime.detached=true;runtime.pendingSave='note-changed';runtime.preview.suspend();this.reportState(runtime);}
   private saveResult(runtime?:Runtime):LocalResponseSaveResult {
