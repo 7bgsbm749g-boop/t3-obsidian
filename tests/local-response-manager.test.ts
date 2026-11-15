@@ -621,6 +621,7 @@ test('unsent evidence reaches adoption before a settings notification and is nev
  await manager.register(h.binding,false,undefined,h.binding.messageId);await drain();
  assert.ok(hints.length);assert.ok(hints.every(id=>id===h.binding.messageId));
  assert.deepEqual(responseBindingRequests(h.records())[0],h.binding);
+ manager.attempted(h.binding.id);assert.equal(hints.at(-1),undefined,'An uncertain attempt resumes recovery without inventing acceptance');
  manager.delivered(h.binding.id,{messageId:h.binding.messageId,requestedAt:h.binding.createdAt,sequence:5});
  await manager.register(h.binding);assert.equal(hints.at(-1),undefined);manager.dispose();h.manager.dispose();
 });

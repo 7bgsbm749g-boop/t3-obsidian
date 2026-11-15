@@ -136,6 +136,7 @@ export class LocalResponseManager {
     this.documents.set(request.notePath,[{document:after,bindings:localResponseBindings(after,this.stored()),references:new Map(responseIds(after).map(id=>[id,this.index(this.stored()).get(id)]))}]);
     const runtime=this.adopt(request);if(importedSnapshot)runtime.preview.seedImport?.(importedSnapshot);this.watch(runtime,true);
   }
+  attempted(id:string){this.unsentMessages.delete(id);this.jobs.get(id)?.preview.pendingSend?.();}
   delivered(id:string,delivery:InlineStartRequest){if(this.unsentMessages.get(id)===delivery.messageId)this.unsentMessages.delete(id);this.jobs.get(id)?.preview.delivery(delivery);}
   resume(){
     if(this.closed)return;

@@ -2922,7 +2922,12 @@ export default class SendToT3 extends Plugin {
     // The watcher must acknowledge these exact identities before T3 can expose
     // the new message. Synced settings can arrive after the canonical run.
     stage='stream-reservation';await this.reserveResponseStreams(request);
-    stage='dispatch';const result=await sendRequest(request);
+    stage='dispatch';let result:Awaited<ReturnType<typeof sendRequest>>;
+    try{result=await sendRequest(request);}finally{
+      // Acceptance can be lost or lack a start receipt. Never keep the unsent
+      // hint after an attempt settles: exact background recovery must resume.
+      for(const binding of request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]))this.deviceInline?.attempted(binding.id);
+    }
     for(const binding of request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]))await this.responseGuard(binding,'accepted');
     stage='delivery-evidence';
     // Keep the acknowledged exact start even when the renderer/event feed
