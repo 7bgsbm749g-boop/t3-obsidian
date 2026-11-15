@@ -6,6 +6,9 @@ import {runInNewContext as run,type Context,type RunningCodeInNewContextOptions}
 /** Obsidian exposes activeDocument alongside document. Source modules can
  * therefore use its public pop-out API in the same small VM fixtures. */
 export function runInNewContext(code:string,context:Context={},options?:RunningCodeInNewContextOptions){
+  // Standard browser API used by connection owners at plugin construction.
+  // Preserve explicitly injected controllers used by cancellation fixtures.
+  if(!('AbortController' in context))context.AbortController=AbortController;
   const sourceRequire=context.require;
   if(typeof sourceRequire==='function')context.require=(id:string)=>{
     // Editor SDK modules are portable host dependencies, not Node capabilities.
