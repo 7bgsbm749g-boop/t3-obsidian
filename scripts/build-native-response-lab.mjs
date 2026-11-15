@@ -12,11 +12,13 @@ if(!['--design-parity','--stopped-save','--response-catch-up','--import-performa
 async function canonical(path){try{return await realpath(path);}catch(error){if(error.code!=='ENOENT')throw error;return resolve(await canonical(dirname(path)),basename(path));}}
 const root=await canonical(resolve(process.argv[2]));
 for(const vault of ['/home/ubuntu/vaults/QLO2','/home/ubuntu/Obsidian Vault']){
-  const rel=relative(await realpath(vault),root);
+  const rel=relative(await canonical(vault),root);
   if(!rel||!isAbsolute(rel)&&rel!=='..'&&!rel.startsWith('../'))throw Error('The lab must be outside synced vaults.');
 }
 await requireEvidenceDirectory(root);
 try{await access(root);throw Error('Use a new evidence directory; previous evidence is immutable.');}catch(error){if(error.code!=='ENOENT')throw error;}
+// Validate path handling without creating a vault, profile, or runtime files.
+if(process.argv.includes('--check-path')){process.stdout.write(JSON.stringify({root,checkedOnly:true})+'\n');process.exit(0);}
 const vault=join(root,'vault'),plugin=join(vault,'.obsidian/plugins/coordinated-response-lab'),profile=join(root,'profile');
 await mkdir(plugin,{recursive:true});await mkdir(profile);
 const sourceModules=(await readdir('src',{recursive:true})).filter(name=>name.endsWith('.ts')).map(name=>'src/'+name);

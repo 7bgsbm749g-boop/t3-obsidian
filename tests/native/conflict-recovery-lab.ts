@@ -52,14 +52,14 @@ export default class ConflictRecoveryLab extends Plugin {
     let ready=false,finalWrites=0;
     const receipts=new Map<string,{identity:string;saved:boolean}>(),finalNotes=deviceFinalNoteIO(this.app,()=>true);
     const io:DeviceResponseIO={...notes,
-      localFinalNotes:{read:finalNotes.read,compareAndSet:async(...args)=>{const result=await finalNotes.compareAndSet(...args);if(result)finalWrites++;return result;}},
+      localFinalNotes:{read:finalNotes.read,compareAndSet:async(...args)=>{if(!ready)return false;const result=await finalNotes.compareAndSet(...args);if(result)finalWrites++;return result;}},
       localBindings:()=>responseBindingRequests(subject.settings.responseBindings),
       saveLocalBinding:async request=>{subject.settings.responseBindings=updateResponseBindingData(subject.settings.responseBindings,request,'lab');await subject.save();},
       loadLocalCompletion:async request=>{const receipt=receipts.get(request.id);return receipt?.identity===localFinalIdentity(request)?receipt:undefined;},
       retainLocalCompletion:async(request,saved,update)=>{receipts.set(request.id,{identity:localFinalIdentity(request),saved});if(saved&&update?.turnId)subject.settings.responseBindings=completeResponseBinding(subject.settings.responseBindings,request,update.turnId,contentHash(update.body),'lab');},
       knownCompleted:request=>!!subject.settings.responseBindings[request.id]?.completion,
       openedNotes:()=>this.app.workspace.getLeavesOfType('markdown').map(item=>item.view as MarkdownView).filter(item=>item.file).map(item=>({path:item.file!.path,document:native.view(item)?.recoveryDocument()??item.getViewData()})),
-      syncReady:()=>ready,receiveCoordinated:record=>native.receive(record),receiveDirect:update=>native.stream(update),localCompleted:(id,note)=>native.localCompleted(id,note),completionFailed:error=>this.errors.push(String(error)),access:async()=>({...this.access!,close:undefined}),
+      receiveCoordinated:record=>native.receive(record),receiveDirect:update=>native.stream(update),localCompleted:(id,note)=>native.localCompleted(id,note),completionFailed:error=>this.errors.push(String(error)),access:async()=>({...this.access!,close:undefined}),
     };
     this.device=new DeviceResponseManager('conflict-lab',subject.settings.vaultId,io);
     this.timer=window.setInterval(()=>{native.refresh();this.device?.tick();},150);
@@ -76,7 +76,7 @@ export default class ConflictRecoveryLab extends Plugin {
     if(config.taskFlow){const flow=(this.app as any).plugins.plugins['task-flow'];this.check(flow,'Task Flow test candidate is not loaded.');let transformed=false;await flow.editFile(original,()=>{transformed=true;return '';});this.check(!transformed,'Task Flow replaced divergent native panes.');}
     await this.until(()=>requests.every(request=>this.device!.responseStatus(request.id)?.runTerminal),'verified terminal response');
     this.check(this.device.health()?.sources===0,'Terminal responses retained a live source.');
-    ready=true;this.device.resume();
+    ready=true;this.device.changed(original.path);
     await this.until(()=>requests.every(request=>this.device!.responseStatus(request.id)?.finalSaved),'one checked batch save');
     const saved=await this.app.vault.read(original);
     this.check(saved.includes('User prefix.')&&saved.includes('User suffix.'),'Compatible pane edits were lost.');

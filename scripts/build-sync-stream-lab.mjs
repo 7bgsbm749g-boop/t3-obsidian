@@ -1,0 +1,25 @@
+// Native Obsidian self-test: runtime scratch stays local; reports stay external.
+import {build} from 'esbuild';
+import {mkdtemp,mkdir,writeFile,readFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {resolve,join,dirname} from 'node:path';
+import {createHash,randomBytes} from 'node:crypto';
+import {builtinModules} from 'node:module';
+import {agentAssetLoaders,editorExternals} from '../esbuild.config.mjs';
+import {requireEvidenceDirectory} from './evidence-paths.mjs';
+const evidence=resolve(process.argv[2]??''),source=resolve(process.argv[3]??'.');
+if(!process.argv[2])throw Error('Supply a new external evidence directory.');
+await requireEvidenceDirectory(evidence);await mkdir(dirname(evidence),{recursive:true});await mkdir(evidence);
+const runtime=await mkdtemp(join(tmpdir(),'t3-sync-stream-native-')),vault=join(runtime,'vault'),profile=join(runtime,'profile');
+const plugin=join(vault,'.obsidian/plugins/sync-stream-lab');await mkdir(plugin,{recursive:true});await mkdir(profile);
+await writeFile(join(runtime,'REPORT.json'),JSON.stringify({evidence,baseline:process.argv.includes('--baseline')}));
+await writeFile(join(vault,'.obsidian/app.json'),JSON.stringify({safeMode:false,livePreview:true}));
+await writeFile(join(vault,'.obsidian/community-plugins.json'),JSON.stringify(['sync-stream-lab']));
+await writeFile(join(vault,'.obsidian/core-plugins.json'),JSON.stringify(['file-explorer']));
+await writeFile(join(plugin,'manifest.json'),JSON.stringify({id:'sync-stream-lab',name:'Synthetic Sync and stream checks',version:'0.0.1',minAppVersion:'1.13.0',isDesktopOnly:true,description:'Self-test in a private temporary vault',author:'Local validation'}));
+await writeFile(join(plugin,'styles.css'),await readFile(join(source,'styles.css')));
+await writeFile(join(profile,'obsidian.json'),JSON.stringify({vaults:{[randomBytes(8).toString('hex')]:{path:vault,ts:Date.now(),open:true}}}));
+const hashes={fixture:createHash('sha256').update(await readFile('tests/native/sync-stream-lab.ts')).digest('hex')};for(const name of ['src/conversations/shared-thread-stream.ts','src/responses/local-response-manager.ts','src/conversations/inline-note-io.ts','src/notes/smart-send.ts'])hashes[name]=createHash('sha256').update(await readFile(join(source,name))).digest('hex');
+await writeFile(join(evidence,'BUILD-SOURCE.json'),JSON.stringify(hashes,null,2));
+await build({entryPoints:['tests/native/sync-stream-lab.ts'],bundle:true,loader:agentAssetLoaders,external:['obsidian','electron','@electron/remote',...editorExternals,'node:*',...builtinModules.filter(name=>name!=='buffer')],platform:'browser',format:'cjs',supported:{'dynamic-import':false},target:'es2022',nodePaths:[resolve('node_modules')],outfile:join(plugin,'main.js'),plugins:[{name:'source-under-test',setup(builder){builder.onResolve({filter:/^\.\.\/\.\.\/src\//},args=>({path:join(source,args.path.replace(/^\.\.\/\.\.\//,''))+'.ts'}));}}]});
+const result={runtime,vault,profile,evidence};await writeFile(join(evidence,'RUNTIME.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));

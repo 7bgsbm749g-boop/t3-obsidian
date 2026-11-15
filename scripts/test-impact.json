@@ -131,6 +131,15 @@
     ],
     "tests/diagnostic-archive.test.ts": [
       "tests/native/stream-memory-lab.ts"
+    ],
+    "tests/shared-thread-stream.test.ts": [
+      "scripts/benchmark-sync-stream.mjs",
+      "scripts/build-sync-stream-lab.mjs",
+      "scripts/run-sync-stream-lab.mjs",
+      "tests/native/sync-stream-lab.ts"
+    ],
+    "tests/settings-conflict.test.ts": [
+      "scripts/benchmark-settings-save.mjs"
     ]
   }
 }

@@ -237,3 +237,38 @@ test('binding provenance survives accepted successors and settings reloads',asyn
 test('large repeated response text is compressed and round-trips without extra note files',async()=>{
   const text='Large agent response 🦉\n'.repeat(1000),packed=await packText(text);assert.equal(packed.encoding,'gzip');assert.ok(packed.data.length<text.length/5);assert.equal(await unpackText(packed),text);
 });
+
+test('unchanged projections avoid decompression even when decoded replies exceed the cache budget',async()=>{
+ const data=fresh();for(let n=0;n<4;n++)await rememberResponse(data,path,'large-'+n,'Generated '+n+' '+String.fromCharCode(65+n).repeat(600000),'','',0);
+ const Original=globalThis.DecompressionStream;let reads=0;
+ globalThis.DecompressionStream=class extends Original {constructor(format:CompressionFormat){super(format);reads++;}};
+ try{
+  assert.equal((await prepareSmartSend(data,path,destination,'Current user text.')).text,'Current user text.');assert.equal(reads,4);
+  for(let n=0;n<3;n++)assert.equal((await prepareSmartSend(data,path,destination,'Current user text.')).text,'Current user text.');assert.equal(reads,4);
+  assert.equal((await prepareSmartSend(data,path,'other destination','Current user text.')).text,'Current user text.');assert.equal(reads,4);
+ }finally{globalThis.DecompressionStream=Original;}
+});
+test('projection cache observes new and merged receipts, edits, note aliases and current typing',async()=>{
+ const data=fresh(),document='User opening.\n\nAgent line.\n\nUser tail.';
+ assert.match((await prepareSmartSend(data,path,destination,document)).text,/Agent line/);
+ await rememberResponse(data,path,'new','Agent line.','User opening.\n\n','\n\nUser tail.',15);
+ assert.doesNotMatch((await prepareSmartSend(data,path,destination,document)).text,/Agent line/);
+ assert.match((await prepareSmartSend(data,path,destination,document.replace('Agent line.','Agent line.\nNew user insertion.'))).text,/New user insertion/);
+ const other=fresh();await rememberNoteEdits(other,path,'edit',document,document+'\nAgent edit.');Object.assign(data,mergeSmartSend(data,other));
+ assert.doesNotMatch((await prepareSmartSend(data,path,destination,document+'\nAgent edit.')).text,/Agent edit/);
+ moveSmartNotes(data,path,'Moved.md');assert.doesNotMatch((await prepareSmartSend(data,'Moved.md',destination,document)).text,/Agent line/);
+});
+test('an incomplete projection is retried after its missing body arrives',async()=>{
+ const data=fresh();await rememberResponse(data,path,'reply','Generated body.','','',0);const record=Object.values(data.responses)[0],body=data.bodies[record.body];delete data.bodies[record.body];
+ await assert.rejects(sourceProjection(data,record.noteId,'Generated body.\nUser text.'),/missing/);
+ data.bodies[record.body]=body;assert.equal((await prepareSmartSend(data,path,destination,'Generated body.\nUser text.')).text.trim(),'User text.');
+});
+
+test('unchanged source snapshots reuse compression without sharing mutable packed records',async()=>{
+ const Original=globalThis.CompressionStream;let calls=0;
+ globalThis.CompressionStream=class extends Original {constructor(format:CompressionFormat){super(format);calls++;}};
+ try{
+  const text='Unique packed source for reuse.\n'.repeat(1200),first=await packText(text);first.data='Caller changed its copy';
+  const second=await packText(text);assert.equal(calls,1);assert.equal(await unpackText(second),text);assert.notEqual(second.data,first.data);
+ }finally{globalThis.CompressionStream=Original;}
+});
