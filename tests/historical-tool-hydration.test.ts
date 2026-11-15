@@ -17,14 +17,14 @@ const old={id:'old-run',ordinal:1,userMessageId:'old-prompt',status:'completed',
 const current={id:'current-run',ordinal:2,userMessageId:'prompt',status:'running',requestedAt:at};
 const senderThreadId='2c9cb7b6-a4c9-5746-b9b7-bc463c5024fa';
 const tool=(id:string,runId=old.id)=>({id,type:'command_execution',runId,ordinal:1,status:'completed',outputOmitted:true,updatedAt:at});
-const wire=(overrides:any={})=>({snapshotSequence:10,hasMoreHistory:false,projection:{thread:{id:'thread',projectId:'project'},runs:[old,current],messages:[{id:'prompt',role:'user',runId:current.id,text:'Prompt',createdAt:at}],turnItems:[],runtimeRequests:[],...overrides}});
+const wire=(overrides:any={})=>({snapshotSequence:10,hasMoreHistory:false,projection:{thread:{id:'thread',projectId:'project'},runs:[old,current],messages:[{id:'prompt',role:'user',runId:current.id,text:'Prompt',streaming:false,createdAt:at}],turnItems:[],runtimeRequests:[],...overrides}});
 const data=(snapshot:Awaited<ReturnType<typeof readInlineSnapshot>>,id:string)=>expectRecord(expectRecord(snapshot.thread.activities!.find(a=>a.id===`v2:${id}`)!.payload).data);
 
 test('active reads defer historical display work, explicit history fills the exact-revision cache, and final evidence remains authoritative',async()=>{
  const paths:string[]=[],reads:string[]=[];
  const tools=Array.from({length:120},(_,i)=>({...tool('tool-'+i),ordinal:i}));
  const answer={id:'answer-item',type:'assistant_message',threadId:'thread',messageId:'answer',runId:current.id,text:'Current reply',streaming:false,status:'completed',updatedAt:at};
- let snapshot=wire({runs:[old,{...current,status:'completed',completedAt:at}],messages:[{id:'prompt',role:'user',runId:current.id,text:'Prompt',createdBy:'agent',senderThreadId},{id:'answer',role:'assistant',runId:current.id,text:'Current reply',streaming:false}],turnItems:[...tools,answer]});
+ let snapshot=wire({runs:[old,{...current,status:'completed',completedAt:at}],messages:[{id:'prompt',role:'user',runId:current.id,text:'Prompt',streaming:false,createdAt:at,createdBy:'agent',senderThreadId},{id:'answer',role:'assistant',runId:current.id,text:'Current reply',streaming:false,createdAt:at}],turnItems:[...tools,answer]});
  const Socket=settingsSocket(undefined,undefined,(tag,payload)=>{assert.equal(tag,'orchestration.getTurnItem');reads.push(payload.itemId);return {item:payload.itemId===answer.id?answer:{...tools.find(item=>item.id===payload.itemId),updatedAt:payload.revision,output:payload.revision,outputOmitted:false}};});
  const api=t3Api(async path=>{paths.push(path);if(path==='/api/auth/websocket-ticket')return {ticket:'fixture'};if(path==='/api/orchestration/shell')return {threads:[{id:senderThreadId,title:'Sender title'}]};return snapshot;},'https://fixture',url=>new Socket(url) as any),access={origin:'https://fixture',api};
  try{
@@ -50,7 +50,7 @@ test('current, queued, unknown and exact old response targets keep tool results 
  for(const targets of [{messageIds:[],turnIds:[old.id]},{messageIds:['old-prompt'],turnIds:[]},{messageIds:['old-answer'],turnIds:[]}]){
   const items=[tool('old-target'),tool('historical','unrelated'),tool('current',current.id),tool('queued','queued'),tool('unknown','unknown'),tool('without-run',null as any)];
   const reads:string[]=[],Socket=settingsSocket(undefined,undefined,(_tag,payload)=>{reads.push(payload.itemId);return {item:{...items.find(item=>item.id===payload.itemId),output:'Result',outputOmitted:false}};});
-  const api=t3Api(async path=>path==='/api/auth/websocket-ticket'?{ticket:'fixture'}:wire({runs:[{...old,id:'unrelated',ordinal:0},old,current,{id:'queued',ordinal:3,status:'queued'}],messages:[{id:'old-answer',role:'assistant',runId:old.id,text:'Old result'}],turnItems:items}),'https://fixture',url=>new Socket(url) as any);
+  const api=t3Api(async path=>path==='/api/auth/websocket-ticket'?{ticket:'fixture'}:wire({runs:[{...old,id:'unrelated',ordinal:0,userMessageId:'unrelated-prompt'},old,current,{id:'queued',ordinal:3,status:'queued'}],messages:[{id:'old-answer',role:'assistant',runId:old.id,text:'Old result'}],turnItems:items}),'https://fixture',url=>new Socket(url) as any);
   try{
    const result=await readInlineSnapshot({origin:'https://fixture',api},'thread',undefined,targets);
    assert.deepEqual(reads,['old-target','current','queued','unknown','without-run']);
@@ -80,7 +80,7 @@ test('historical HTML results and supplied sender metadata remain available to s
  for(const toolName of ['html_render','mcp__t3_code__html_render','mcp__t3-code__html_render','t3-code.html_render','t3_code.html_render']){
   const html={...tool('html'),type:'dynamic_tool',toolName},reads:string[]=[],htmlRender={attachmentId:'page',title:'Chart',height:320};
   const Socket=settingsSocket(undefined,undefined,(_tag,payload)=>{reads.push(payload.itemId);return {item:{...html,output:{htmlRender},outputOmitted:false}};});
-  const api=t3Api(async path=>{if(path==='/api/auth/websocket-ticket')return {ticket:'fixture'};assert.ok(path.includes('/bounded?'));return wire({messages:[{id:'prompt',role:'user',runId:current.id,text:'Prompt',createdBy:'agent',senderThreadId,senderThreadTitle:'Supplied title'}],turnItems:[tool('optional'),html]});},'https://fixture',url=>new Socket(url) as any);
+  const api=t3Api(async path=>{if(path==='/api/auth/websocket-ticket')return {ticket:'fixture'};assert.ok(path.includes('/bounded?'));return wire({messages:[{id:'prompt',role:'user',runId:current.id,text:'Prompt',streaming:false,createdAt:at,createdBy:'agent',senderThreadId,senderThreadTitle:'Supplied title'}],turnItems:[tool('optional'),html]});},'https://fixture',url=>new Socket(url) as any);
   try{
    const result=await readInlineSnapshot({origin:'https://fixture',api},'thread');assert.deepEqual(reads,['html']);assert.equal(incomingLabel(result.thread.messages![0]),'Agent · Supplied title');
    const references=responseHtmlResults(result.thread.activities!,[old.id],'environment','thread');assert.equal(references.length,1);assert.deepEqual(references[0],{version:1,environmentId:'environment',threadId:'thread',runId:old.id,itemId:'html',revision:at,...htmlRender});assert.match(renderHtmlResult(references[0]),/```t3-html/);
