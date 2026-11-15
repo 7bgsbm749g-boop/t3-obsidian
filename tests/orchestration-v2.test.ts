@@ -304,3 +304,18 @@ test('v2 direct access sends the protocol HTTP header and refuses a v1 machine b
   const api=await environmentApi(connection,session,fetcher);expectSnapshot(await api('/api/orchestration/threads/thread?turnLimit=20'));assert.equal(authorized,1);
   await assert.rejects(environmentApi(connection,session,(async()=>new Response(JSON.stringify({environmentId:'environment',label:'Old',orchestrationProtocolVersion:1}))) as any),/Orchestrator v2/);assert.equal(authorized,1);
 });
+
+test('history recovery stops between pages on newer exact evidence and retains its partial watermark',async()=>{
+ for(const resolveLive of [true,false]){
+  let pages=0,needed=true;
+  const api=t3Api(async path=>{
+   if(path.includes('/bounded?'))return {...snapshot(),hasMoreHistory:true,historyCursor:'older-0'};
+   assert.ok(path.includes('/history?'));pages++;
+   if(resolveLive)needed=false;
+   return {items:[],hasMoreHistory:pages<3,nextCursor:'older-'+pages};
+  },'https://synthetic.invalid');
+  const result=expectSnapshot(await api('/api/orchestration/threads/thread',undefined,{continueHistory:()=>needed}));
+  assert.equal(pages,resolveLive?1:3);assert.equal(result.page?.hasMore,resolveLive);
+  assert.equal(result.snapshotSequence,10,'Partial recovery must not advance the live replay cursor');
+ }
+});
