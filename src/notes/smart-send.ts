@@ -20,7 +20,9 @@ export interface SmartSendData {version:1;notes:Record<string,NoteIdentity>;resp
 const empty=():SmartSendData=>({version:1,notes:{},responses:{},noteEdits:{},bodies:{},heads:{},retired:[]});
 type Projection=Awaited<ReturnType<typeof computeSourceProjection>>;
 type ProjectionEntry={document:string;signature:string;work:Promise<Projection>;characters:number};
-type HistoryIndex={responses?:SmartSendData['responses'];edits?:SmartSendData['noteEdits'];byNote:Map<string,ResponseText[]>;editsByNote:Map<string,NoteEditText[]>;projections:Map<string,ProjectionEntry>};
+type Preparation=Awaited<ReturnType<typeof computeSmartSend>>;
+type PreparationEntry={projection:Projection;signature:string;generation:readonly unknown[];work:Promise<Preparation>;characters:number};
+type HistoryIndex={preparation?:PreparationEntry;responses?:SmartSendData['responses'];edits?:SmartSendData['noteEdits'];byNote:Map<string,ResponseText[]>;editsByNote:Map<string,NoteEditText[]>;projections:Map<string,ProjectionEntry>};
 const historyIndexes=new WeakMap<SmartSendData,HistoryIndex>();
 function historyIndex(data:SmartSendData){
   let index=historyIndexes.get(data);
@@ -265,9 +267,35 @@ export function explicitSelectionText(document:string,[start,end]:Span):string {
   }
   return text+document.slice(cursor,end);
 }
-export async function prepareSmartSend(data:SmartSendData,path:string,destination:string,document:string,scope?:Span){
-  const noteId=smartNote(data,path),projection=await sourceProjection(data,noteId,document),current=projection.text;
-  const identities=noteIdentities(data,noteId),heads=Object.entries(data.heads).filter(([,h])=>identities.has(h.noteId)&&h.destination===destination);
+/** A content plan is not send authority. Only one exact revision is retained;
+ * callers must still perform canonical-note, credential and dispatch checks. */
+export function clearSmartSendPreparation(data:SmartSendData){const index=historyIndexes.get(data);if(index)index.preparation=undefined;}
+export async function prepareSmartSend(data:SmartSendData,path:string,destination:string,document:string,scope?:Span,generation:readonly unknown[]=[]){
+  const index=historyIndex(data),selection=scope&&[...scope] as Span,epoch=[...generation];
+  try{
+    const noteId=smartNote(data,path),projection=await sourceProjection(data,noteId,document);
+    const identities=noteIdentities(data,noteId),heads=Object.entries(data.heads).filter(([,h])=>identities.has(h.noteId)&&h.destination===destination);
+    const signature=JSON.stringify([path,data.notes[noteId],destination,selection,heads]),old=index.preparation;
+    let work:Promise<Preparation>;
+    if(old?.projection===projection&&old.signature===signature&&old.generation.length===epoch.length&&epoch.every((value,n)=>value===old.generation[n]))work=old.work;
+    else{
+      // Snapshot the small mutable receipt fields before asynchronous decoding.
+      work=computeSmartSend(noteId,projection,heads.map(([id,head])=>[id,{...head,source:{...head.source},covered:head.covered.map(([from,to]):Span=>[from,to]),parents:[...head.parents],bindings:[...head.bindings??[]]}]),selection);
+      const entry={projection,signature,generation:epoch,work,characters:document.length+projection.text.length+signature.length};
+      index.preparation=entry.characters<=2_000_000?entry:undefined;
+      void work.then(result=>{
+        if(index.preparation!==entry)return;
+        entry.characters+=result.text.length+result.capture.source.data.length+16*(result.ranges.length+result.capture.covered.length);
+        if(entry.characters>2_000_000)index.preparation=undefined;
+      },()=>{if(index.preparation===entry)index.preparation=undefined;});
+    }
+    const plan=await work;
+    // Every consumer owns its capture; queued requests cannot mutate the cache.
+    return {text:plan.text,capture:{...plan.capture,source:{...plan.capture.source},covered:plan.capture.covered.map(([from,to]):Span=>[from,to]),parents:[...plan.capture.parents],bindings:[...plan.capture.bindings??[]]},ranges:plan.ranges.map(([from,to]):Span=>[from,to])};
+  }catch(error){index.preparation=undefined;throw error;}
+}
+async function computeSmartSend(noteId:string,projection:Projection,heads:Array<[string,SentText]>,scope?:Span){
+  const current=projection.text;
   let covered:Span[]=[];for(const [,head] of heads)covered.push(...mappedCoverage(await unpackText(head.source),current,head.covered));covered=union(covered);
   const requested:Span[]=scope?projection.segments.flatMap(segment=>{const from=Math.max(scope[0],segment.rawFrom),to=Math.min(scope[1],segment.rawTo);return to>from?[[segment.from+from-segment.rawFrom,segment.from+to-segment.rawFrom] as Span]:[];}):[[0,current.length]];
   const added=subtractSpans(requested,covered),view=markdownText(current);

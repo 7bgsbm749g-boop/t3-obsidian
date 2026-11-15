@@ -26,7 +26,7 @@ import {isRecord,jsonClone,parseJson} from '../shared/values';
 import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import {SendPreviews} from '../responses/send-preview';
 import {savedToDisplay} from '../responses/native-response-projection';
-import {snapshotSmartSend,loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,explicitSelectionText,rememberResponse,rememberNoteEdits,confirmSmartSend,moveSmartNotes,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from '../notes/smart-send';
+import {clearSmartSendPreparation,snapshotSmartSend,loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,explicitSelectionText,rememberResponse,rememberNoteEdits,confirmSmartSend,moveSmartNotes,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from '../notes/smart-send';
 import {noteIdentityRanges,withoutNoteIdentity} from '../notes/note-identity';
 import {retainedLocalFinal,restoredLocalFinal,localFinalIdentity} from '../responses/local-final-cache';
 import {HtmlResultStore} from '../responses/html-result-store';
@@ -1109,6 +1109,10 @@ export default class SendToT3 extends Plugin {
     const data=this.smartData();
     return Object.values(data.heads).some(head=>{const note=data.notes[head.noteId];return note?.path===path&&!note.deleted;});
   }
+  private smartPreparationGeneration(project:Project,context?:EditorChatContext){
+    const route=this.connection(project);
+    return [context,this.settings,this.sharedBaseline,this.cloudGeneration,this.nativeAccount,this.cloudAccount,this.pairedSessions[route.connectionId??''],route.transport,route.url,route.connectionId,route.environmentId,context?.referenceSelection,context?.smartQuestion,context?.snapshot];
+  }
   private async hasSmartContent(file:TFile,destination:ChatDestination,context?:EditorChatContext){
     if(context?.smartQuestion?.trim()||context?.referenceSelection||context?.smartScope&&context.smartScope[1]>context.smartScope[0])return true;
     if(!file)return true;
@@ -1118,7 +1122,7 @@ export default class SendToT3 extends Plugin {
     const active=this.app.workspace.getActiveViewOfType(MarkdownView);
     const document=context?.smartDocument??(active?.file?.path===file.path?this.notePromptDocument(active):await this.app.vault.read(file));
     await this.recoverSmartReplies(file.path,document);
-    return !!(await prepareSmartSend(this.smartData(),file.path,await this.smartKey(project,this.connection(project),destination.threadId??''),document,context?.smartScope)).text.trim();
+    return !!(await prepareSmartSend(this.smartData(),file.path,await this.smartKey(project,this.connection(project),destination.threadId??''),document,context?.smartScope,this.smartPreparationGeneration(project,context))).text.trim();
   }
   private async recoverSmartReplies(path:string,document:string){
 
@@ -2189,7 +2193,7 @@ export default class SendToT3 extends Plugin {
       if(note&&options?.sourceContext?.smartDocument!==undefined){
         const context=options.sourceContext;
         await this.recoverSmartReplies(note.path,context.smartDocument!);
-        const plan=await prepareSmartSend(this.smartData(),note.path,await this.smartKey(project,connection,threadId??''),context.smartDocument!,context.smartScope);
+        const plan=await prepareSmartSend(this.smartData(),note.path,await this.smartKey(project,connection,threadId??''),context.smartDocument!,context.smartScope,this.smartPreparationGeneration(project,context));
         const question=context.smartQuestion??'';
         const selected=context.smartScope?explicitSelectionText(context.smartDocument!,context.smartScope):context.canonicalAnchor?.text??context.anchor?.text??'';
         // Explicit selections are deliberate input, including text delivered
@@ -2236,7 +2240,7 @@ export default class SendToT3 extends Plugin {
       const draft:unknown=this.app.loadLocalStorage(this.chatDraftKey);
       if(typeof draft==='string'&&draft&&(draft===prompt||prompt.endsWith(`\n\n**USER ASKS:**\n${draft}`)))this.app.saveLocalStorage(this.chatDraftKey,'');
     }catch(e){if(request)await this.failRequest(request,e,'preparation',startedAt);else if(!(e instanceof ProjectCreationCancelled))this.recordSendFailure(undefined,e,'preparation',startedAt);if(e instanceof ProjectCreationCancelled)throw e;throw new RequestDeliveryError(`${unsavedMessage(e)} ${request?'The send failed. Its response was removed. See the send failure log.':'No message was sent or queued.'}`,false,Boolean(request));}
-    finally{this.busy=false;}
+    finally{clearSmartSendPreparation(this.smartData());this.busy=false;}
   }
   async exportDiagnostics(){
     this.memoryCheckpoint('manual');await this.diagnosticArchive?.settle();this.syncDiagnosticLogFiles();
