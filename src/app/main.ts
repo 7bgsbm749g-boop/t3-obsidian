@@ -1184,7 +1184,7 @@ export default class SendToT3 extends Plugin {
               const at=document.indexOf(body);if(at<0)continue;
               // Require a unique canonical response on complete lines.
               if(at>0&&document[at-1]!=='\n'||at+body.length<document.length&&document[at+body.length]!=='\n'||document.indexOf(body,at+body.length)>=0)continue;
-              await rememberResponse(staged,path,`history:${source.thread}:${message.id}`,body,document.slice(0,at),document.slice(at+body.length),at);
+              await rememberResponse(staged,path,`history:${identity.noteId}:${contentHash(JSON.stringify([source.environment,source.project,source.thread]))}:${message.id}`,body,document.slice(0,at),document.slice(at+body.length),at);
             }
           }
         },signal);
