@@ -2,6 +2,8 @@
 
 Absolute file references also work outside registered projects and thread workspaces. The bridge uses the file's parent directory as the T3 file RPC working directory; no folder link or project registration is required. Response links use the sending machine. A disconnected source cannot fall back to another machine, and an unscoped path with several connected machines requires a choice. Text reads and checked writes use authenticated filesystem RPCs; media uses signed resource URLs. These references do not create vault files or change the Codebase view's folder links. Project and thread references still validate their catalog identities before file access.
 
+Saved choices keep their original machine after restart, including while it is disconnected. Colliding response references retain both project and filesystem targets for the chooser; an unavailable target cannot silently select another machine. Live Preview keeps native click-to-open for rendered links, while links under the caret and Source mode retain plain-click editing and use the primary modifier to open.
+
 The plugin owns this bridge. T3 is unchanged. Project bytes remain in the project workspace, outside the vault. Obsidian's native MarkdownView, image viewer and PDF viewer operate on virtual TFile identities through a scoped storage adapter.
 
 ## Storage boundary

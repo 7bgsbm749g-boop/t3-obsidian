@@ -38,15 +38,15 @@ export function nativeMediaSource(rendered:string,vaultResourceRoot?:string):{li
 }
 
 type MediaRender=(root:HTMLElement,source:string,original:(image:Element)=>string|undefined,current:()=>boolean)=>Promise<void>;
-type FileLink=(link:string,source:string,event:MouseEvent)=>void;
+type FileLink=(link:string,source:string,event:MouseEvent,editing:boolean)=>void;
 /** Native Live Preview links are spans with no href. Resolve the clicked
  * source range rather than guessing from their display label. */
 export function originalLinkAt(line:string,offset:number){
   if(line.length>8192)return;
-  return replyReferences(line).find(reference=>!reference.image&&offset>=reference.offset&&offset<reference.offset+reference.original.length)?.source;
+  return replyReferences(line).find(reference=>!reference.image&&offset>=reference.offset&&offset<reference.offset+reference.original.length);
 }
 /** Observe only this editor's rendered viewport; never the vault or document body. */
-export function codebaseMediaExtension(info:StateField<MarkdownFileInfo>,render:MediaRender,fileLink?:FileLink):Extension {
+export function codebaseMediaExtension(info:StateField<MarkdownFileInfo>,render:MediaRender,fileLink?:FileLink,livePreview?:StateField<boolean>):Extension {
   const {ViewPlugin}=cmView;
   return ViewPlugin.fromClass(class {
     private stopped=false;
@@ -58,7 +58,12 @@ export function codebaseMediaExtension(info:StateField<MarkdownFileInfo>,render:
       if(event.button!==0||!fileLink)return;
       const target=(event.target as Element|null)?.closest?.('.cm-link');if(!target||target.closest('.cm-hmd-internal-link'))return;
       const source=this.view.state.field(info,false)?.file?.path;if(!source)return;
-      try{const position=this.view.posAtDOM(target),line=this.view.state.doc.lineAt(position),link=originalLinkAt(line.text,position-line.from);if(link)fileLink(link,source,event);}catch{/* A recycled editor node belongs to native handling. */}
+      try{
+        const position=this.view.posAtDOM(target),line=this.view.state.doc.lineAt(position),reference=originalLinkAt(line.text,position-line.from);if(!reference)return;
+        const start=line.from+reference.offset,end=start+reference.original.length;
+        const editing=!livePreview||this.view.state.field(livePreview,false)!==true||this.view.state.selection.ranges.some(range=>range.from<=end&&range.to>=start);
+        fileLink(reference.source,source,event,editing);
+      }catch{/* A recycled editor node belongs to native handling. */}
     };
     constructor(private view:EditorView){
       if(fileLink){view.dom.addEventListener('mousedown',this.linkEvent,true);view.dom.addEventListener('click',this.linkEvent,true);}

@@ -4,8 +4,8 @@ import {nativeMediaSource,originalMediaSource,originalLinkAt,codebaseMediaExtens
 
 test('Live Preview file links retain the exact target even when labels repeat',()=>{
   const line='> [report](C:/Users/Public/Documents/report.md) and [report](/other/report.md)';
-  assert.equal(originalLinkAt(line,line.indexOf('report')),'C:/Users/Public/Documents/report.md');
-  assert.equal(originalLinkAt(line,line.lastIndexOf('[report]')+1),'/other/report.md');
+  assert.equal(originalLinkAt(line,line.indexOf('report'))?.source,'C:/Users/Public/Documents/report.md');
+  assert.equal(originalLinkAt(line,line.lastIndexOf('[report]')+1)?.source,'/other/report.md');
   assert.equal(originalLinkAt(line,0),undefined);assert.equal(originalLinkAt('![image](/image.png)',3),undefined);
 });
 

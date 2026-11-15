@@ -5,7 +5,7 @@ import {isRecord,parseJson} from '../shared/values';
 import {watchWorkspaceDocuments} from '../ui/workspace-documents';
 import {WikiGesture} from './wiki-gesture';
 import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
-import {App,type View,type OpenViewState,type DataWriteOptions,type HeadingCache,type ButtonComponent,MarkdownView,Menu,Modal,Setting,Notice,TFile,TFolder,FuzzySuggestModal,WorkspaceLeaf,type Plugin,editorInfoField} from 'obsidian';
+import {App,type View,type OpenViewState,type DataWriteOptions,type HeadingCache,type ButtonComponent,Keymap,MarkdownView,Menu,Modal,Setting,Notice,TFile,TFolder,FuzzySuggestModal,WorkspaceLeaf,type Plugin,editorInfoField,editorLivePreviewField} from 'obsidian';
 import {CODEBASE_PREFIX,CodebaseDocument,codebaseRootLabels,contextualCandidates,linkedCodebases,relativeCodebasePath,scopeKey,virtualPath,catalogCodebases,type CodebaseScope,type CodebaseIO,type CodebaseProjectChange} from './codebase-core';
 import {filesystemReference,projectLink,projectMarkdownLink,projectPathRoutes} from './codebase-links';
 import {registerProjectReferences} from './project-reference';
@@ -91,12 +91,13 @@ export class CodebaseBridge {
     this.nativeSwitcher();
     this.nativeFileOpen();
     this.nativePathLinks();
-    if(this.plugin.registerEditorExtension)this.plugin.registerEditorExtension(codebaseMediaExtension(editorInfoField,(root,source,original,current)=>this.renderMedia(root,source,original,current),(link,source,event)=>{
+    if(this.plugin.registerEditorExtension)this.plugin.registerEditorExtension(codebaseMediaExtension(editorInfoField,(root,source,original,current)=>this.renderMedia(root,source,original,current),(link,source,event,editing)=>{
+      if(editing&&!Keymap.isModifier(event,'Mod'))return;
       const route=this.pathRoute(link,source);
       if(!route.owned&&(!this.absoluteReference(link)||!this.environmentIds().length))return;
       event.preventDefault();event.stopImmediatePropagation();
       if(event.type==='click')void this.app.workspace.openLinkText(link,source,event.ctrlKey||event.metaKey).catch(error=>new Notice(String(error),10000));
-    }));
+    },editorLivePreviewField));
     this.patch(vault,'getFileByPath',original=>(path:string)=>this.files.get(path)?.file??this.files.get(this.legacyPaths[path])?.file??original(path)??this.vaultAlias(path)?.file??null);
     this.patch(vault,'getAbstractFileByPath',original=>(path:string)=>this.files.get(path)?.file??this.files.get(this.legacyPaths[path])?.file??this.folders.get(path)??original(path)??this.vaultAlias(path)?.file??null);
     for(const method of ['read','cachedRead'] as const)this.patch(vault,method,original=>async(file:TFile)=>{
@@ -456,10 +457,25 @@ export class CodebaseBridge {
     const linked=this.scopes(),scopes=this.routeScopes(linked),parsed=projectLink(name);
     if(parsed&&!/^(?:\/|[a-z]:\/)/i.test(parsed.path)&&!scopes.some(scope=>scope.root.startsWith('/')&&parsed.path.startsWith(scope.root.split('/')[1]+'/')))return {owned:false,items:[] as RegisteredFile[]};
     const allowed=(scope:CodebaseScope)=>this.allowed(scope,linked),active=scopes.filter(allowed);
-    const remembered=this.choices[JSON.stringify([source,projectLink(name)?.path??name]) ]??this.choices[JSON.stringify([source,name.split('#')[0]])],chosen=remembered?this.files.get(remembered):undefined;
+    const remembered=this.choices[JSON.stringify([source,parsed?.path??name]) ]??this.choices[JSON.stringify([source,name.split('#')[0]])],chosen=remembered?this.files.get(remembered)??this.records.get(remembered):undefined;
+    if(remembered&&!chosen)return {owned:true,items:[] as RegisteredFile[]};
     if(chosen&&!allowed(chosen.scope)&&projectPathRoutes(name,[chosen.scope]).owned)return {owned:true,items:[] as RegisteredFile[]};
     const origins=[...this.sourceOrigins.get(source)?.values()??[]],originKeys=new Set(origins.map(origin=>JSON.stringify(origin))),origin=originKeys.size===1?origins[0]:undefined;
     const sourceScope=this.files.get(source)?.scope,link=this.links().filter(l=>source===l.folderPath||source.startsWith(l.folderPath+'/')).sort((a,b)=>b.folderPath.length-a.folderPath.length)[0],collision=(this.automaticChoices.get(JSON.stringify([source,parsed?.path??name]))?.size??0)>1,context=sourceScope??(collision?undefined:origin??(originKeys.size>1?undefined:link));
+    if(collision&&!chosen&&!sourceScope){
+      // Recorded response targets have equal priority across machines, even
+      // when only one target belongs to a registered project. Missing targets
+      // must not turn that ambiguity into a silent choice of another machine.
+      const items:RegisteredFile[]=[];
+      for(const path of this.automaticChoices.get(JSON.stringify([source,parsed?.path??name]))!){
+        const reference=this.files.get(path)??this.records.get(path);
+        if(!reference||!allowed(reference.scope))return {owned:true,items:[] as RegisteredFile[]};
+        const match=projectPathRoutes(name,[reference.scope]).matches[0];
+        if(!match)return {owned:true,items:[] as RegisteredFile[]};
+        items.push(this.register(match.scope,match.path));
+      }
+      return {owned:true,items};
+    }
     const preferred=[...(chosen&&allowed(chosen.scope)?[[chosen.scope]]:[]),...(context?[active.filter(s=>s.environmentId===context.environmentId&&s.projectId===context.projectId),active.filter(s=>s.environmentId===context.environmentId)]:[]),...(!sourceScope&&(!origin||collision)?[active.filter(scope=>!scope.filesystem&&(collision||!origins.length||origins.some(origin=>origin.environmentId===scope.environmentId)))]:[])];
     for(const candidates of preferred){const route=projectPathRoutes(name,candidates);if(route.owned)return {owned:true,items:route.matches.map(r=>this.register(r.scope,r.path))};}
     const ownershipScopes=context?scopes.filter(scope=>scope.environmentId===context.environmentId):origins.length?scopes.filter(scope=>origins.some(origin=>origin.environmentId===scope.environmentId)):scopes;
