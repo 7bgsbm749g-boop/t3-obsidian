@@ -2690,7 +2690,7 @@ export default class SendToT3 extends Plugin {
       if (!content.trim()) {if(options?.throwOnError)throw Error('This note is empty. Add Markdown before sending.');new Notice('This note is empty. Add Markdown before sending.'); return;}
       if(options?.prepared&&options.prepared.content!==content)throw Error('The note changed while preparing its project. Try again with the current text.');
       await this.recoverSmartReplies(file.path,content);
-      const smart=await prepareSmartSend(this.smartData(),file.path,await this.smartKey(project,connection,threadId??''),content);
+      const smart=await prepareSmartSend(this.smartData(),file.path,await this.smartKey(project,connection,threadId??''),content,undefined,this.smartPreparationGeneration(connection));
       if(!smart.text.trim()){new Notice('Nothing new to send.');return;}
       const images=await this.prepareImages(smart.text,file.path,true,content);
       if(inlineView&&this.notePromptDocument(inlineView)!==content)throw Error('The note changed while preparing the send. Try again with the current text.');
@@ -2705,7 +2705,7 @@ export default class SendToT3 extends Plugin {
       const sentThreadId=await this.dispatch(request,options?.quiet);
       return {threadId:sentThreadId,request};
     } catch(e) {if(request)await this.failRequest(request,e,'preparation',startedAt);else this.recordSendFailure(undefined,e,'preparation',startedAt);const detail=`${unsavedMessage(e)} The send failed. See the send failure log.`;if(options?.throwOnError)throw new RequestDeliveryError(detail,false,Boolean(request));new Notice(`T3 Code: ${detail}`,12000);}
-    finally {finishPreview();this.busy = false;}
+    finally {clearSmartSendPreparation(this.smartData());finishPreview();this.busy = false;}
   }
   /** Resolve against the final thread and its provider turn, never the cursor.
    * Reconnecting bindings block a send until ownership is known. */

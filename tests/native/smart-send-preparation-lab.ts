@@ -46,40 +46,46 @@ export default class SmartSendPreparationLab extends Plugin {
           subject.chatTarget=async()=>({project,link:{}});subject.projectReadinessError=()=>undefined;subject.connection=()=>({transport:'desktop',environmentId:'synthetic-environment'});
           subject.assertNoteMode=async()=>{};subject.requestTitle=async()=> 'Synthetic preparation';subject.noteThreadIntent=()=>undefined;subject.folderLinkIntent=()=>({});subject.prepareNoteSteering=async()=>{};
           subject.prepareImages=async(markdown:string)=>({markdown,attachments:[],context:undefined});subject.messageFooter=()=>'';subject.save=async()=>{};
-          let dispatches=0,prepared:any,reads=0,compressions=0;
+          let dispatches=0,prepared:any,reads=0,compressions=0,noteReads=0;
+          const vaultRead=this.app.vault.read;this.app.vault.read=async file=>{if(file.path===note)noteReads++;return vaultRead.call(this.app.vault,file);};
           const Decompress=globalThis.DecompressionStream,Compress=globalThis.CompressionStream;
           globalThis.DecompressionStream=class extends Decompress{constructor(format:CompressionFormat){super(format);reads++;}};
           globalThis.CompressionStream=class extends Compress{constructor(format:CompressionFormat){super(format);compressions++;}};
           subject.dispatch=async(request:any)=>{dispatches++;prepared=request;};
           const context={smartDocument:source},target={projectKey:project.id,threadId:'synthetic-thread'};
-          const observed:Array<{phase:string;ms:number;decompressions:number;compressions:number}>=[];let previousReads=0,previousCompressions=0;
-          const observe=(phase:string,ms:number)=>{observed.push({phase,ms,decompressions:reads-previousReads,compressions:compressions-previousCompressions});previousReads=reads;previousCompressions=compressions;};
-          try{let started=performance.now();assert(await subject.hasSmartContent(file,target,context),'Unsent addition was lost');const firstCheckMs=performance.now()-started;observe('cold-check',firstCheckMs);
-          const repeatChecksMs:number[]=[];for(let n=0;n<3;n++){started=performance.now();assert(await subject.hasSmartContent(file,target,context),'Repeated check changed availability');repeatChecksMs.push(performance.now()-started);observe('warm-check',repeatChecksMs.at(-1)!);}
-          started=performance.now();await subject.sendChat('Prepare note',file,{threadId:'synthetic-thread',sourceContext:context});const sendPreparationMs=performance.now()-started;observe('send-preparation',sendPreparationMs);
+          const observed:Array<{phase:string;ms:number;decompressions:number;compressions:number;noteReads:number}>=[];let previousReads=0,previousCompressions=0,previousNoteReads=0;
+          const observe=(phase:string,ms:number)=>{observed.push({phase,ms,decompressions:reads-previousReads,compressions:compressions-previousCompressions,noteReads:noteReads-previousNoteReads});previousReads=reads;previousCompressions=compressions;previousNoteReads=noteReads;};
+          try{let started=performance.now();assert(await subject.hasSmartContent(file,target),'Unsent addition was lost');const firstCheckMs=performance.now()-started;observe('cold-check',firstCheckMs);
+          const repeatChecksMs:number[]=[];for(let n=0;n<3;n++){started=performance.now();assert(await subject.hasSmartContent(file,target),'Repeated check changed availability');repeatChecksMs.push(performance.now()-started);observe('warm-check',repeatChecksMs.at(-1)!);}
+          started=performance.now();await subject.send(file,project,{threadId:'synthetic-thread',quiet:true,throwOnError:true,streamReply:false});const sendPreparationMs=performance.now()-started;observe('send-preparation',sendPreparationMs);
           assert(dispatches===1&&prepared.prompt.trim()===added.trim(),'Only the exact user addition should send');
           assert(prepared.smartSend.noteId===noteId&&prepared.smartSend.parents.length===4&&prepared.smartSend.bindings[0]==='original-binding','Coverage identity was lost');
           // Model only the local acceptance receipt; no transport/provider is measured.
           data.heads={accepted:{...prepared.smartSend,destination,bindings:['original-binding']}};data.retired=prepared.smartSend.parents;
-          assert(!await subject.hasSmartContent(file,target,context),'Confirmed duplicate still available');
-          await subject.sendChat('Prepare note',file,{threadId:'synthetic-thread',sourceContext:context});assert(dispatches===1,'Duplicate note was dispatched');
+          assert(!await subject.hasSmartContent(file,target),'Confirmed duplicate still available');
+          await subject.send(file,project,{threadId:'synthetic-thread',quiet:true,throwOnError:true,streamReply:false});assert(dispatches===1,'Duplicate note was dispatched');
           await subject.sendChat('Selected text',file,{threadId:'synthetic-thread',sourceContext:{smartDocument:source,smartScope:[0,'Line 0'.length]}});assert(dispatches===2&&prepared.prompt==='Line 0','Explicit resend was blocked');
           const typed=source+'\nFresh typing.';view.editor.setValue(typed);await view.save();
-          const typedContext={smartDocument:typed};previousReads=reads;previousCompressions=compressions;
-          started=performance.now();assert(await subject.hasSmartContent(file,target,typedContext),'Typing did not invalidate preparation');observe('edited-cold-check',performance.now()-started);
-          for(let n=0;n<3;n++){started=performance.now();assert(await subject.hasSmartContent(file,target,typedContext),'Edited availability changed');observe('edited-warm-check',performance.now()-started);}
-          started=performance.now();await subject.sendChat('Prepare note',file,{threadId:'synthetic-thread',sourceContext:typedContext});observe('edited-send-preparation',performance.now()-started);assert(dispatches===3&&prepared.prompt.trim()==='Fresh typing.','Typing was lost or old text resent');
+          previousReads=reads;previousCompressions=compressions;previousNoteReads=noteReads;
+          started=performance.now();assert(await subject.hasSmartContent(file,target),'Typing did not invalidate preparation');observe('edited-cold-check',performance.now()-started);
+          for(let n=0;n<3;n++){started=performance.now();assert(await subject.hasSmartContent(file,target),'Edited availability changed');observe('edited-warm-check',performance.now()-started);}
+          started=performance.now();await subject.send(file,project,{threadId:'synthetic-thread',quiet:true,throwOnError:true,streamReply:false});observe('edited-send-preparation',performance.now()-started);assert(dispatches===3&&prepared.prompt.trim()==='Fresh typing.','Typing was lost or old text resent');
           const elsewhere=JSON.stringify(['synthetic-environment',project.id,'other-thread']);subject.smartKey=async()=>elsewhere;
           assert(await subject.hasSmartContent(file,{...target,threadId:'other-thread'},context),'Destination coverage leaked');
           assert(view.editor.getValue()===typed&&await this.app.vault.read(file)===typed,'Checked native output changed');
           const responseUpdate='\nAgent streamed update '+trial;view.editor.setValue(typed+responseUpdate);await view.save();
           const body=pack(responseUpdate.trim());data.bodies[body.hash]=body;data.responses={...data.responses,stream:{noteId,body:body.hash,before:'',after:'',offset:typed.length+1}};
           subject.smartKey=async()=>destination;
-          previousReads=reads;previousCompressions=compressions;started=performance.now();await subject.sendChat('Prepare note',file,{threadId:'synthetic-thread',sourceContext:{smartDocument:typed+responseUpdate}});observe('response-updated-send',performance.now()-started);
+          previousReads=reads;previousCompressions=compressions;previousNoteReads=noteReads;started=performance.now();await subject.send(file,project,{threadId:'synthetic-thread',quiet:true,throwOnError:true,streamReply:false});observe('response-updated-send',performance.now()-started);
           assert(dispatches===4&&prepared.prompt.trim()==='Fresh typing.','Response update reused stale preparation or sent agent text');
           assert(await this.app.vault.read(file)===typed+responseUpdate,'Response update was not saved exactly');
-          samples.push({observed,responseCount:responses.length,historyHeads:4,syntheticAcknowledgement:true,responseInvalidation:true,size,trial,characters:source.length,firstCheckMs,repeatChecksMs,sendPreparationMs,duplicateBlocked:true,explicitSelectionRetained:true,typingDetected:true,destinationIndependent:true,coverageIdentityRetained:true});
-          }finally{globalThis.DecompressionStream=Decompress;globalThis.CompressionStream=Compress;}
+          const externallyEdited=typed+responseUpdate+'\nExternal user addition.';await this.app.vault.modify(file,externallyEdited);
+          previousReads=reads;previousCompressions=compressions;previousNoteReads=noteReads;started=performance.now();
+          await subject.send(file,project,{threadId:'synthetic-thread',quiet:true,throwOnError:true,streamReply:false});observe('external-edit-send',performance.now()-started);
+          assert(dispatches===5&&prepared.prompt.includes('External user addition.')&&prepared.prompt.includes('Fresh typing.')&&!prepared.prompt.includes('Agent streamed update'),'External edit reused stale preparation');
+          assert(await this.app.vault.read(file)===externallyEdited,'External edit was not preserved exactly');
+          samples.push({observed,responseCount:responses.length,historyHeads:4,syntheticAcknowledgement:true,responseInvalidation:true,externalEditInvalidation:true,size,trial,characters:source.length,firstCheckMs,repeatChecksMs,sendPreparationMs,duplicateBlocked:true,explicitSelectionRetained:true,typingDetected:true,destinationIndependent:true,coverageIdentityRetained:true});
+          }finally{globalThis.DecompressionStream=Decompress;globalThis.CompressionStream=Compress;this.app.vault.read=vaultRead;}
           await new Promise(resolve=>setTimeout(resolve,20));
         }
         checks.push(`${size}: 6 trials; exact output, duplicates, explicit selections, typing, destination and coverage identity passed`);
