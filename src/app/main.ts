@@ -10,7 +10,7 @@ import {AgentToolsSettings} from '../agents/settings';
 import {ConnectCommandHost,commandBase,type CommandFiles,type CommandRoute} from '../notes/connect-command-host';
 import {connectAgentFiles,connectCommandFiles,connectDiagnosticFiles} from '../notes/connect-command-files';
 import {CheckedNoteEdits,isNoteEditCommand,checkedStageDraft,type EditSnapshot} from '../notes/checked-note-edits';
-import {connectT3Rpc} from '../connection/t3-rpc';
+import {connectT3Rpc,T3UnaryRpcOwner,type T3Api} from '../connection/t3-rpc';
 import {ThreadDisplays,isThreadCommand,type ThreadDisplayResult} from '../conversations/thread-displays';
 import type {ThreadTarget as EventTarget} from '../conversations/thread-display';
 import {readPrivateStorageRoute} from '../storage/private-storage';
@@ -219,6 +219,10 @@ export default class SendToT3 extends Plugin {
   private commandHosts=new Map<string,{host:ConnectCommandHost;rpc:Awaited<ReturnType<typeof connectT3Rpc>>;files:CommandFiles}>();
   private commandProjects=new Map<string,Project>();
   private verifiedConnections=new RouteAuthorizationCache<Awaited<ReturnType<typeof environmentApi>>>();
+  private unaryCredentialKey(paired:PairedConnection,session:PairedSession|undefined){return JSON.stringify([paired.url,paired.environmentId,session?.token,session?.expiresAt,session?.dpopKeyId,session?.accountId,session?.permissions]);}
+  private unaryOwners=new Map<string,{key:string;pool:T3UnaryRpcOwner}>();
+  private disposeUnaryOwner(id:string){const owner=this.unaryOwners.get(id);if(owner){owner.pool.dispose();this.verifiedConnections.delete(owner.key);this.unaryOwners.delete(id);}}
+  private disposeUnaryOwners(){for(const id of this.unaryOwners.keys())this.disposeUnaryOwner(id);}
   private importPreparation=new Set<AbortController>();
   private commandSerial:Promise<void>=Promise.resolve();
   private noteEdits?:CheckedNoteEdits;
@@ -1828,13 +1832,34 @@ export default class SendToT3 extends Plugin {
     // Verify authorization before exposing a candidate to sends or writes.
     // A failed open can try another endpoint for the same machine; the caller
     // operation is never part of this fallback.
-    const key=JSON.stringify([paired.url,environmentId,session?.token,session?.expiresAt,session?.dpopKeyId]);
-    let api=await this.verifiedConnections.open(key,async()=>{
-      const candidate=await environmentApi(connection,session);
+    const key=this.unaryCredentialKey(paired,session);
+    const previousUnary=this.unaryOwners.get(paired.id);
+    if(previousUnary&&previousUnary.key!==key)this.disposeUnaryOwner(paired.id);
+    const pool=this.unaryOwners.get(paired.id)?.pool??new T3UnaryRpcOwner();
+    this.unaryOwners.set(paired.id,{key,pool});
+    while(this.unaryOwners.size>16)this.disposeUnaryOwner(this.unaryOwners.keys().next().value!);
+    let api:T3Api=await this.verifiedConnections.open(key,async()=>{
+      const candidate=await environmentApi(connection,session,undefined,undefined,undefined,pool);
       await this.routeStatus.request(paired.id,()=>verifyOrchestrationRead(candidate));return candidate;
-    },forceRefresh,(session?.expiresAt??0)-5000);
+    },forceRefresh,(session?.expiresAt??0)-5000).catch(error=>{if(this.unaryOwners.get(paired.id)?.pool===pool)this.disposeUnaryOwner(paired.id);throw error;});
+    if(this.stopped||this.unaryOwners.get(paired.id)?.pool!==pool){pool.dispose();throw Error('The connection owner changed.');}
     if(!Platform.isMobile&&localRoute(paired))this.eventLocalEnvironmentId=environmentId;
     let renewing:Promise<void>|undefined;
+    const renew=async(attemptedApi:typeof api)=>{
+      if(api!==attemptedApi)return;
+      renewing??=(async()=>{
+        const started=Date.now(),fields={environmentId,routeId:paired.id,cause:'http-401',status:401};logEvent('connection.auth.renewing',fields);
+        try{
+          session=await this.sessionFor(paired.id,true);this.disposeUnaryOwner(paired.id);attemptedApi.disposeUnaryRpc?.();
+          const freshPool=new T3UnaryRpcOwner();
+          api=await environmentApi(connection,session,undefined,undefined,undefined,freshPool);
+          if(this.stopped){api.disposeUnaryRpc?.();throw Error('The plugin stopped.');}
+          this.unaryOwners.set(paired.id,{key:this.unaryCredentialKey(paired,session),pool:freshPool});
+          logEvent('connection.auth.recovered',{...fields,elapsedMs:Date.now()-started});
+        }catch(error){logEvent('connection.auth.failed',{...fields,elapsedMs:Date.now()-started,error},'warning');throw error;}
+      })().finally(()=>{renewing=undefined;});
+      await renewing;
+    };
     const routed:ThreadAccess['api']=async(path,payload,options)=>this.routeStatus.request(paired.id,async()=>{
       try{
         const attemptedApi=api;
@@ -1843,17 +1868,21 @@ export default class SendToT3 extends Plugin {
           // never replayed; account expiry is handled by nativeCredential.
           const safe=payload===undefined||['/api/auth/websocket-ticket','/api/orchestration/turn-item','/api/assets/create-url'].includes(path);
           if(!(error instanceof T3HttpError)||error.status!==401||!paired.managed||!safe)throw error;
-          if(api===attemptedApi){
-            renewing??=(async()=>{
-              const started=Date.now(),fields={environmentId,routeId:paired.id,cause:'http-401',status:401};logEvent('connection.auth.renewing',fields);
-              try{session=await this.sessionFor(paired.id,true);api=await environmentApi(connection,session);logEvent('connection.auth.recovered',{...fields,elapsedMs:Date.now()-started});}
-              catch(error){logEvent('connection.auth.failed',{...fields,elapsedMs:Date.now()-started,error},'warning');throw error;}
-            })().finally(()=>{renewing=undefined;});
-            await renewing;
-          }
+          await renew(attemptedApi);
           return await api(path,payload,options);
         }
-      }catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403))this.verifiedConnections.delete(key);this.routeFailures.set(paired.id,message(error));throw error;}
+      }catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403)){this.verifiedConnections.delete(key);this.disposeUnaryOwner(paired.id);api.disposeUnaryRpc?.();}this.routeFailures.set(paired.id,message(error));throw error;}
+    });
+    routed.acquireUnaryRpc=signal=>this.routeStatus.request(paired.id,async()=>{
+      const attemptedApi=api;
+      let rpc:Awaited<ReturnType<typeof connectT3Rpc>>;
+      try{rpc=await attemptedApi.acquireUnaryRpc!(signal);}catch(error){
+        // Acquisition has sent no unary operation, so only ticket issuance can
+        // be repeated. Calls on the returned lease are never replayed.
+        if(!(error instanceof T3HttpError)||error.status!==401||!paired.managed)throw error;
+        await renew(attemptedApi);rpc=await api.acquireUnaryRpc!(signal);
+      }
+      this.routeStatus.track(paired.id,rpc);return rpc;
     });
     routed.trackConnection=connection=>this.routeStatus.track(paired.id,connection);
     routed.cachedImportThreads=projectId=>api.cachedImportThreads?.(projectId);
@@ -2630,7 +2659,7 @@ export default class SendToT3 extends Plugin {
   }
   private async clearAccount(expired:boolean){
     this.signInEmail=this.nativeAccount?.identity??this.signInEmail;this.signInExpired=expired;
-    this.cancelCloudLogin();this.nativeAccount=null;this.nativeToken=undefined;this.nativeRefreshing=undefined;this.sessionRefreshing.clear();
+    this.disposeUnaryOwners();this.cancelCloudLogin();this.nativeAccount=null;this.nativeToken=undefined;this.nativeRefreshing=undefined;this.sessionRefreshing.clear();
     for(const [id,s] of Object.entries(this.pairedSessions))if(s.accountId)delete this.pairedSessions[id];
     this.cloudAccount=null;this.cloudMachines=[];this.accountCandidates.clear();this.registryNextAttempt=0;this.cloudError='';this.machineErrors={};this.connectionSyncComplete=false;this.machineRefreshing=undefined;this.cloudRefreshing=undefined;
     // Clear only device credentials. Keep synced links, bindings and choices.
@@ -2640,13 +2669,14 @@ export default class SendToT3 extends Plugin {
     const old=this.nativeAccount;await this.clearAccount(false);
     if(old)try{await revokeNativeAccount(old,nativeAccountFetch);}catch{new Notice('Signed out on this device. T3 could not be reached to revoke the account session; you can revoke it in your T3 account.');}
   }
-  async forgetPairing(id:string){delete this.pairedSessions[id];this.projectDiscovery?.invalidate();await this.save();this.refreshProjectsInBackground(true);}
+  async forgetPairing(id:string){this.disposeUnaryOwner(id);delete this.pairedSessions[id];this.projectDiscovery?.invalidate();await this.save();this.refreshProjectsInBackground(true);}
   async removeConnection(id:string){
     if(this.settings.pending.some(r=>r.connection.connectionId===id)||this.settings.completionJobs.some(j=>j.connection.connectionId===id&&j.status==='watching')||this.settings.settlementJobs.some(j=>j.connection.connectionId===id))throw Error('This connection has an unconfirmed request or completion check. Resolve or stop it before removing the connection.');
-    this.projectDiscovery?.invalidate();for(const [key,c] of this.accountCandidates)if(c.id===id)this.accountCandidates.delete(key);
+    this.disposeUnaryOwner(id);this.projectDiscovery?.invalidate();for(const [key,c] of this.accountCandidates)if(c.id===id)this.accountCandidates.delete(key);
     this.settings.paired=this.settings.paired.filter(c=>c.id!==id);this.settings.directProjects=this.settings.directProjects.filter(p=>p.connectionId!==id);this.settings.directSelected=this.settings.directSelected.filter(k=>!k.startsWith(id+':'));delete this.pairedSessions[id];if(this.settings.directScanId===id)this.settings.directScanId=this.settings.paired[0]?.id??'';this.syncProjectSources();await this.save();
   }
   private saveDeviceState(state?:unknown) {
+    for(const [id,owner] of this.unaryOwners){const paired=this.settings.paired.find(c=>c.id===id);if(!paired||owner.key!==this.unaryCredentialKey(paired,this.pairedSessions[id]))this.disposeUnaryOwner(id);}
     this.app.saveLocalStorage(this.localKey,jsonClone({deviceId:this.deviceId,mode:this.mode,connectionMethod:this.connectionMethod,routeOrder:this.routeOrder,connection:this.settings.connection,pairedSessions:this.pairedSessions,cloudAccount:this.cloudAccount,nativeAccount:this.nativeAccount,signInEmail:this.signInEmail,signInExpired:this.signInExpired,vaultRegistrations:this.vaultRegistrations}));
     return deviceState(this.deviceId,state??jsonClone({pending:this.settings.pending,completionJobs:this.settings.completionJobs,settlementJobs:this.settings.settlementJobs}));
   }
@@ -3011,7 +3041,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
-  onunload(){if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){this.disposeUnaryOwners();if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async setThreadHiding(enabled:boolean){this.settings.hideObsidianThreads=enabled;await this.save();await this.syncThreadVisibility();}
   private syncThreadVisibility(force=false):Promise<void>{
     if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve();

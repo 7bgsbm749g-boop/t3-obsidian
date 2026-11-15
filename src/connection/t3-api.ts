@@ -2,7 +2,7 @@ import {outgoingMessage,type OutgoingMessage} from './send-contracts';
 import {readRawSnapshot,readHistory,readThreadList} from './wire-readers';
 import type {WireSnapshot,WireMessage,WireTurnItem} from './wire-types';
 import {toError,isRecord} from '../shared/values';
-import {connectT3Rpc,type T3Api,type SocketFactory} from './t3-rpc';
+import {T3UnaryRpcPool,type T3UnaryRpcOwner,connectT3Rpc,type T3Api,type SocketFactory} from './t3-rpc';
 import {normalizeV2Snapshot,restoreCompactSnapshot,v2Command} from './orchestration-v2';
 import {htmlRenderFromToolItem} from '../responses/html-results';
 
@@ -26,7 +26,8 @@ export function abortableRead<T>(work:Promise<T>,signal?:AbortSignal):Promise<T>
 
 /** All wire mutations use v2 RPC (projects have their own HTTP API). The old
  * path is an internal routing key for durable plugin commands, never sent. */
-export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory):AbortableT3Api {
+export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory,validUntil=Infinity,sharedUnary?:T3UnaryRpcOwner):T3Api {
+  const unary=sharedUnary?.connection(raw,origin,makeSocket,validUntil)??new T3UnaryRpcPool(raw,origin,makeSocket,undefined,validUntil);
   const outputs=new Map<string,WireTurnItem>();
   const outputSizes=new Map<string,number>();let outputCharacters=0;
   const senderTitles=new Map<string,string|undefined>();let senderRefresh=-Infinity;
@@ -77,7 +78,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       for(const item of needed){
         const key=JSON.stringify([snapshot.projection.thread.id,item.id,item.updatedAt]);
         if(outputs.has(key)){hydrated.set(key,outputs.get(key)!);continue;}
-        rpc??=await connectT3Rpc(raw,origin,makeSocket);
+        rpc??=await unary.acquire();
         const result=await rpc.call('orchestration.getTurnItem',{threadId:snapshot.projection.thread.id,itemId:item.id,revision:item.updatedAt});
         if(isRecord(result)&&isRecord(result.item)&&result.item.id===item.id&&result.item.updatedAt===item.updatedAt){
           const full=result.item as unknown as WireTurnItem;hydrated.set(key,full);const characters=JSON.stringify(full).length;
@@ -89,7 +90,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
     while(outputs.size>256||outputCharacters>2_000_000){const key=outputs.keys().next().value!;outputs.delete(key);outputCharacters-=outputSizes.get(key)??0;outputSizes.delete(key);}
     return {...snapshot,projection:{...snapshot.projection,messages,turnItems:items.map(i=>hydrated.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??outputs.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??i)}};
   }
-  return async(path,payload,options)=>{
+  const api:T3Api=async(path,payload,options)=>{
     requestAborted(options?.signal);
     const request:T3Api=(target,body)=>raw(target,body,options);
     // Internal read key, fulfilled by the stock authenticated RPC. No custom
@@ -109,21 +110,21 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       }finally{signal?.removeEventListener('abort',close);close();}
     }
     if(path==='/api/orchestration/no-project'){
-      const rpc=await connectT3Rpc(raw,origin,makeSocket);
+      const rpc=await unary.acquire(options?.signal);
       try{return await rpc.call('projects.ensureScratch',{});}finally{rpc.close();}
     }
     if(path==='/api/assets/create-url'){
-      const rpc=await connectT3Rpc(raw,origin,makeSocket);
+      const rpc=await unary.acquire(options?.signal);
       try{return await rpc.call('assets.createUrl',payload);}finally{rpc.close();}
     }
     // Internal adapter route: the server provides this read over RPC only.
     if(path==='/api/orchestration/turn-item'){
-      const rpc=await connectT3Rpc(raw,origin,makeSocket);
+      const rpc=await unary.acquire(options?.signal);
       try{const result=await rpc.call('orchestration.getTurnItem',payload);return isRecord(result)?result.item:undefined;}finally{rpc.close();}
     }
     // Internal route for a new auto-titled thread and its immutable first send.
     if(path==='/api/orchestration/launch'){
-      const rpc=await connectT3Rpc(raw,origin,makeSocket);
+      const rpc=await unary.acquire(options?.signal);
       try{
         if(!isRecord(payload)||typeof payload.threadId!=='string')throw Error('Invalid T3 launch identity.');
         const initialMessage=await persistAttachments(rpc,payload.threadId,outgoingMessage(payload.initialMessage));
@@ -167,7 +168,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
           }
         }
       }
-      const rpc=await connectT3Rpc(raw,origin,makeSocket);
+      const rpc=await unary.acquire(options?.signal);
       try{
         if(command.type==='message.dispatch'){if(typeof command.threadId!=='string')throw Error('Invalid saved T3 thread identity.');command={...command,...await persistAttachments(rpc,command.threadId,outgoingMessage(command))};}
         if(command.type==='thread.create'){await options?.beforeThreadCreate?.();requestAborted(options?.signal);}
@@ -228,4 +229,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
     }
     return normalizeV2Snapshot(await request(path,payload));
   };
+  api.acquireUnaryRpc=signal=>unary.acquire(signal);
+  api.disposeUnaryRpc=()=>unary.dispose();
+  return api;
 }
