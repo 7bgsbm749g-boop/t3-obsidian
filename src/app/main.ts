@@ -26,7 +26,7 @@ import {isRecord,jsonClone,parseJson} from '../shared/values';
 import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import {SendPreviews} from '../responses/send-preview';
 import {savedToDisplay} from '../responses/native-response-projection';
-import {loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,explicitSelectionText,rememberResponse,rememberNoteEdits,confirmSmartSend,moveSmartNotes,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from '../notes/smart-send';
+import {snapshotSmartSend,loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,explicitSelectionText,rememberResponse,rememberNoteEdits,confirmSmartSend,moveSmartNotes,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from '../notes/smart-send';
 import {noteIdentityRanges,withoutNoteIdentity} from '../notes/note-identity';
 import {retainedLocalFinal,restoredLocalFinal,localFinalIdentity} from '../responses/local-final-cache';
 import {HtmlResultStore} from '../responses/html-result-store';
@@ -46,7 +46,7 @@ import {appendSendFailure,sendFailureLog,type SendFailure} from '../responses/se
 import {PLUGIN_PERMISSIONS,AGENT_SETUP_PERMISSIONS,hasPluginPermissions} from '../connection/environment-permissions';
 import {REAUTHENTICATE_MESSAGE,SignInRequiredError,signInRequired} from '../connection/sign-in-state';
 import {T3HttpError} from '../conversations/thread-access-cache';
-import {mergeSharedSettings} from '../storage/shared-settings';
+import {mergeSharedSettingsExcept} from '../storage/shared-settings';
 import {noteThreadTitle,threadTitleGeneration,type ThreadTitleGeneration} from '../conversations/thread-title';
 import {ResponseLocationModal} from '../responses/response-location-ui';
 import {obsidianFooter} from '../notes/obsidian-prompt';
@@ -158,6 +158,8 @@ export default class SendToT3 extends Plugin {
   readonly routeFailures=new Map<string,string>();
   readonly routeStatus=new RouteStatus();
   private smartReplica=loadSmartSend(undefined);
+  private smartHistoryRevision=0;
+  private smartHistoryPublished=0;
   private smartRecovered=new Set<string>();
   private smartRecovering=new Map<string,Promise<void>>();
   private responseBindingReplica:ResponseBindingData={};
@@ -438,15 +440,16 @@ export default class SendToT3 extends Plugin {
     this.deviceInline=new DeviceResponseManager(this.inlineActor,this.settings.vaultId,{
       ...deviceNoteIO(this.app),
       localFinalNotes:deviceFinalNoteIO(this.app,()=>!this.stopped),
-      rememberResponse:async(request,body,before,after,offset)=>{if(await rememberResponse(this.smartData(),request.notePath,request.id,body,before,after,offset))await this.save(true);},
-      rememberNoteEdits:async(request,before,after)=>{if(await rememberNoteEdits(this.smartData(),request.notePath,request.id,before,after))await this.save(true);},
+      rememberResponse:async(request,body,before,after,offset)=>{await this.retainSmartChange(()=>rememberResponse(this.smartData(),request.notePath,request.id,body,before,after,offset));},
+      rememberNoteEdits:async(request,before,after)=>{await this.retainSmartChange(()=>rememberNoteEdits(this.smartData(),request.notePath,request.id,before,after));},
       loadLocalCompletion:async request=>{const receipt=await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`);return isRecord(receipt)&&receipt.identity===localFinalIdentity(request)&&typeof receipt.saved==='boolean'?{saved:receipt.saved,...(receipt.removed===true?{removed:true}:{})}:undefined;},
       isVisible:path=>this.app.workspace.getActiveViewOfType(MarkdownView)?.file?.path===path,
       savedResponse:(request,document)=>savedResponseProof(request,document,this.settings.responseBindings??{},this.smartData()),
       knownCompleted:request=>this.settings.responseBindings?.[request.id]?.completion?.identity===localFinalIdentity(request),
       retainLocalCompletion:async(request,saved,update,savedBody)=>{
         await deviceState(`local-completion:${this.deviceId}:${this.settings.vaultId}:${request.id}`,{version:1,identity:localFinalIdentity(request),saved,...(!saved?{removed:true}:{})});
-        if(saved&&update?.turnId){this.responseBindingReplica=completeResponseBinding(this.responseBindingReplica,request,update.turnId,contentHash(savedBody??update.body),this.deviceId);this.settings.responseBindings=this.responseBindingReplica;await this.save(true);}
+        if(saved&&update?.turnId){this.responseBindingReplica=completeResponseBinding(this.responseBindingReplica,request,update.turnId,contentHash(savedBody??update.body),this.deviceId);this.settings.responseBindings=this.responseBindingReplica;}
+        if(saved&&(update?.turnId||this.smartHistoryRevision>this.smartHistoryPublished))await this.save(true);
       },
       localBindings:()=>responseBindingRequests(this.settings.responseBindings??this.responseBindingReplica),
       saveLocalBinding:request=>this.saveResponseBinding(request),
@@ -951,7 +954,7 @@ export default class SendToT3 extends Plugin {
   private async checkExternalSettings(){
     if(this.stopped||this.checkingExternalSettings)return;
     this.checkingExternalSettings=true;
-    try{await this.saving.catch(()=>{});const data=await this.loadSettings(),serialized=JSON.stringify(data);if(serialized!==this.lastDiskSnapshot)await this.onExternalSettingsChange();}
+    try{await this.saving.catch(()=>{});if(this.smartHistoryRevision>this.smartHistoryPublished)await this.save(true);const data=await this.loadSettings(),serialized=JSON.stringify(data);if(serialized!==this.lastDiskSnapshot)await this.onExternalSettingsChange();}
     finally{this.checkingExternalSettings=false;}
   }
   async onExternalSettingsChange(loaded?:unknown){
@@ -959,7 +962,7 @@ export default class SendToT3 extends Plugin {
     const data=storedSettings(loaded??await this.loadSettings());if(this.stopped||!data)return;
     this.lastDiskSnapshot=JSON.stringify(data);
     const baseline=parseJson(this.sharedBaseline) as SharedSettings,remote=this.sharedData(data);
-    const adopted=mergeSharedSettings(baseline,remote,this.sharedSnapshot());
+    const adopted=mergeSharedSettingsExcept(baseline,remote,this.sharedSnapshot(),['smartSend','responseBindings','folderLinks','folderLinkChanges','noteThreads','noteContexts','vaultHost']);
     adopted.vaultHost=mergeVaultHost(baseline.vaultHost,remote.vaultHost,this.settings.vaultHost);
     const incomingBindings=loadResponseBindingData(data.responseBindings);
     const previousBindings=JSON.stringify(this.responseBindingReplica),previousSmartSend=JSON.stringify(this.smartReplica);
@@ -1082,6 +1085,13 @@ export default class SendToT3 extends Plugin {
     const connection=this.connection(project);
     if(!connection.environmentId&&!connection.connectionId)connection.environmentId=await this.localInlineEnvironment();
     return threads.filter(thread=>{try{assertThreadNoteMode('one-to-one',this.modeRelations(),path,{...connection,projectId:project.id,threadId:thread.id});return true;}catch{return false;}});
+  }
+  /** Retain provenance before native note IO. Publish it with the completion
+   * receipt, or on the existing settings tick if that final write is refused. */
+  private async retainSmartChange(change:()=>Promise<boolean|undefined>){
+    if(!await change())return;
+    this.smartHistoryRevision++;
+    await deviceState(`smart-send:${this.deviceId}:${this.settings.vaultId}`,this.smartData());
   }
   private smartData(){
     if(this.settings.smartSend!==this.smartReplica)Object.assign(this.smartReplica,mergeSmartSend(this.smartReplica,this.settings.smartSend));
@@ -2590,7 +2600,7 @@ export default class SendToT3 extends Plugin {
     this.responseBindingReplica=next;this.settings.responseBindings=next;
     await this.save(true);
   }
-  private sharedSnapshot():SharedSettings{const {pending,completionJobs,settlementJobs,connection,projects,directProjects,selected,directSelected,directScanId,...shared}=this.settings;return jsonClone(shared);}
+  private sharedSnapshot():SharedSettings{const {pending,completionJobs,settlementJobs,connection,projects,directProjects,selected,directSelected,directScanId,smartSend,...shared}=this.settings;return {...jsonClone(shared),...(smartSend?{smartSend:snapshotSmartSend(smartSend)}:{})};}
   private sharedData(input:unknown):SharedSettings{
     const data=storedSettings(input);
     return {...this.sharedSnapshot(),threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),responseBindings:loadResponseBindingData(data?.responseBindings),smartSend:loadSmartSend(data?.smartSend),autoSettleThreads:data?.autoSettleThreads===true,hideObsidianThreads:threadHiding(data?.hideObsidianThreads),
@@ -2602,6 +2612,7 @@ export default class SendToT3 extends Plugin {
     this.rememberProjectViews();
     this.refreshFolderIndicators();
     const {pending,completionJobs,settlementJobs,connection}=this.settings,intended=this.sharedSnapshot(),intendedThreads=JSON.stringify(this.settings.noteThreads),intendedLinks=JSON.stringify(this.settings.folderLinks);
+    const smartRevision=this.smartHistoryRevision;
     const baseline=parseJson(this.queuedSharedSnapshot??this.sharedBaseline) as SharedSettings;
     let snapshot=intended;
     const changes=changedFolderLinks(loadFolderLinks(baseline),snapshot.folderLinks,mergeFolderLinkChanges(this.folderLinkReplica,snapshot.folderLinkChanges),randomId,Math.max(Date.now(),this.folderLinkClock+1));
@@ -2617,7 +2628,7 @@ export default class SendToT3 extends Plugin {
       if(!writeShared)return;
       const current=await this.loadSettings();
       const disk=this.sharedData(current);
-      snapshot=mergeSharedSettings(baseline,disk,intended);
+      snapshot=mergeSharedSettingsExcept(baseline,disk,intended,['smartSend','responseBindings','folderLinks','folderLinkChanges','noteThreads','noteContexts','vaultHost']);
       snapshot.vaultHost=mergeVaultHost(baseline.vaultHost,disk.vaultHost,intended.vaultHost);
       snapshot.folderLinkChanges=mergeFolderLinkChanges(this.folderLinkReplica,loadFolderLinkChanges(current?.folderLinkChanges),intended.folderLinkChanges);
       snapshot.folderLinks=applyFolderLinkChanges(mergeLegacyFolderLinks(loadFolderLinks(baseline),loadFolderLinks(current),intended.folderLinks),snapshot.folderLinkChanges);
@@ -2628,6 +2639,7 @@ export default class SendToT3 extends Plugin {
       snapshot.responseBindings=mergeResponseBindingData(this.responseBindingReplica,current?.responseBindings,intended.responseBindings);
       await deviceState(`response-bindings:${this.deviceId}:${this.settings.vaultId}`,snapshot.responseBindings);
       await this.saveData(snapshot);
+      this.smartHistoryPublished=Math.max(this.smartHistoryPublished,smartRevision);
       Object.assign(this.smartReplica,mergeSmartSend(snapshot.smartSend,this.smartReplica,this.settings.smartSend));this.settings.smartSend=this.smartReplica;
       this.settings.noteContexts=mergeNoteContexts(snapshot.noteContexts,this.settings.noteContexts);
       this.responseBindingReplica=mergeResponseBindingData(snapshot.responseBindings,this.responseBindingReplica);this.settings.responseBindings=this.responseBindingReplica;
