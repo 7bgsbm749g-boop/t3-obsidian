@@ -51,3 +51,26 @@ Agents can prepare and submit checked note edits through the running plugin. Com
 Your chosen note content and attachments go to the connected T3 computer and its configured model provider. Optional thread hiding changes thread tags and visibility settings through T3’s authenticated API across your connected environments; it needs settings-write access. Optional agent setup writes the bundled MCP tools and changes the selected agent’s launch settings on that computer through the authenticated T3 connection, outside the vault. Obsidian does not run the helper or open an incoming command port. T3 and provider accounts or usage charges are separate from this free plugin. [Report an issue](https://github.com/7bgsbm749g-boop/t3-obsidian/issues) · [MIT license](LICENSE)
 
 Streaming RAM capture: [device-local streaming memory diagnostics](docs/stream-memory-diagnostics.md).
+
+### Right sidebar conversations
+
+Use **T3 Code: Open thread in right sidebar…** to select a connected project,
+open a regular thread, or start one. Messages sent from this page do not create
+note response bindings or enable note streaming. Existing note follows remain
+under **Manage T3 streams in this note…**.
+
+From a linked note or an open sidebar conversation, use **Start side chat in
+right sidebar**. This creates a hidden T3 side chat from the parent’s latest
+stable point. **Parent** returns to the source conversation. **Bring back** adds
+a finished side chat to the idle parent’s next message.
+
+Use **View subagent in right sidebar…**, or a child button in a sidebar thread,
+to inspect a subagent that exposes a local child thread. This view is read-only;
+continue or stop the work from its parent. Tasks without a child thread and
+remote child tasks do not offer a local thread page.
+
+All three pages use native Obsidian workspace tabs and theme variables. Close
+the tab to stop its live reader. Closing a side chat tab does not delete its T3
+conversation. Saved layouts retain open targets and unsent drafts. The sidebar
+shows the most recent 200 messages. Approval and question requests still use the
+existing T3 controls; the sidebar does not bypass them.

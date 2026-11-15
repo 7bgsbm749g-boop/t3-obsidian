@@ -668,3 +668,21 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 @media (max-width: 600px) {
   .send-to-t3-thread-picker, .send-to-t3-run-picker { height: min(600px, calc(100dvh - 32px)); }
 }
+
+/* Native workspace chat pages: inherit the active theme's controls and colors. */
+.t3-sidebar-chat { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: var(--size-4-3); gap: var(--size-4-2); }
+.t3-sidebar-header, .t3-sidebar-actions { display: flex; align-items: center; gap: var(--size-4-2); flex-wrap: wrap; }
+.t3-sidebar-header strong { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 60px; }
+.t3-sidebar-status, .t3-sidebar-hint, .t3-sidebar-message-role { color: var(--text-muted); font-size: var(--font-ui-small); }
+.t3-sidebar-hint { flex: 1; }
+.t3-sidebar-transcript { flex: 1; overflow: auto; min-height: 0; overflow-wrap: anywhere; user-select: text; }
+.t3-sidebar-message { padding: var(--size-4-3) 0; border-bottom: var(--border-width) solid var(--background-modifier-border); }
+.t3-sidebar-message.is-user { padding: var(--size-4-3); border-radius: var(--radius-m); background: var(--background-secondary); }
+.t3-sidebar-message-role { font-weight: var(--font-semibold); margin-bottom: var(--size-4-2); }
+.t3-sidebar-message .markdown-rendered > :first-child { margin-top: 0; }
+.t3-sidebar-message .markdown-rendered > :last-child { margin-bottom: 0; }
+.t3-sidebar-message pre { overflow-x: auto; }
+.t3-sidebar-composer { display: flex; flex-direction: column; gap: var(--size-4-2); border-top: var(--border-width) solid var(--background-modifier-border); padding-top: var(--size-4-3); }
+.t3-sidebar-composer textarea { width: 100%; resize: vertical; min-height: 70px; max-height: 35vh; }
+.t3-sidebar-children { display: flex; flex-direction: column; gap: var(--size-4-1); max-height: 25%; overflow: auto; }
+.t3-sidebar-children:empty { display: none; }

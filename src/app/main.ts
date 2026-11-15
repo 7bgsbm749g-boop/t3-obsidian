@@ -1,3 +1,5 @@
+import {SidebarThreads,type SidebarHost} from '../conversations/sidebar-thread-view';
+import type {SidebarTarget} from '../conversations/sidebar-thread-model';
 import {savedResponseProof} from '../responses/saved-response-proof';
 import {RouteStatus} from '../connection/route-status';
 import {readImportThreads,readImportRuns,readImportRun,readImportPreview,importHistoryState} from '../conversations/import-source';
@@ -192,6 +194,7 @@ export default class SendToT3 extends Plugin {
   private cloudGeneration=0;
   private cloudRefreshing:Promise<CloudAccount>|undefined;
   private readonly localKey = 'send-to-t3-code-device-v1';
+  private sidebarThreads?:SidebarThreads;
   private readonly chatDraftKey = 'send-to-t3-code-chat-draft-v1';
   private deviceId = '';
   private sending = false;
@@ -436,6 +439,19 @@ export default class SendToT3 extends Plugin {
     if(typeof this.registerView==='function'){
     this.codebase=new CodebaseBridge(this.app,this,codebaseTransport((environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected')),()=>this.settings.folderLinks.map(link=>({...link,environmentId:link.environmentId??this.settings.paired.find(c=>c.id===link.connectionId)?.environmentId??this.eventLocalEnvironmentId})),this.settings.vaultId,{...{environments:()=>[...new Set([...this.settings.paired.map(c=>c.environmentId),...(this.eventLocalEnvironmentId?[this.eventLocalEnvironmentId]:[])])]},load:()=>this.settings.codebase,save:async state=>{this.settings.codebase=state;await this.save();},projectChanged:async(scope,change)=>{await this.updateCodebaseProjectLinks(scope,change);}});
     await this.codebase.install();
+    this.sidebarThreads=new SidebarThreads(this.app,this,{
+      access:environmentId=>this.inlineThreadAccess(environmentId),uuid:randomId,
+      ready:()=>!this.stopped&&!this.chatReadinessError(),
+      projects:()=>this.projects().flatMap(project=>{const environmentId=this.connection(project).environmentId;return environmentId?[{key:projectKey(project),label:project.title,projectId:project.id,environmentId}]:[];}),
+      threads:async choice=>{const project=this.projects().find(project=>projectKey(project)===choice.key);if(!project)throw Error('This project is no longer available.');return projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id);},
+      create:async(choice,text)=>{
+        let target:SidebarTarget|undefined;
+        await this.sendChat(text,undefined,{newThread:true,projectOverrideKey:choice.key,expectedProjectKey:choice.key,barePrompt:true,onPrepared:request=>{target={kind:'thread',title:request.title,threadId:request.threadId??commandId(request.id,'thread'),projectId:request.project.id,environmentId:request.connection.environmentId??choice.environmentId};}});
+        if(!target)throw Error('The new thread was not confirmed.');return target;
+      },
+      source:()=>this.sidebarNoteSource(),
+    } satisfies SidebarHost);
+    this.sidebarThreads.install();
     }
     this.deviceInline=new DeviceResponseManager(this.inlineActor,this.settings.vaultId,{
       ...deviceNoteIO(this.app),
@@ -726,6 +742,12 @@ export default class SendToT3 extends Plugin {
       const selection=editor.getSelection();
       const file=view.file;
       if(!file||file.extension.toLowerCase()!=='md')return;
+      const sidebarSource=this.sidebarNoteSource();
+      if(sidebarSource&&this.sidebarThreads){
+        menu.addItem(item=>item.setTitle('Open T3 thread in right sidebar').setIcon('message-circle').onClick(()=>{void this.sidebarThreads!.open(sidebarSource).catch(error=>this.sidebarThreads!.report(error));}));
+        menu.addItem(item=>item.setTitle('Start T3 side chat').setIcon('messages-square').onClick(()=>this.sidebarThreads!.startSideChat(sidebarSource)));
+        menu.addItem(item=>item.setTitle('View T3 subagent…').setIcon('bot').onClick(()=>this.sidebarThreads!.chooseSubagent(sidebarSource)));
+      }
       menu.addItem(item=>item.setTitle('Import T3 run into this note…').setIcon('download').setDisabled(this.busy).onClick(()=>this.openRunImport(file)));
       this.addResponseCatchUpMenu(menu,file,editor.getValue());
       menu.addItem(item=>item.setTitle('Manage T3 streams in this note…').setIcon('list').setDisabled(this.busy).onClick(()=>void this.openImportStreams(file).catch(error=>new Notice(`T3 streams: ${message(error)}`,10000))));
@@ -1028,6 +1050,13 @@ export default class SendToT3 extends Plugin {
     if(this.connecting)return 'T3 is still connecting your computers. Wait for connection sync to finish.';
     if(this.nativeAccount&&!this.connectionSyncComplete)return 'T3 has not connected on this device. Check the sign-in status in T3 Code settings.';
     if(!this.nativeAccount)return 'Sign in to T3 on this device first. Synced project names do not sign this device in.';
+  }
+  private sidebarNoteSource():SidebarTarget|undefined {
+    const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file??this.app.workspace.getActiveFile();
+    const source=file&&this.noteThread(file.path);if(!source)return;
+    const environmentId=source.environmentId??this.settings.paired.find(connection=>connection.id===source.connectionId)?.environmentId;
+    if(!environmentId)return;
+    return {kind:'thread',title:file.basename,threadId:source.threadId,projectId:source.projectId,environmentId};
   }
   private chatNote():{path:string;absolutePath?:string}|undefined {
     const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file??this.app.workspace.getActiveFile();
