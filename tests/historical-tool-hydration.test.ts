@@ -29,13 +29,13 @@ test('active reads defer historical display work, explicit history fills the exa
  const api=t3Api(async path=>{paths.push(path);if(path==='/api/auth/websocket-ticket')return {ticket:'fixture'};if(path==='/api/orchestration/shell')return {threads:[{id:senderThreadId,title:'Sender title'}]};return snapshot;},'https://fixture',url=>new Socket(url) as any),access={origin:'https://fixture',api};
  try{
   const first=await readInlineSnapshot(access,'thread'),state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:first}).state;
-  assert.equal(state.messages.at(-1)?.text,'Current reply');assert.equal(state.latestTurn?.state,'completed');assert.equal(incomingLabel(state.messages[0]),'Agent · 2c9cb7b6');
+  assert.equal(state.messages.at(-1)?.text,'Current reply');assert.equal(state.latestTurn?.state,'completed');assert.equal(incomingLabel(state.messages.find(message=>message.id==='prompt')!),'Agent · 2c9cb7b6');
   assert.deepEqual(paths,['/api/orchestration/threads/thread/bounded?compactTurnItems=1']);assert.deepEqual(reads,[]);
   assert.equal((await checkFinalResponse(access,'thread',state,current.id)).verified,true);assert.deepEqual(reads,[answer.id]);reads.length=0;
   const history=await readInlineSnapshot(access,'thread',undefined,undefined,true);
-  assert.equal(incomingLabel(history.thread.messages![0]),'Agent · Sender title');assert.equal(reads.length,40);assert.equal(data(history,'tool-119').output,at);
+  assert.equal(incomingLabel(history.thread.messages!.find(message=>message.id==='prompt')!),'Agent · Sender title');assert.equal(reads.length,40);assert.equal(data(history,'tool-119').output,at);
   paths.length=0;reads.length=0;
-  const next=await readInlineSnapshot(access,'thread');assert.equal(incomingLabel(next.thread.messages![0]),'Agent · Sender title');assert.equal(data(next,'tool-119').output,at);
+  const next=await readInlineSnapshot(access,'thread');assert.equal(incomingLabel(next.thread.messages!.find(message=>message.id==='prompt')!),'Agent · Sender title');assert.equal(data(next,'tool-119').output,at);
   assert.deepEqual(reads,[]);assert.deepEqual(paths,['/api/orchestration/threads/thread/bounded?compactTurnItems=1']);
   snapshot=wire({...snapshot.projection,turnItems:[{...tools[119],updatedAt:later},answer]});
   assert.equal(data(await readInlineSnapshot(access,'thread'),'tool-119').output,'Output details are not available yet.','An old revision must never be substituted');
