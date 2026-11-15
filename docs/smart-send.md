@@ -168,3 +168,26 @@ fixture notes through Obsidian, checking Sync deletion, closing the lab clients,
 and deleting the bounded T3 test thread. Restore the lab's original Sync
 configuration after any configuration-Sync check. Never use this fixture in
 QLO2.
+
+## Bounded preparation and publication
+
+History remains in `data.json.smartSend` using the existing version-1 format.
+No new Sync folder, file type, setting or cross-device migration is required.
+A note-indexed history lookup and a bounded cache retain the exact computed
+source projection for unchanged text and relevant receipts. Changes to the
+current note, its response/edit records, aliases or missing-body availability
+invalidate that result. The cache keeps at most four projections within a
+2,000,000-character budget; large notes still use the original checked path.
+Packed text has a separate bounded cache, so repeated captures need not gzip
+the same source again. Full historical bodies remain available for edited
+response matching; cache eviction never removes durable history or coverage.
+
+Before final native note IO, new response and agent-edit provenance is retained
+in the existing device-local IndexedDB replica. A successful completion publishes
+it with the shared completion metadata in one settings save. If a final write is
+refused, the existing settings check publishes retained provenance later. A
+revision recorded during shared IO remains pending for a subsequent save.
+Restart restores private records through the existing union merge. Relation
+stores bypass the generic preference merge because their own merge protocols
+already determine their result. Immutable receipt snapshots avoid serializing
+large compressed strings solely to copy them.

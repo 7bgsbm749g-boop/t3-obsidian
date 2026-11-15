@@ -288,3 +288,27 @@ test('Smart Send-only Sync adoption notifies pending peer-save proof without a b
  h.setCurrent({...h.current(),smartSend:incoming});await h.plugin.onExternalSettingsChange();assert.equal(proofs,1);assert.equal(bindings,0);
  await h.plugin.onExternalSettingsChange();assert.equal(proofs,1,'Identical settings do not restart proof checks');
 });
+
+test('reply provenance is durable locally before one combined shared publication',async()=>{
+ const h=await harness({vaultId:randomUUID()}),p=h.plugin;
+ for(let n=0;n<2;n++)await p.retainSmartChange(()=>rememberResponse(p.smartData(),'Synthetic.md','reply-'+n,'Generated '+n,'','',0));
+ assert.equal(h.saves(),0,'Pre-write provenance must not rewrite the whole shared file');
+ const restarted=await harness(h.current(),h.deviceId);assert.equal(Object.keys(restarted.plugin.smartData().responses).length,2,'Local provenance survives restart before shared publication');
+ await p.checkExternalSettings();assert.equal(h.saves(),1);assert.equal(Object.keys(h.current().smartSend.responses).length,2);
+});
+test('a new provenance record during shared IO remains pending for the next publication',async()=>{
+ const h=await harness({vaultId:randomUUID()}),p=h.plugin;
+ await p.retainSmartChange(()=>rememberResponse(p.smartData(),'Synthetic.md','first','First body.','','',0));
+ const save=p.saveData.bind(p);let entered!:()=>void,release!:()=>void;const ready=new Promise<void>(resolve=>entered=resolve),gate=new Promise<void>(resolve=>release=resolve);
+ p.saveData=async(value:any)=>{entered();await gate;await save(value);};
+ const saving=p.save(true);await ready;
+ await p.retainSmartChange(()=>rememberResponse(p.smartData(),'Synthetic.md','second','Second body.','','',0));
+ release();await saving;assert.ok(p.smartHistoryRevision>p.smartHistoryPublished);
+ p.saveData=save;await p.checkExternalSettings();assert.equal(Object.keys(h.current().smartSend.responses).length,2);
+});
+test('shared snapshots keep immutable receipt membership while later history grows',async()=>{
+ const h=await harness({vaultId:randomUUID()}),p=h.plugin;
+ await p.retainSmartChange(()=>rememberResponse(p.smartData(),'Synthetic.md','first','First body.','','',0));
+ const snapshot=p.sharedSnapshot();await p.retainSmartChange(()=>rememberResponse(p.smartData(),'Synthetic.md','later','Later body.','','',0));
+ assert.equal(Object.keys(snapshot.smartSend.responses).length,1);assert.equal(Object.keys(p.smartData().responses).length,2);
+});

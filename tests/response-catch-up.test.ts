@@ -91,8 +91,8 @@ test('catch-up reads each thread once, imports chronologically without sending/f
  await h.catchUp();assert.deepEqual(h.attached,['second','third']);assert.equal(h.closes(),2);assert.match(h.notices.at(-1)!,/up to date/);
 });
 test('catch-up stops on a pending save and reports it without importing later runs',async()=>{
- const h=await pluginFixture();h.plugin.attachImportRun=async(...args:any[])=>{h.attached.push(args[3]);return {saveState:'pending',pendingReason:'sync'};};
- await h.catchUp();assert.deepEqual(h.attached,['second']);assert.equal(h.plugin.busy,false);assert.match(h.notices.at(-1)!,/waiting to save/);assert.match(h.notices.at(-1)!,/Sync/);
+ const h=await pluginFixture();h.plugin.attachImportRun=async(...args:any[])=>{h.attached.push(args[3]);return {saveState:'pending',pendingReason:'note-changed'};};
+ await h.catchUp();assert.deepEqual(h.attached,['second']);assert.equal(h.plugin.busy,false);assert.match(h.notices.at(-1)!,/waiting to save/);assert.match(h.notices.at(-1)!,/destination changed/);
 });
 test('an unavailable selected machine does not stop another selected thread',async()=>{
  const h=await pluginFixture(),entry=binding('first',{threadEnvironmentId:'offline',threadTitle:'Offline thread'});h.plugin.settings.responseBindings[entry.request.id]=entry;

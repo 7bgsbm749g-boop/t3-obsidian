@@ -89,7 +89,7 @@ test('all runs is a finite oldest-first snapshot and follows only after the last
  assert.deepEqual(calls,[['old',false],['new',true]]);assert.equal(result.saveState,'streaming');assert.equal(result.following,true);
  calls.length=0;await attachAllImportRuns(runs,false,async(run,follow)=>{calls.push([run.messageId,follow]);return {duplicate:true,following:follow,saveState:'saved'};});assert.deepEqual(calls,[['old',false],['new',false]]);
  let attempts=0;
- await assert.rejects(attachAllImportRuns(runs,true,async()=>{attempts++;return {duplicate:false,following:false,saveState:'pending',pendingReason:'sync'};}),/1 of 2 runs processed.*not saved yet/);assert.equal(attempts,1);
+ await assert.rejects(attachAllImportRuns(runs,true,async()=>{attempts++;return {duplicate:false,following:false,saveState:'pending',pendingReason:'note-unavailable'};}),/1 of 2 runs processed.*not saved yet/);assert.equal(attempts,1);
  await assert.rejects(attachAllImportRuns(runs,false,async()=>{throw Error('Disconnected');}),/0 of 2.*Disconnected.*without duplicates/);
  await assert.rejects(attachAllImportRuns([],false,async()=>{throw Error('Must not attach');}),/No available runs/);
 });

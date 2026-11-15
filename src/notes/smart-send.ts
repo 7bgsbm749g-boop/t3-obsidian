@@ -18,6 +18,21 @@ export interface SmartCapture {noteId:string;source:PackedText;covered:Span[];pa
 interface SentText extends SmartCapture {destination:string}
 export interface SmartSendData {version:1;notes:Record<string,NoteIdentity>;responses:Record<string,ResponseText>;noteEdits?:Record<string,NoteEditText>;bodies:Record<string,PackedText>;heads:Record<string,SentText>;retired:string[]}
 const empty=():SmartSendData=>({version:1,notes:{},responses:{},noteEdits:{},bodies:{},heads:{},retired:[]});
+type Projection=Awaited<ReturnType<typeof computeSourceProjection>>;
+type ProjectionEntry={document:string;signature:string;work:Promise<Projection>;characters:number};
+type HistoryIndex={responses?:SmartSendData['responses'];edits?:SmartSendData['noteEdits'];byNote:Map<string,ResponseText[]>;editsByNote:Map<string,NoteEditText[]>;projections:Map<string,ProjectionEntry>};
+const historyIndexes=new WeakMap<SmartSendData,HistoryIndex>();
+function historyIndex(data:SmartSendData){
+  let index=historyIndexes.get(data);
+  if(!index){index={byNote:new Map(),editsByNote:new Map(),projections:new Map()};historyIndexes.set(data,index);}
+  if(index.responses!==data.responses||index.edits!==data.noteEdits){
+    index.responses=data.responses;index.edits=data.noteEdits;index.byNote=new Map();index.editsByNote=new Map();
+    for(const record of Object.values(data.responses)){const entries=index.byNote.get(record.noteId)??[];entries.push(record);index.byNote.set(record.noteId,entries);}
+    for(const edit of Object.values(data.noteEdits??{})){const entries=index.editsByNote.get(edit.noteId)??[];entries.push(edit);index.editsByNote.set(edit.noteId,entries);}
+  }
+  return index;
+}
+function historyChanged(data:SmartSendData){const index=historyIndexes.get(data);if(index){index.responses=undefined;index.edits=undefined;}}
 const decoded=new Map<string,string>();
 function cache(hash:string,text:string){
   decoded.delete(hash);if(text.length>2_000_000)return text;
@@ -25,13 +40,20 @@ function cache(hash:string,text:string){
   while(decoded.size&&(decoded.size>=24||size>2_000_000)){const id=decoded.keys().next().value!;size-=decoded.get(id)!.length;decoded.delete(id);}
   decoded.set(hash,text);return text;
 }
+const packedTexts=new Map<string,PackedText>();
+function retainPacked(value:PackedText){
+  if(value.data.length<=1_000_000){packedTexts.delete(value.hash);packedTexts.set(value.hash,{...value});let size=[...packedTexts.values()].reduce((sum,entry)=>sum+entry.data.length,0);while(packedTexts.size>16||size>1_000_000){const key=packedTexts.keys().next().value!;size-=packedTexts.get(key)!.data.length;packedTexts.delete(key);}}
+  return value;
+}
+/** Snapshot immutable receipt values without serializing their large strings. */
+export function snapshotSmartSend(data:SmartSendData):SmartSendData{return {...data,notes:{...data.notes},responses:{...data.responses},noteEdits:{...data.noteEdits},bodies:{...data.bodies},heads:{...data.heads},retired:[...data.retired]};}
 export async function packText(text:string):Promise<PackedText>{
-  const hash=contentHash(text);cache(hash,text);
+  const hash=contentHash(text);cache(hash,text);const previous=packedTexts.get(hash);if(previous){packedTexts.delete(hash);packedTexts.set(hash,previous);return {...previous};}
   if(text.length>512&&typeof CompressionStream!=='undefined'&&typeof DecompressionStream!=='undefined'){
     const bytes=new Uint8Array(await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
-    const data=Buffer.from(bytes).toString('base64');if(data.length<text.length)return {hash,encoding:'gzip',data};
+    const data=Buffer.from(bytes).toString('base64');if(data.length<text.length)return retainPacked({hash,encoding:'gzip',data});
   }
-  return {hash,encoding:'text',data:text};
+  return retainPacked({hash,encoding:'text',data:text});
 }
 export async function unpackText(packed:PackedText){
   const cached=decoded.get(packed.hash);if(cached!==undefined)return cached;
@@ -136,7 +158,7 @@ export async function rememberNoteEdits(data:SmartSendData,path:string,id:string
   if(!added.length)return false;
   const noteId=smartNote(data,path),source=await packText(after),ranges=union(added),key=`${id}:${contentHash(JSON.stringify([source.hash,ranges]))}`,next={noteId,source,added:ranges};
   const edits=data.noteEdits??={};if(JSON.stringify(edits[key])===JSON.stringify(next))return false;
-  edits[key]=next;return true;
+  edits[key]=next;historyChanged(data);return true;
 }
 /** Keep exact rendered output once, compressed and addressed by content. */
 export async function rememberResponse(data:SmartSendData,path:string,id:string,body:string,before:string,after:string,offset:number){
@@ -144,7 +166,7 @@ export async function rememberResponse(data:SmartSendData,path:string,id:string,
   const noteId=smartNote(data,path),packedBody=await packText(body);data.bodies[packedBody.hash]=packedBody;
   const key=`${id}:${packedBody.hash}`,next={noteId,body:packedBody.hash,before:before.slice(-160),after:after.slice(0,160),offset};
   if(JSON.stringify(data.responses[key])===JSON.stringify(next))return false;
-  data.responses[key]=next;return true;
+  data.responses[key]=next;historyChanged(data);return true;
 }
 function uniqueTextOffset(document:string,text:string){
   if(!text.trim())return -1;
@@ -169,15 +191,32 @@ function editedResponseRange(document:string,body:string,record:ResponseText):Sp
   if(left<0||right<left)return;
   return [left,right];
 }
-export async function sourceProjection(data:SmartSendData,noteId:string,document:string){
-  const removed:Span[]=[],known:Span[]=[],identities=noteIdentities(data,noteId);
+/** Cache the exact computed projection, rather than retaining every decoded
+ * reply. Relevant receipt signatures preserve cache hits across unrelated saves. */
+export function sourceProjection(data:SmartSendData,noteId:string,document:string):Promise<Projection>{
+  const index=historyIndex(data),identities=noteIdentities(data,noteId);
+  const records=[...identities].flatMap(id=>index.byNote.get(id)??[]),edits=[...identities].flatMap(id=>index.editsByNote.get(id)??[]);
+  const signature=JSON.stringify([records,edits.map(edit=>[edit.source.hash,edit.added]),records.map(record=>!!data.bodies[record.body])]);
+  const old=index.projections.get(noteId);
+  if(old?.document===document&&old.signature===signature){index.projections.delete(noteId);index.projections.set(noteId,old);return old.work;}
+  const work=computeSourceProjection(data,document,records,edits);
+  if(document.length<=1_000_000){
+    const entry={document,signature,work,characters:document.length+signature.length};index.projections.delete(noteId);index.projections.set(noteId,entry);
+    let total=[...index.projections.values()].reduce((sum,value)=>sum+value.characters,0);
+    while(index.projections.size>4||total>2_000_000){const key=index.projections.keys().next().value!;total-=index.projections.get(key)!.characters;index.projections.delete(key);}
+    void work.then(result=>{entry.characters+=result.text.length;let retained=[...index.projections.values()].reduce((sum,value)=>sum+value.characters,0);while(retained>2_000_000&&index.projections.size){const key=index.projections.keys().next().value!;retained-=index.projections.get(key)!.characters;index.projections.delete(key);}},()=>{if(index.projections.get(noteId)===entry)index.projections.delete(noteId);});
+  }
+  return work;
+}
+async function computeSourceProjection(data:SmartSendData,document:string,records:ResponseText[],edits:NoteEditText[]){
+  const removed:Span[]=[],known:Span[]=[];
   removed.push(...noteIdentityRanges(document).map(({from,to})=>[from,to] as Span));
   let comparison:ReturnType<typeof markdownText>|undefined;
-  for(const edit of Object.values(data.noteEdits??{}))if(identities.has(edit.noteId))removed.push(...mappedCoverage(await unpackText(edit.source),document,edit.added));
+  for(const edit of edits)removed.push(...mappedCoverage(await unpackText(edit.source),document,edit.added));
   const receipts=[...runImportReceipts(document)],code=receipts.length?markdownCodeRanges(document):[];
   for(const {from,to} of receipts)if(!code.some(([start,end])=>from<end&&to>start))removed.push([from,to]);
   for(const id of responseIds(document)){const frame=responseFrame(document,id);if(frame)removed.push([frame.from,frame.to]);}
-  for(const record of Object.values(data.responses).filter(r=>identities.has(r.noteId))){
+  for(const record of records){
     const body=await unpackText(data.bodies[record.body]??(()=>{throw Error('The saved agent response is missing.');})());
     const matches:number[]=[];let at=document.indexOf(body);while(at>=0){matches.push(at);at=document.indexOf(body,at+Math.max(1,body.length));}
     if(matches.length){
