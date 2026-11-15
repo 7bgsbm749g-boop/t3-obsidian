@@ -130,6 +130,28 @@ test('foreground recovery selects the visible source before earlier background s
  for(const start of h.starts)start[2].item({kind:'synchronized'});await drain();
  try{h.pool.tick(true);await drain();assert.deepEqual(h.requests,['visible','background-one']);assert.equal(h.reads(),2);}finally{h.pool.dispose();}
 });
+test('an uncached large reply restores live delivery without cursor-only socket churn',async()=>{
+ const h=recoveryFixture(),body='Large reply. '+ 'x'.repeat(8_000_100);
+ const snapshot=(sequence:number,text=body)=>({...h.snapshot(sequence),thread:{...h.snapshot().thread,messages:[{id:'answer',role:'assistant',turnId:null,text,streaming:true}]}});
+ h.subscribe();await drain();h.starts[0][2].item({kind:'snapshot',snapshot:snapshot(1)});assert.equal(h.pool.status().cacheCharacters,0);
+ try{
+  h.time(10000);h.pool.tick();await drain();h.pending[0].resolve(snapshot(3,body+' Missed output.'));await drain();
+  assert.equal(h.starts.length,2,'A large uncached reply must restore the live subscription');assert.equal(h.pool.status().cacheCharacters,0);
+  h.time(20000);h.pool.tick();await drain();h.pending[1].resolve(snapshot(50,body+' Missed output.'));await drain();assert.equal(h.starts.length,2,'Only the global cursor changed');
+  h.starts[1][2].item({kind:'event',event:{sequence:51,type:'thread.message-sent',payload:{messageId:'answer',role:'assistant',text:' Delivered live.',streaming:true}}});
+  h.time(30000);h.pool.tick();await drain();h.pending[2].resolve(snapshot(60,body+' Missed output. Delivered live.'));await drain();assert.equal(h.starts.length,2,'Delivered events require a new comparison baseline, not a false reconnect');
+  h.time(40000);h.pool.tick();await drain();h.pending[3].resolve(snapshot(70,body+' Missed output. Delivered live. New missed text.'));await drain();assert.equal(h.starts.length,3);
+  const tool=(sequence:number)=>({...snapshot(sequence*10,body+' Missed output. Delivered live. New missed text.'),thread:{...snapshot(1,body+' Missed output. Delivered live. New missed text.').thread,v2Controls:{tool:{id:'tool',type:'tool-call',ordinal:1,status:'running',output:{sequence}}}}});
+  h.time(50000);h.pool.tick();await drain();h.pending[4].resolve(tool(8));await drain();assert.equal(h.starts.length,4);
+  h.time(60000);h.pool.tick();await drain();h.pending[5].resolve(tool(9));await drain();assert.equal(h.starts.length,5,'A tool output field named sequence is actual content, not a global cursor');
+ }finally{h.pool.dispose();}
+});
+test('replay event eviction retains bounded comparison evidence for subsequent recovery',async()=>{
+ const h=recoveryFixture();h.subscribe();await drain();h.starts[0][2].item({kind:'snapshot',snapshot:h.snapshot()});
+ for(let n=0;n<257;n++)h.starts[0][2].item({kind:'event',event:{sequence:n+2,type:'thread.metadata-updated',payload:{title:'Title '+n}}});
+ assert.equal(h.pool.status().cacheCharacters,0);
+ try{h.time(10000);h.pool.tick();await drain();const updated=h.snapshot(500);Object.assign(updated.thread,{title:'Missed title'});h.pending[0].resolve(updated);await drain();assert.equal(h.starts.length,2);}finally{h.pool.dispose();}
+});
 test('silent v2 sources recover after ten seconds, while live events and pings remain distinct',async()=>{
  const h=recoveryFixture();h.subscribe();await drain();h.starts[0][2].item({kind:'snapshot',snapshot:h.snapshot()} as any);
  h.time(9999);h.pool.tick();await drain();assert.equal(h.reads(),0);

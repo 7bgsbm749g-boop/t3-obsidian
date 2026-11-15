@@ -6,6 +6,7 @@ import {streamMemory} from '../app/stream-memory-diagnostics';
 import {responseTooLarge} from '../connection/t3-response-limits';
 import {applyThreadItem} from './inline-thread';
 import {isRecord} from '../shared/values';
+import {contentHash} from '../responses/completion';
 
 /** JSON object key order is not a thread change. Missing optional fields and
  * undefined fields are equivalent; array order and actual values are not. */
@@ -15,10 +16,21 @@ function sameThreadValue(a:unknown,b:unknown):boolean {
   if(isRecord(a)&&isRecord(b))return [...new Set([...Object.keys(a),...Object.keys(b)])].every(key=>sameThreadValue(a[key],b[key]));
   return false;
 }
+function replayState(snapshot:ThreadStreamItem,events:ThreadStreamItem[]){
+  let state=applyThreadItem({messages:[],activities:[]},snapshot).state;
+  for(const event of events)state=applyThreadItem(state,event).state;
+  return state;
+}
+/** Retain 64 characters of comparison evidence when replay text is evicted.
+ * Local binding checkpoints and global cursors are not canonical content. */
+function threadFingerprint(state:ReturnType<typeof replayState>){
+  const {sequence,bindings,starts,inputBoundaries,inputTurns,failedContinuations,...content}=state;
+  return contentHash(JSON.stringify(content,(_key,value:unknown)=>isRecord(value)?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b))):value));
+}
 
 type Watch=typeof watchThread;
 type Reader={callbacks:ThreadStreamCallbacks;targets?:()=>InlineHistoryTargets;replay?:Parameters<Watch>[5];completed:boolean;priority:()=>number};
-type Source={key:string;threadId:string;access:Parameters<Watch>[1];readers:Set<Reader>;watch?:ReturnType<Watch>;snapshot?:ThreadStreamItem;events:ThreadStreamItem[];characters:number;slot?:()=>void;timeout?:ReturnType<typeof scheduleTimeout>;refresh?:Promise<void>;started:boolean;retry?:ReturnType<typeof scheduleTimeout>;attempt?:number;refreshAgain?:boolean;controller?:AbortController;freshAt:number;sequence:number;retryAt:number;readAt?:number;expire?:()=>void;refreshWanted?:boolean;recovery?:boolean;fatal?:boolean};
+type Source={key:string;threadId:string;access:Parameters<Watch>[1];readers:Set<Reader>;watch?:ReturnType<Watch>;snapshot?:ThreadStreamItem;events:ThreadStreamItem[];characters:number;comparison?:string;comparisonDirty?:boolean;slot?:()=>void;timeout?:ReturnType<typeof scheduleTimeout>;refresh?:Promise<void>;started:boolean;retry?:ReturnType<typeof scheduleTimeout>;attempt?:number;refreshAgain?:boolean;controller?:AbortController;freshAt:number;sequence:number;retryAt:number;readAt?:number;expire?:()=>void;refreshWanted?:boolean;recovery?:boolean;fatal?:boolean};
 
 /** One source connection per authenticated environment/project/thread. Each
  * consumer still owns its exact run binding, projection and final save. */
@@ -93,14 +105,20 @@ export class SharedThreadStreams {
     if(item.kind==='snapshot'){
       const sequence=item.snapshot?.snapshotSequence??0,previous=source.snapshot?.kind==='snapshot'?source.snapshot.snapshot.snapshotSequence??0:0;
       if(sequence>=previous){
-        source.snapshot=size<=8_000_000?item:undefined;
+        source.snapshot=item;source.comparison=undefined;source.comparisonDirty=false;
         source.events=source.events.filter(event=>event.kind==='event'&&(event.event.sequence??0)>sequence);
         source.characters=size+source.events.reduce((total,event)=>total+JSON.stringify(event).length,0);
-        if(source.characters>8_000_000){source.snapshot=undefined;source.events=[];source.characters=0;}
+        if(source.characters>8_000_000)this.evictReplay(source);
       }
     }
-    else if(source.snapshot){source.events.push(item);source.characters+=size;if(source.events.length>256||source.characters>8_000_000){source.snapshot=undefined;source.events=[];source.characters=0;}}
+    else if(source.snapshot){source.events.push(item);source.characters+=size;if(source.events.length>256||source.characters>8_000_000)this.evictReplay(source);}
+    else if(item.kind==='event')source.comparisonDirty=true;
     for(const reader of [...source.readers])if(source.readers.has(reader))try{reader.callbacks.item(item);}catch(error){logFailure('response.render.failed',error,{threadId:source.threadId});}
+  }
+  private evictReplay(source:Source){
+    const state=replayState(source.snapshot!,source.events);
+    source.comparison=threadFingerprint(state);source.comparisonDirty=(state.sequence??0)<source.sequence;
+    source.snapshot=undefined;source.events=[];source.characters=0;
   }
   private issue(source:Source,error:Error,fatal=false){
     for(const reader of [...source.readers])try{if(fatal)reader.callbacks.failure?.(error);else reader.callbacks.reconnecting(error);}catch(failure){logFailure('response.render.failed',failure,{threadId:source.threadId});}
@@ -129,11 +147,16 @@ export class SharedThreadStreams {
     for(const source of waiting){if(this.refreshing>=this.maxOpening)break;this.startRefresh(source);}
   }
   private missedThreadUpdate(source:Source,snapshot:Awaited<ReturnType<typeof readInlineSnapshot>>){
-    if((snapshot.snapshotSequence??0)<=source.sequence||!source.snapshot)return false;
+    if((snapshot.snapshotSequence??0)<=source.sequence)return false;
+    if(!source.snapshot){
+      // Live events without retained text make the digest incomplete. Adopt
+      // this canonical baseline first; subsequent missed content can repair
+      // the subscription without retaining the large transcript.
+      return !!source.comparison&&!source.comparisonDirty&&source.comparison!==threadFingerprint(replayState({kind:'snapshot',snapshot},[]));
+    }
     // Use the already bounded replay window only while checking a recovery.
     // Do not retain another transcript or compare a global cursor as content.
-    let current=applyThreadItem({messages:[],activities:[]},source.snapshot).state;
-    for(const event of source.events)current=applyThreadItem(current,event).state;
+    const current=replayState(source.snapshot,source.events);
     const next=applyThreadItem(current,{kind:'snapshot',snapshot}).state;
     return !sameThreadValue({...current,sequence:undefined},{...next,sequence:undefined});
   }

@@ -26,6 +26,12 @@ sequence checks, canonical final-item verification and checked native note IO
 continue to decide completion; recovery does not grant write authority or reload
 the app.
 
+If the replay text exceeds its size or event bound, recovery retains only a
+64-character content digest. Cursor-only changes still keep the socket, while
+changed canonical content can restore a stalled large-thread subscription.
+Live events received after eviction invalidate that digest; the next canonical
+read establishes a new baseline before judging subsequent missed changes.
+
 `scripts/benchmark-sync-stream.mjs SOURCE_ROOT EXTERNAL_REPORT.json` records
 synthetic foreground recovery, a silent feed, a controlled busy-Sync final save,
 and repeated Smart Send preparation. Stream/save latency uses simulated time;
