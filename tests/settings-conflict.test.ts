@@ -312,3 +312,30 @@ test('shared snapshots keep immutable receipt membership while later history gro
  const snapshot=p.sharedSnapshot();await p.retainSmartChange(()=>rememberResponse(p.smartData(),'Synthetic.md','later','Later body.','','',0));
  assert.equal(Object.keys(snapshot.smartSend.responses).length,1);assert.equal(Object.keys(p.smartData().responses).length,2);
 });
+
+test('rapid unrelated state saves skip settlement regrouping but additions, replacements and disable still synchronize',async()=>{
+  const h=await harness({vaultId:'vault',autoSettleThreads:true}),p=h.plugin,synced:unknown[][]=[];
+  p.settlementEvents={sync:(jobs:unknown[])=>synced.push([...jobs]),wake:()=>{}};
+  const job={requestId:'pending',messageId:'message',threadId:'thread',projectId:'project',connection:{executable:'',host:'',transport:'direct',environmentId:'environment'}};
+  p.settings.settlementJobs.push(job);await p.save();assert.equal(synced.length,1);
+  await Promise.all(Array.from({length:40},()=>p.save()));assert.equal(synced.length,1);
+  p.settings.settlementJobs=[...p.settings.settlementJobs];await p.save();assert.equal(synced.length,1,'array replacement with the same targets is unchanged');
+  p.settings.settlementJobs[0]={...job,messageId:'new-turn'};await p.save();assert.equal(synced.length,2);
+  p.settings.settlementJobs.push({...job,requestId:'another'});await p.save();assert.equal(synced.length,3);
+  p.settings.autoSettleThreads=false;await p.save();assert.equal(synced.length,4);assert.equal(synced.at(-1)?.length,0);
+});
+
+test('plugin visibility saves share completion and collapse force requests to the latest preference',async()=>{
+  const h=await harness({vaultId:'vault'}),p=h.plugin,calls:Array<{enabled:boolean;force:boolean}>=[];
+  let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+  p.threadVisibility={};p.settings.hideObsidianThreads=true;
+  p.applyThreadVisibility=async(enabled:boolean,force:boolean)=>{calls.push({enabled,force});if(calls.length===1)await gate;};
+  const first=p.syncThreadVisibility(true);
+  await Promise.all(Array.from({length:40},()=>p.save()));assert.equal(calls.length,1);
+  const waiting=[];for(let i=0;i<40;i++){p.settings.hideObsidianThreads=i%2===0;waiting.push(p.syncThreadVisibility(true));}
+  assert.ok(waiting.every(work=>work===first));release();await Promise.all([first,...waiting]);
+  assert.deepEqual(calls,[{enabled:true,force:true},{enabled:false,force:true}]);
+  await p.save();assert.equal(calls.length,2);
+  p.settings.paired=[{id:'new',environmentId:'remote',url:'https://fixture',name:'new'}];await p.save();await p.visibilityWork;
+  assert.deepEqual(calls.at(-1),{enabled:false,force:false},'route changes still synchronize');
+});

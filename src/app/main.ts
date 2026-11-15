@@ -210,6 +210,9 @@ export default class SendToT3 extends Plugin {
   private threadVisibility?:ThreadVisibility;
   private visibilitySignature='';
   private visibilityWork?:Promise<void>;
+  private visibilityRerun=false;
+  private visibilityForce=false;
+  private settlementSyncJobs?:ThreadSettlementJob[];
   private stopped = false;
   private projectCreateModal?:ProjectCreateModal;
   private commandHosts=new Map<string,{host:ConnectCommandHost;rpc:Awaited<ReturnType<typeof connectT3Rpc>>;files:CommandFiles}>();
@@ -2947,11 +2950,26 @@ export default class SendToT3 extends Plugin {
   async setThreadHiding(enabled:boolean){this.settings.hideObsidianThreads=enabled;await this.save();await this.syncThreadVisibility();}
   private syncThreadVisibility(force=false):Promise<void>{
     if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve();
-    const enabled=this.settings.hideObsidianThreads,signature=JSON.stringify([enabled,this.settings.paired]);
-    if(this.visibilityWork)return this.visibilityWork.then(()=>this.syncThreadVisibility(force));
+    const signature=JSON.stringify([this.settings.hideObsidianThreads,this.settings.paired]);
+    if(this.visibilityWork){
+      if(force||this.visibilitySignature!==signature){this.visibilityRerun=true;this.visibilityForce ||=force;}
+      return this.visibilityWork;
+    }
     if(!force&&this.visibilitySignature===signature)return Promise.resolve();
-    this.visibilitySignature=signature;
     const work=(async()=>{
+      let refresh=force;
+      do{
+        this.visibilityRerun=false;this.visibilityForce=false;
+        const enabled=this.settings.hideObsidianThreads,signature=JSON.stringify([enabled,this.settings.paired]);
+        if(this.stopped||enabled===undefined||!refresh&&this.visibilitySignature===signature)break;
+        this.visibilitySignature=signature;
+        await this.applyThreadVisibility(enabled,refresh);
+        refresh=this.visibilityForce;
+      }while(this.visibilityRerun);
+    })().finally(()=>{if(this.visibilityWork===work)this.visibilityWork=undefined;});
+    this.visibilityWork=work;return work;
+  }
+  private async applyThreadVisibility(enabled:boolean,force:boolean){
       const failures:string[]=[];
       for(const environmentId of new Set(this.settings.paired.map(paired=>paired.environmentId))){
         if(this.stopped||this.settings.hideObsidianThreads!==enabled)break;
@@ -2966,10 +2984,14 @@ export default class SendToT3 extends Plugin {
         }catch(error){failures.push(`${this.settings.paired.find(paired=>paired.environmentId===environmentId)?.name??environmentId}: ${message(error)}`);logFailure('thread.visibility.failed',error,{environmentId});}
       }
       if(failures.length&&!this.stopped)new Notice(`Thread visibility is waiting on ${failures.join('; ')}. It will be checked again on reconnect.`,12000);
-    })().finally(()=>{if(this.visibilityWork===work)this.visibilityWork=undefined;});
-    this.visibilityWork=work;return work;
   }
-  private syncSettlementEvents(){this.settlementEvents?.sync(this.settings.autoSettleThreads&&!this.stopped?this.settings.settlementJobs:[]);}
+  private syncSettlementEvents(){
+    if(!this.settlementEvents)return;
+    const jobs=this.settings.autoSettleThreads&&!this.stopped?this.settings.settlementJobs:[];
+    // Jobs are replaced when their target changes; saves of unrelated state need no regrouping.
+    if(this.settlementSyncJobs?.length===jobs.length&&jobs.every((job,index)=>job===this.settlementSyncJobs![index]))return;
+    this.settlementSyncJobs=[...jobs];this.settlementEvents.sync(jobs);
+  }
   async discardRequest(request:Request){
     if(request.agentCommand)this.app.saveLocalStorage(`${this.localKey}-note-command-${request.agentCommand.id}`,{command:request.agentCommand,discarded:true});
     this.settings.pending=this.settings.pending.filter(r=>r.id!==request.id);await this.save();
