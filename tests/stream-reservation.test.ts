@@ -23,7 +23,7 @@ async function fixture(){
   plugin.executeAgentCommand=async(input:any)=>{commands.push(JSON.parse(JSON.stringify(input)));return {id:input.id,ok:true};};
   plugin.assertRequestMode=async()=>{};plugin.captureNoteContext=async()=>{};plugin.responseGuard=async()=>{};plugin.failRequest=async(_request:any,error:Error,stage:string)=>{failures.push({error:error.message,stage});};
   plugin.deviceInline={register:async()=>{}};
-  const id=randomUUID(),binding={id:randomUUID(),version:4,notePath:'Note.md'};
+  const id=randomUUID(),binding={id:randomUUID(),version:4,notePath:'Note.md',messageId:''};
   const request={id,project:{id:source.projectId},connection:{transport:'direct',environmentId:source.environmentId},threadId:source.threadId,inlineBindings:[binding],inlineHost:binding};
   return {plugin,commands,request,binding,failures};
 }
@@ -46,4 +46,15 @@ test('dispatch waits for the watcher acknowledgement and refuses to send when it
   assert.equal(typeof resolve,'function');assert.equal(finished,false);assert.equal(h.failures.length,0);
   resolve({ok:false,error:'watcher storage unavailable'});await assert.rejects(dispatch,/watcher storage unavailable/);
   assert.deepEqual(h.failures,[{error:'watcher storage unavailable',stage:'stream-reservation'}]);
+});
+
+test('dispatch suppresses history only before a durable plan and releases that proof on a failed attempt',async()=>{
+ for(const saved of [{},{directPlan:{phase:'created'}},{acceptedThreadId:source.threadId}]){
+  const h=await fixture(),hints:unknown[]=[],attempts:string[]=[];
+  h.binding.messageId=commandId(h.request.id,'message');
+  h.plugin.deviceInline={register:async(_binding:unknown,_snapshot:unknown,unsent:unknown)=>hints.push(unsent),attempted:(id:string)=>attempts.push(id)};
+  await assert.rejects(h.plugin.dispatch({...h.request,...saved},true),/Direct request storage is unavailable/);
+  assert.deepEqual(hints,[Object.keys(saved).length?undefined:h.binding.messageId]);
+  assert.deepEqual(attempts,[h.binding.id],'An unconfirmed attempt must restore genuine recovery');
+ }
 });
