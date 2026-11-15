@@ -1,4 +1,4 @@
-import {rememberResponse} from '../src/notes/smart-send';
+import {rememberResponse,prepareSmartSend} from '../src/notes/smart-send';
 import {moveSmartNotes} from '../src/notes/smart-send';
 import {commandId} from '../src/connection/direct';
 import {applyThreadItem} from '../src/conversations/inline-thread';
@@ -929,4 +929,38 @@ test('ordinary note send preserves YAML task IDs without a Taskflow integration'
   assert.equal(sent[0].prompt.split('12345678-1234-4234-8234-123456789abc').length-1,1);
   assert.doesNotMatch(sent[0].prompt,/Taskflow task ID:/);
  }finally{h.plugin.onunload();}
+});
+
+test('historical recovery stages obsolete work, joins the send gate, and reuses only checked receipts after reload',async()=>{
+ const h=await folderMenuHarness(),p=h.plugin,path='History.md',thread='history-thread';
+ let document=`User request\n\n<!-- send-to-t3-fold-key ${thread} -->\n\n> Synthetic reply\n`,reads=0,closes=0,release:()=>void=()=>{};
+ const snapshot={snapshotSequence:1,thread:{id:thread,projectId:'project',messages:[{id:'answer',role:'assistant',text:'Synthetic reply',streaming:false}]}};
+ p.app.vault.getFileByPath=()=>({path});p.app.vault.read=async()=>document;
+ p.settings.noteThreads=[{notePath:path,threadId:thread,projectId:'project',environmentId:'env',connectionId:'c',workspaceRoot:'/writing',selectedAt:new Date().toISOString()}];
+ p.inlineThreadAccess=async()=>({origin:'https://fixture',api:async()=>{reads++;await new Promise<void>(resolve=>{release=resolve;});return snapshot;},close:()=>{closes++;}});
+ const recovery=p.recoverSmartReplies(path,document,true);for(let n=0;n<12;n++)await Promise.resolve();
+ const sendGate=p.recoverSmartReplies(path,document);let passed=false;void sendGate.then(()=>{passed=true;});
+ await Promise.resolve();assert.equal(passed,false);assert.equal(reads,1);assert.equal(Object.keys(p.smartData().responses).length,0);
+ release();await Promise.all([recovery,sendGate]);assert.equal(closes,1);assert.equal(reads,1);assert.equal(Object.keys(p.smartData().responses).length,1);
+ assert.ok(h.notices.some(text=>text.includes('Checking saved replies')));
+ const plan=await prepareSmartSend(p.smartData(),path,'target',document);assert.equal(plan.text.includes('Synthetic reply'),false);assert.ok(plan.text.includes('User request'));
+ const saved=JSON.parse(JSON.stringify(p.smartData()));p.smartReplica=saved;p.settings.smartSend=saved;
+ await p.recoverSmartReplies(path,document);assert.equal(reads,1,'Reloaded checked bytes need no source read');
+ document+='\nNew instruction';const obsolete=p.recoverSmartReplies(path,document,true);for(let n=0;n<12;n++)await Promise.resolve();
+ const before=JSON.stringify(p.smartData());p.smartRecovering.get(path).controller.abort();
+ await assert.rejects(obsolete,{name:'AbortError'});release();await Promise.resolve();
+ assert.equal(JSON.stringify(p.smartData()),before,'Canceled work must not publish provenance');assert.equal(closes,2);
+});
+
+
+test('a note changed without an editor event refuses late historical provenance',async()=>{
+ const h=await folderMenuHarness(),p=h.plugin,path='Changed history.md',thread='history-thread';
+ const captured=`User request\n\n<!-- send-to-t3-fold-key ${thread} -->\n\n> Synthetic reply\n`;
+ let current=captured,release:()=>void=()=>{};
+ p.app.vault.getFileByPath=()=>({path});p.app.vault.read=async()=>current;
+ p.settings.noteThreads=[{notePath:path,threadId:thread,projectId:'project',environmentId:'env',connectionId:'c',workspaceRoot:'/writing',selectedAt:new Date().toISOString()}];
+ p.inlineThreadAccess=async()=>({origin:'https://fixture',api:async()=>{await new Promise<void>(resolve=>{release=resolve;});return {snapshotSequence:1,thread:{id:thread,projectId:'project',messages:[{id:'answer',role:'assistant',text:'Synthetic reply',streaming:false}]}};},close:()=>{}});
+ const work=p.recoverSmartReplies(path,captured,true);for(let n=0;n<12;n++)await Promise.resolve();
+ current='New user draft';release();await assert.rejects(work,/note changed/);
+ assert.equal(Object.keys(p.smartData().responses).length,0);assert.equal(Object.keys(p.smartData().recoveries??{}).length,0);
 });

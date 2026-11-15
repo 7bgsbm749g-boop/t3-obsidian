@@ -1,3 +1,4 @@
+import {abortableRead,requestAborted} from '../connection/t3-api';
 import type {ThreadStreamItem} from '../connection/thread-events';
 export type {ThreadStreamItem} from '../connection/thread-events';
 import {parseJson,isRecord} from '../shared/values';
@@ -25,12 +26,13 @@ export function needsInlineHistory(state:InlineThreadState,targets:InlineHistory
 
 /** Recent polling stays small. A stranded response can request the complete
  * canonical transcript, including prompts older than the polling window. */
-export async function readInlineSnapshot(access:ThreadAccess,threadId:string,projectId?:string,targets?:InlineHistoryTargets|(()=>InlineHistoryTargets),full=false,importOnly=false,importRunId?:string):Promise<ThreadSnapshot> {
+export async function readInlineSnapshot(access:ThreadAccess,threadId:string,projectId?:string,targets?:InlineHistoryTargets|(()=>InlineHistoryTargets),full=false,importOnly=false,importRunId?:string,signal?:AbortSignal):Promise<ThreadSnapshot> {
   const currentTargets=()=>typeof targets==='function'?targets():targets,version=currentTargets()?.recoveryVersion;
   const current=()=>version===undefined||currentTargets()?.recoveryVersion===version;
   const read=async(all:boolean)=>{
-    const started=Date.now();
-    const snapshot=readThreadSnapshot(normalizeV2Snapshot(await access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true${all?'':'&turnLimit=20'}${importOnly?'&importRuns=true':''}${importRunId?'&importRunId='+encodeURIComponent(importRunId):''}`,undefined,all&&typeof targets==='function'?{continueHistory:current}:undefined)));
+    requestAborted(signal);const started=Date.now();
+    const snapshot=readThreadSnapshot(normalizeV2Snapshot(await abortableRead(access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true${all?'':'&turnLimit=20'}${importOnly?'&importRuns=true':''}${importRunId?'&importRunId='+encodeURIComponent(importRunId):''}`,undefined,{signal,...(all&&typeof targets==='function'?{continueHistory:current}:{})}),signal)));
+    requestAborted(signal);
     if(snapshot?.thread?.id!==threadId||projectId&&snapshot.thread.projectId!==projectId)throw Error('Waiting for the requested T3 thread.');
     logEvent('response.source.snapshot',{threadId,fullHistory:all,snapshotSequence:snapshot.snapshotSequence,turns:Object.keys(snapshot.thread.turns??{}).length,messages:snapshot.thread.messages?.length,elapsedMs:Date.now()-started,targets:currentTargets()?.messageIds.length});
     return snapshot;

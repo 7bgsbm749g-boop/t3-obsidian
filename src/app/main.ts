@@ -26,7 +26,7 @@ import {isRecord,jsonClone,parseJson} from '../shared/values';
 import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import {SendPreviews} from '../responses/send-preview';
 import {savedToDisplay} from '../responses/native-response-projection';
-import {clearSmartSendPreparation,snapshotSmartSend,loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,explicitSelectionText,rememberResponse,rememberNoteEdits,confirmSmartSend,moveSmartNotes,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from '../notes/smart-send';
+import {clearSmartSendPreparation,smartRecovery,hasSmartRecovery,rememberSmartRecovery,snapshotSmartSend,loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,explicitSelectionText,rememberResponse,rememberNoteEdits,confirmSmartSend,moveSmartNotes,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from '../notes/smart-send';
 import {noteIdentityRanges,withoutNoteIdentity} from '../notes/note-identity';
 import {retainedLocalFinal,restoredLocalFinal,localFinalIdentity} from '../responses/local-final-cache';
 import {HtmlResultStore} from '../responses/html-result-store';
@@ -160,8 +160,8 @@ export default class SendToT3 extends Plugin {
   private smartReplica=loadSmartSend(undefined);
   private smartHistoryRevision=0;
   private smartHistoryPublished=0;
-  private smartRecovered=new Set<string>();
-  private smartRecovering=new Map<string,Promise<void>>();
+  private smartRecovering=new Map<string,{signature:string;controller:AbortController;work:Promise<void>;background:boolean}>();
+  private smartPrepareTimer?:number;
   private responseBindingReplica:ResponseBindingData={};
   private pairedSessions:Record<string,PairedSession>={};
   cloudAccount:CloudAccount|null=null;
@@ -667,7 +667,10 @@ export default class SendToT3 extends Plugin {
       const queueNative=()=>{if(queued)return;queued=true;queueMicrotask(()=>{queued=false;refreshNative();});};
       this.registerEvent(this.app.workspace.on('layout-change',queueNative));
       const retireIdentity=(path?:string)=>{if(path&&Object.values(this.smartData().notes).some(note=>!note.deleted&&note.path===path))void this.ensureNoteIdentity(path).catch(error=>logFailure('response.recovery.identity-cleanup',error));};
-      this.registerEvent(this.app.workspace.on('file-open',file=>{queueNative();retireIdentity(file?.path);}));
+      this.registerEvent(this.app.workspace.on('file-open',file=>{queueNative();retireIdentity(file?.path);this.prepareSmartReplies(file);}));
+      this.registerEvent(this.app.workspace.on('editor-change',(_editor,view)=>this.prepareSmartReplies(view.file)));
+      this.registerEvent(this.app.vault.on('modify',file=>{if(file instanceof TFile&&this.smartRecovering.has(file.path))this.prepareSmartReplies(file);}));
+      this.prepareSmartReplies(this.app.workspace.getActiveFile());
       for(const path of new Set(this.app.workspace.getLeavesOfType('markdown').map(leaf=>(leaf.view as MarkdownView).file?.path)))retireIdentity(path);
       let lastResume=-Infinity,lastTick=Date.now();
       const resume=()=>{
@@ -1125,41 +1128,85 @@ export default class SendToT3 extends Plugin {
     const route=this.connection(project);
     return !!(await prepareSmartSend(this.smartData(),file.path,await this.smartKey(project,route,destination.threadId??''),document,context?.smartScope,this.smartPreparationGeneration(route,context))).text.trim();
   }
-  private async recoverSmartReplies(path:string,document:string){
-
+  private smartRecoveryFence(path:string){
+    // Persist only a digest of non-secret ownership and source membership.
+    // Device/account changes must not inherit another session's negative proof.
+    return contentHash(JSON.stringify([this.deviceId,this.settings.vaultId,this.nativeAccount?.userId,this.nativeAccount?.sessionId,this.cloudAccount?.identity,
+      this.settings.paired.map(route=>[route.id,route.environmentId,route.url,route.managed,this.pairedSessions[route.id]?.accountId,this.pairedSessions[route.id]?.dpopKeyId]),
+      responseBindingRequests(this.settings.responseBindings??{}).filter(request=>request.notePath===path),previousNoteThreads(this.settings.noteThreads,path)]));
+  }
+  private prepareSmartReplies(file:TFile|null){
+    if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);
+    for(const [path,entry] of this.smartRecovering)if(entry.background||path===file?.path)entry.controller.abort();
+    if(!file||file.extension.toLowerCase()!=='md'||this.stopped)return;
+    this.smartPrepareTimer=window.setTimeout(()=>{
+      this.smartPrepareTimer=undefined;if(this.stopped||this.busy)return;
+      const view=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.file?.path===file.path);
+      if(!view)return;
+      void this.recoverSmartReplies(file.path,this.notePromptDocument(view),true).catch(error=>{if(!(error instanceof Error&&error.name==='AbortError'))logFailure('smart-send.prepare',error);});
+    },300);
+  }
+  private async recoverSmartReplies(path:string,document:string,background=false){
+    if(this.stopped)throw Error('T3 Code is stopped.');
+    const fence=this.smartRecoveryFence(path),account=this.nativeAccount,cloud=this.cloudAccount,generation=this.cloudGeneration,settingsRevision=this.smartPreparationSettingsRevision;
+    const check=()=>{if(this.stopped||account!==this.nativeAccount||cloud!==this.cloudAccount||generation!==this.cloudGeneration||settingsRevision!==this.smartPreparationSettingsRevision||fence!==this.smartRecoveryFence(path))throw Error('Saved reply preparation changed. Try again.');};
     const data=this.smartData(),bindings=responseBindingRequests(this.settings.responseBindings??{}).filter(request=>request.notePath===path&&!hasResponseMarkers(document,request.id)&&!Object.keys(data.responses).some(id=>id.startsWith(request.id+':')));
-    const sources=new Map<string,{environment:string;project:string;thread:string}>();
-    for(const request of bindings)sources.set(JSON.stringify([request.threadEnvironmentId,request.projectId,request.threadId]),{environment:request.threadEnvironmentId,project:request.projectId,thread:request.threadId});
+    const sources=new Map<string,{environment:string;project:string;thread:string;bindings:string[]}>();
+    for(const request of bindings){const key=JSON.stringify([request.threadEnvironmentId,request.projectId,request.threadId]),source=sources.get(key)??{environment:request.threadEnvironmentId,project:request.projectId,thread:request.threadId,bindings:[]};source.bindings.push(request.id);sources.set(key,source);}
     if(document.includes('send-to-t3-fold-key'))for(const entry of previousNoteThreads(this.settings.noteThreads,path)){
       if(!document.includes(entry.threadId))continue;
       const environment=entry.environmentId??this.settings.paired.find(c=>c.id===entry.connectionId)?.environmentId??(!entry.connectionId?await this.localInlineEnvironment():undefined);
-      if(environment)sources.set(JSON.stringify([environment,entry.projectId,entry.threadId]),{environment,project:entry.projectId,thread:entry.threadId});
+      if(environment){const key=JSON.stringify([environment,entry.projectId,entry.threadId]);if(!sources.has(key))sources.set(key,{environment,project:entry.projectId,thread:entry.threadId,bindings:[]});}
     }
-    for(const [source,identity] of sources){
-      const key=path+'\0'+source;if(this.smartRecovered.has(key))continue;
-      let work=this.smartRecovering.get(key);
-      if(!work){work=(async()=>{
-        const access=await this.inlineThreadAccess(identity.environment);
-        try{
-          const snapshot=await readInlineSnapshot(access,identity.thread,identity.project,undefined,true);
+    check();
+    if(!sources.size)return;
+    const identities=[...sources.values()].map(source=>({source,identity:smartRecovery(data,path,document,JSON.stringify([fence,{...source,bindings:source.bindings.sort()}]))}));
+    const signature=contentHash(JSON.stringify(identities.map(entry=>entry.identity.key).sort())),previous=this.smartRecovering.get(path);
+    if(previous?.signature===signature&&!previous.controller.signal.aborted){
+      if(!background)previous.background=false;
+      const notice=background?undefined:new Notice('Checking saved replies before sending…',0);
+      try{await previous.work;check();}finally{notice?.hide?.();}return;
+    }
+    const pending=identities.filter(entry=>!hasSmartRecovery(data,entry.identity.key));
+    if(!pending.length)return;
+    previous?.controller.abort();
+    const controller=new AbortController(),signal=controller.signal;
+    const work=(async()=>{
+      for(const {source,identity} of pending){
+        const staged=loadSmartSend({version:1,notes:this.smartData().notes});
+        await readImportAccess(()=>this.inlineThreadAccess(source.environment),async access=>{
+          const snapshot=await readInlineSnapshot(access,source.thread,source.project,undefined,true,false,undefined,signal);
           const state=applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state;
-          let changed=false;
           for(const message of state.messages){
+            requestAborted(signal);
             if(message.role!=='assistant'||message.streaming||!message.text.trim())continue;
             for(const body of new Set([quoteResponse(message.text.trim()),escapeReplyHtml(message.text.replace(/\n+$/,''))])){
-              let at=document.indexOf(body);if(at<0)continue;
-              // A canonical response must occupy complete lines. Words inside
-              // ordinary prose or code examples do not establish provenance.
-              if(at>0&&document[at-1]!=='\n'||at+body.length<document.length&&document[at+body.length]!=='\n')continue;
-              if(document.indexOf(body,at+body.length)>=0)continue;
-              changed=!!await rememberResponse(this.smartData(),path,`history:${identity.thread}:${message.id}`,body,document.slice(0,at),document.slice(at+body.length),at)||changed;
+              const at=document.indexOf(body);if(at<0)continue;
+              // Require a unique canonical response on complete lines.
+              if(at>0&&document[at-1]!=='\n'||at+body.length<document.length&&document[at+body.length]!=='\n'||document.indexOf(body,at+body.length)>=0)continue;
+              await rememberResponse(staged,path,`history:${source.thread}:${message.id}`,body,document.slice(0,at),document.slice(at+body.length),at);
             }
           }
-          if(changed)await this.save(true);this.smartRecovered.add(key);
-        }finally{await access.close?.();}
-      })();this.smartRecovering.set(key,work);void work.finally(()=>this.smartRecovering.delete(key)).catch(()=>{});}
-      await work;
-    }
+        },signal);
+        requestAborted(signal);check();
+        const current=this.smartData(),note=current.notes[identity.noteId];
+        if(!note||note.deleted||note.path!==path||note.revision!==identity.revision)throw Error('The note changed while checking saved replies. Try again.');
+        const view=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.file?.path===path);
+        const file=this.app.vault.getFileByPath(path);
+        if(!file||(view?this.notePromptDocument(view):await this.app.vault.read(file))!==document)throw Error('The note changed while checking saved replies. Try again.');
+        requestAborted(signal);check();
+        Object.assign(current,mergeSmartSend(current,staged));
+        rememberSmartRecovery(current,identity,Object.keys(staged.responses));
+        // Publish proof and its provenance together. A failed write leaves the
+        // gate intact on reload; it never authorizes an uncertain send.
+        if(Object.keys(staged.responses).length)await this.save(true);
+        else await deviceState(`smart-send:${this.deviceId}:${this.settings.vaultId}`,current);
+        requestAborted(signal);check();
+      }
+    })();
+    this.smartRecovering.set(path,{signature,controller,work,background});
+    const notice=background?undefined:new Notice('Checking saved replies before sending…',0);
+    try{await work;}finally{notice?.hide?.();if(this.smartRecovering.get(path)?.work===work)this.smartRecovering.delete(path);}
   }
 
   private openAsk(file:TFile,selection='',captured?:EditorChatContext,choose=false){
@@ -2370,7 +2417,7 @@ export default class SendToT3 extends Plugin {
     const login=await beginLogin();if(this.stopped||generation!==this.cloudGeneration)return;
     this.cloudLogin=login;this.cloudChanged?.();this.scheduleCloudPoll();
   }
-  cancelCloudLogin(){this.projectDiscovery?.invalidate();this.cloudGeneration++;this.refreshRun++;this.connecting=false;if(this.cloudTimer)clearTimeout(this.cloudTimer);this.cloudLogin=null;this.emailLogin=null;this.cloudChanged?.();}
+  cancelCloudLogin(){for(const entry of this.smartRecovering.values())entry.controller.abort();this.projectDiscovery?.invalidate();this.cloudGeneration++;this.refreshRun++;this.connecting=false;if(this.cloudTimer)clearTimeout(this.cloudTimer);this.cloudLogin=null;this.emailLogin=null;this.cloudChanged?.();}
   private scheduleCloudPoll(){
     const login=this.cloudLogin;if(!login||this.stopped)return;const generation=this.cloudGeneration;
     this.cloudTimer=setTimeout(()=>{void this.pollCloudLogin(login,generation).catch(error=>logFailure('connection.account.poll',error));},Math.max(1000,login.nextPollAt-Date.now()));
@@ -2960,7 +3007,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
-  onunload(){this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async setThreadHiding(enabled:boolean){this.settings.hideObsidianThreads=enabled;await this.save();await this.syncThreadVisibility();}
   private syncThreadVisibility(force=false):Promise<void>{
     if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve();

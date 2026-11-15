@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {watchThread,readInlineEvents} from '../src/conversations/thread-stream';
+import {watchThread,readInlineEvents,readInlineSnapshot} from '../src/conversations/thread-stream';
 import {T3ResponseTooLargeError} from '../src/connection/t3-response-limits';
 import {completedSetup,preparationItem} from './fixtures/worktree-setup';
 import {RouteStatus} from '../src/connection/route-status';
@@ -290,4 +290,13 @@ test('reconnect resets a quiet deadline and releases the old access',async t=>{
     assert.equal(reads.at(-1),11800);assert.deepEqual(closed,['stream-reconnect']);
     watcher.stop();assert.deepEqual(closed,['stream-reconnect','stream-stopped']);
   }finally{watcher.stop();t.mock.timers.reset();}
+});
+
+test('obsolete historical snapshot reads stop waiting and pass cancellation to the API',async()=>{
+ const controller=new AbortController();let received:AbortSignal|undefined;
+ const work=readInlineSnapshot({origin:'https://fixture',api:async(_path,_payload,options)=>{received=options?.signal;return new Promise(()=>{});}},'thread','project',undefined,true,false,undefined,controller.signal);
+ controller.abort();await assert.rejects(work,{name:'AbortError'});assert.equal(received,controller.signal);
+ let calls=0;
+ await assert.rejects(readInlineSnapshot({origin:'https://fixture',api:async()=>{calls++;}},'thread','project',undefined,true,false,undefined,controller.signal),{name:'AbortError'});
+ assert.equal(calls,0);
 });

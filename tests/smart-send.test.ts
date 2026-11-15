@@ -343,3 +343,39 @@ test('failed preparations are never retained even when the same corrupt receipt 
  for(let n=0;n<2;n++)await assert.rejects(prepareSmartSend(data,path,destination,'Same failed revision.'),/content check/);
  delete data.heads.bad;assert.equal((await prepareSmartSend(data,path,destination,'Same failed revision.')).text,'Same failed revision.');
 });
+
+test('historical recovery receipts require exact note/source revisions and retained provenance after reload',async()=>{
+  const {smartRecovery,hasSmartRecovery,rememberSmartRecovery}=await import('../src/notes/smart-send');
+  let data=loadSmartSend(undefined);const document='User request\n\n> Synthetic reply\n';
+  await rememberResponse(data,'History.md','history:thread:answer','> Synthetic reply','User request\n\n','\n',14);
+  const identity=smartRecovery(data,'History.md',document,'environment/project/thread/binding');
+  rememberSmartRecovery(data,identity,Object.keys(data.responses));
+  data=mergeSmartSend(loadSmartSend(JSON.parse(JSON.stringify(data))),undefined);
+  assert.equal(hasSmartRecovery(data,identity.key),true);
+  assert.equal(hasSmartRecovery(data,smartRecovery(data,'History.md',document+'Edit','environment/project/thread/binding').key),false);
+  assert.equal(hasSmartRecovery(data,smartRecovery(data,'History.md',document,'different-source').key),false);
+  const changed=loadSmartSend(JSON.parse(JSON.stringify(data)));Object.values(changed.responses)[0].offset++;
+  assert.equal(hasSmartRecovery(changed,identity.key),false);
+  const missing=loadSmartSend(JSON.parse(JSON.stringify(data)));delete missing.bodies[Object.values(missing.responses)[0].body];
+  assert.equal(hasSmartRecovery(missing,identity.key),false);
+  moveSmartNotes(data,'History.md','Moved.md');assert.equal(hasSmartRecovery(data,identity.key),false);
+});
+
+test('negative historical recovery checks persist and receipts remain bounded',async()=>{
+  const {smartRecovery,hasSmartRecovery,rememberSmartRecovery}=await import('../src/notes/smart-send');
+  const data=loadSmartSend(undefined),identity=smartRecovery(data,'Empty.md','User request','checked-source');
+  rememberSmartRecovery(data,identity,[]);assert.equal(hasSmartRecovery(loadSmartSend(data),identity.key),true);
+  for(let n=0;n<160;n++)rememberSmartRecovery(data,smartRecovery(data,'Empty.md','User request '+n,'checked-source'),[]);
+  assert.equal(Object.keys(mergeSmartSend(data).recoveries??{}).length,128);
+});
+
+
+test('newer checked recovery receipts survive old settings and bounded-cache merges',async()=>{
+ const {smartRecovery,rememberSmartRecovery}=await import('../src/notes/smart-send');
+ const data=loadSmartSend(undefined),identity=smartRecovery(data,'History.md','User request','source');rememberSmartRecovery(data,identity,[]);
+ const old=loadSmartSend(JSON.parse(JSON.stringify(data)));old.recoveries![identity.key].checkedAt=1;data.recoveries![identity.key].checkedAt=2;
+ assert.equal(mergeSmartSend(data,old).recoveries![identity.key].checkedAt,2);
+ for(let n=0;n<150;n++){const next=smartRecovery(data,'History.md','Revision '+n,'source');rememberSmartRecovery(data,next,[]);data.recoveries![next.key].checkedAt=100+n;}
+ const latest=smartRecovery(data,'History.md','Latest revision','source');rememberSmartRecovery(data,latest,[]);
+ assert.ok(mergeSmartSend(data,old).recoveries![latest.key]);
+});
