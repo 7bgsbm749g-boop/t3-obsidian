@@ -85,6 +85,7 @@ export class LocalResponseManager {
     runtime.preview=this.makePreview(record,()=>this.sources.access(()=>this.io.access(request.threadEnvironmentId),JSON.stringify([request.threadEnvironmentId,request.projectId,request.threadId])),update=>{
       if(this.closed||runtime.done||runtime.stopped)return;
       const same=runtime.update?.completionVerified&&update.completionVerified&&runtime.update.turnId===update.turnId&&runtime.update.messageId===update.messageId&&runtime.update.body===update.body&&runtime.update.phase===update.phase&&runtime.update.questionsPending===update.questionsPending;
+      if(update.turnId&&this.unsentMessages.get(request.id)===update.messageId)this.unsentMessages.delete(request.id);
       if(!same)runtime.update=update;this.io.receiveDirect?.(update);
       runtime.record.state={...runtime.record.state!,...update.resume,body:update.body,status:update.phase==='error'?'error':update.phase??'running',turnId:update.turnId,bindingCheckpoint:update.checkpoint};
       streamMemory.sample('sample',()=>{const status=this.sources.status();return {bindingId:request.id,threadId:request.threadId,turnId:update.turnId,bodyLength:update.body.length,sourceCount:status.sources,readerCount:status.readers,openingCount:status.opening,queuedCount:status.queued,canonicalReadCount:status.canonicalReads,cacheCharacters:status.cacheCharacters,attachmentCount:this.jobs.size,saveWorkerCount:this.finalWorkers.size,saveQueueCount:this.finalQueues.size};});
