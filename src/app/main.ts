@@ -1850,11 +1850,14 @@ export default class SendToT3 extends Plugin {
       renewing??=(async()=>{
         const started=Date.now(),fields={environmentId,routeId:paired.id,cause:'http-401',status:401};logEvent('connection.auth.renewing',fields);
         try{
-          session=await this.sessionFor(paired.id,true);this.disposeUnaryOwner(paired.id);attemptedApi.disposeUnaryRpc?.();
-          const freshPool=new T3UnaryRpcOwner();
+          session=await this.sessionFor(paired.id,true);
+          const freshKey=this.unaryCredentialKey(paired,session),current=this.unaryOwners.get(paired.id);
+          if(current&&current.key!==freshKey)this.disposeUnaryOwner(paired.id);
+          attemptedApi.disposeUnaryRpc?.();
+          const freshPool=this.unaryOwners.get(paired.id)?.pool??new T3UnaryRpcOwner();
+          this.unaryOwners.set(paired.id,{key:freshKey,pool:freshPool});
           api=await environmentApi(connection,session,undefined,undefined,undefined,freshPool);
-          if(this.stopped){api.disposeUnaryRpc?.();throw Error('The plugin stopped.');}
-          this.unaryOwners.set(paired.id,{key:this.unaryCredentialKey(paired,session),pool:freshPool});
+          if(this.stopped||this.unaryOwners.get(paired.id)?.pool!==freshPool){freshPool.dispose();throw Error('The connection owner changed.');}
           logEvent('connection.auth.recovered',{...fields,elapsedMs:Date.now()-started});
         }catch(error){logEvent('connection.auth.failed',{...fields,elapsedMs:Date.now()-started,error},'warning');throw error;}
       })().finally(()=>{renewing=undefined;});
