@@ -129,6 +129,42 @@ test('unscoped paths keep machine ambiguity until a choice is made',async()=>{
   }finally{f.bridge.dispose();}
 });
 
+test('an unscoped project match keeps the other machine filesystem candidate',async()=>{
+  const f=await fixture();try{
+    f.setEnvironments(['env','other']);f.io.catalog=async(environmentId:string)=>environmentId==='other'?[{...scope,environmentId,root:'/srv/reports'}]:[];
+    let choices:any[]=[];f.bridge.choose=async(items:any[])=>{choices=items;return undefined;};
+    await f.app.workspace.openLinkText('/srv/reports/report.md','Unlinked/Note.md',false);
+    assert.deepEqual(Array.from(choices,item=>item.scope.environmentId),['env','other']);assert.equal(f.opened,undefined);
+    assert.equal(choices[0].scope.filesystem,true);assert.equal(choices[1].scope.projectId,'scratch');assert.deepEqual(f.nativeLinks,[]);
+    const image=f.image('file:///srv/reports/chart.png');await f.render(image);
+    assert.equal(f.resources,0,'An ambiguous media target cannot silently select a project machine');assert.equal(image.attrs.src,'file:///srv/reports/chart.png');
+  }finally{f.bridge.dispose();}
+});
+
+test('registered project files still reject parent links outside their workspace',async()=>{
+  const f=await fixture();try{
+    await f.app.workspace.openLinkText('/machine/scratch/report.md','Unlinked/Note.md',false);const source=f.opened.file.path;
+    await assert.rejects(f.app.workspace.openLinkText('../other.md',source,false),/leaves the project workspace/);
+    const image=f.image('');await f.bridge.renderMedia({querySelectorAll:(selector:string)=>selector==='img'?[image]:[]},source,()=>'../chart.png');
+    assert.equal(f.resources,0);assert.deepEqual(f.nativeLinks,[]);
+  }finally{f.bridge.dispose();}
+});
+
+test('filesystem file links and media resolve parent directories on their source machine',async()=>{
+  for(const [absolute,parent] of [['/srv/reports/report.md','/srv'],['C:/Reports/Nested/report.md','C:/Reports']]){const f=await fixture();try{
+    await f.app.workspace.openLinkText(absolute,'Unlinked/Note.md',false);const source=f.opened.file.path;
+    f.setEnvironments(['env','other']);f.io.catalog=()=>assert.fail('Relative filesystem links need no catalog');
+    await f.app.workspace.openLinkText('../other.md:4#Heading',source,false);
+    const opened:any=f.opened;assert.equal(opened.scope.root,parent);assert.equal(opened.scope.environmentId,'env');assert.equal(opened.path,'other.md');
+    assert.equal(await f.app.vault.read(opened.file),'remote');
+    let resource:any;f.io.resource=async(scope:any,path:string)=>{resource={scope,path};return {url:'https://signed.example/parent-chart',expiresAt:Date.now()+300000};};
+    const image=f.image('');await f.bridge.renderMedia({querySelectorAll:(selector:string)=>selector==='img'?[image]:[]},source,()=>'../chart.png');
+    assert.equal(image.attrs.src,'https://signed.example/parent-chart');assert.equal(resource.scope.root,parent);assert.equal(resource.scope.environmentId,'env');assert.equal(resource.path,'chart.png');
+    f.setEnvironments(['other']);await f.app.workspace.openLinkText('../offline.md',source,false);
+    assert.equal(f.opened,opened,'A relative file cannot switch to a connected machine');assert.deepEqual(f.nativeLinks,[]);assert.deepEqual(f.app.vault.getFiles(),[f.physical]);
+  }finally{f.bridge.dispose();}}
+});
+
 test('a previous file from another note cannot silently select the machine for an unscoped path',async()=>{
   const f=await fixture();try{
     await f.app.workspace.openLinkText('/srv/reports/first.md','First.md',false);

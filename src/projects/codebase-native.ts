@@ -7,7 +7,7 @@ import {WikiGesture} from './wiki-gesture';
 import {scheduleTimeout as setTimeout,cancelTimeout as clearTimeout} from '../shared/clock';
 import {App,type View,type OpenViewState,type DataWriteOptions,type HeadingCache,type ButtonComponent,Keymap,MarkdownView,Menu,Modal,Setting,Notice,TFile,TFolder,FuzzySuggestModal,WorkspaceLeaf,type Plugin,editorInfoField,editorLivePreviewField} from 'obsidian';
 import {CODEBASE_PREFIX,CodebaseDocument,codebaseRootLabels,contextualCandidates,linkedCodebases,relativeCodebasePath,scopeKey,virtualPath,catalogCodebases,type CodebaseScope,type CodebaseIO,type CodebaseProjectChange} from './codebase-core';
-import {filesystemReference,projectLink,projectMarkdownLink,projectPathRoutes} from './codebase-links';
+import {filesystemReference,relativeFilesystemReference,projectLink,projectMarkdownLink,projectPathRoutes} from './codebase-links';
 import {registerProjectReferences} from './project-reference';
 import type {FolderLink} from './folder-link';
 import type {ReplyReference} from '../responses/reply-assets';
@@ -298,7 +298,7 @@ export class CodebaseBridge {
     menu.addItem(entry=>entry.setTitle('Insert link').setIcon('link').onClick(()=>{const view=this.app.workspace.getActiveViewOfType(MarkdownView);if(view?.file){view.editor.replaceSelection(link);this.remember(item.file,view.file.path);}}));menu.showAtMouseEvent(event);
   }
   async suggestions(query:string,source:string){if(query.length>2)try{await this.search(query,source);}catch{/* Unavailable search keeps the existing cached suggestions. */}const links=this.links(),scopes=linkedCodebases(links),linked=links.filter(l=>source.startsWith(l.folderPath+'/')).sort((a,b)=>b.folderPath.length-a.folderPath.length)[0],lower=query.toLowerCase();return [...this.files.values()].filter(f=>this.allowed(f.scope,scopes)&&(!linked||f.scope.projectId===linked.projectId&&f.scope.environmentId===linked.environmentId)&&f.file.name.toLowerCase().includes(lower)).slice(0,100);}
-  private resolve(name:string,source:string){const route=this.pathRoute(name,source);if(route.owned)return route.items.length===1?route.items[0]:undefined;const sourceItem=this.files.get(source);if(sourceItem){const clean=name.split('#')[0];if(!clean)return sourceItem;if(clean.includes('/')){const parts=sourceItem.path.split('/').slice(0,-1);for(const part of clean.split('/')){if(part==='.')continue;if(part==='..'){if(!parts.length)return undefined;parts.pop();}else parts.push(part);}const relative=this.files.get(virtualPath(sourceItem.scope,parts.join('/')));if(relative)return relative;}}const own=this.files.get(name.split('#')[0]);if(own&&this.allowed(own.scope))return own;const remembered=this.choices[JSON.stringify([source,projectLink(name)?.path??name]) ]??this.choices[JSON.stringify([source,name.split('#')[0]])];if(remembered&&this.files.has(remembered)&&this.allowed(this.files.get(remembered)!.scope))return this.files.get(remembered);const sourceFile=this.files.get(source);const candidates=this.candidates(name,source);if(sourceFile){const same=candidates.filter(f=>scopeKey(f.scope)===scopeKey(sourceFile.scope));if(same.length===1)return same[0];}return candidates.length===1?candidates[0]:undefined;}
+  private resolve(name:string,source:string){const route=this.pathRoute(name,source);if(route.owned)return route.items.length===1?route.items[0]:undefined;if(this.absoluteReference(name))return undefined;const sourceItem=this.files.get(source);if(sourceItem){const clean=name.split('#')[0];if(!clean)return sourceItem;if(clean.includes('/')){const parts=sourceItem.path.split('/').slice(0,-1);for(const part of clean.split('/')){if(part==='.')continue;if(part==='..'){if(!parts.length)return undefined;parts.pop();}else parts.push(part);}const relative=this.files.get(virtualPath(sourceItem.scope,parts.join('/')));if(relative)return relative;}}const own=this.files.get(name.split('#')[0]);if(own&&this.allowed(own.scope))return own;const remembered=this.choices[JSON.stringify([source,projectLink(name)?.path??name]) ]??this.choices[JSON.stringify([source,name.split('#')[0]])];if(remembered&&this.files.has(remembered)&&this.allowed(this.files.get(remembered)!.scope))return this.files.get(remembered);const sourceFile=this.files.get(source);const candidates=this.candidates(name,source);if(sourceFile){const same=candidates.filter(f=>scopeKey(f.scope)===scopeKey(sourceFile.scope));if(same.length===1)return same[0];}return candidates.length===1?candidates[0]:undefined;}
   private choose(items:RegisteredFile[],name:string,source:string){return new Promise<RegisteredFile|undefined>(resolve=>{new FileChoice(this.app,items,item=>{if(item){const key=JSON.stringify([source,projectLink(name)?.path??name]);this.automaticChoices.delete(key);this.choices[key]=item.file.path;void this.persist();}resolve(item);},scope=>this.scopeTitle(scope)).open();});}
   private persist(){this.persistence=this.persistence.catch(()=>{}).then(async()=>{const state:CodebaseState={version:1,references:Object.fromEntries(this.records),choices:this.choices,automaticChoices:Object.fromEntries([...this.automaticChoices].map(([key,paths])=>[key,[...paths]])),...(Object.keys(this.vaultAliases).length?{vaultAliases:this.vaultAliases}:{})};if(this.storage){if(JSON.stringify(state)!==JSON.stringify(this.storage.load()))await this.storage.save(state);return;}const adapter=this.app.vault.adapter,dir=this.metadataPath.slice(0,this.metadataPath.lastIndexOf('/'));if(!await adapter.exists(dir))await adapter.mkdir(dir);await adapter.write(this.metadataPath,JSON.stringify(state));});return this.persistence;}
   private vaultAlias(path:string){const item=this.files.get(this.vaultAliases[path]);return item&&this.allowed(item.scope)?item:undefined;}
@@ -453,6 +453,11 @@ export class CodebaseBridge {
       const alias=projectLink(name)?.path??name.split('#')[0];
       if(this.vaultAliases[alias]&&!this.physicalFileLookup?.(alias)){const item=this.vaultAlias(alias);return {owned:true,items:item?[item]:[] as RegisteredFile[]};}
     }
+    const sourceItem=this.files.get(source),relative=projectLink(name);
+    if(sourceItem?.scope.filesystem&&relative?.path&&!/^(?:\/|[a-z]:\/)/i.test(relative.path)&&!name.startsWith(CODEBASE_PREFIX)){
+      const reference=relativeFilesystemReference(name,sourceItem.scope,sourceItem.path);
+      return {owned:true,items:reference&&this.allowed(reference.scope)?[this.register(reference.scope,reference.path)]:[] as RegisteredFile[]};
+    }
     if(!/[\\/]/.test(name)||/^(?!file:|sandbox:)[a-z][a-z0-9+.-]*:/i.test(name)&&! /^[a-z]:[\\/]/i.test(name))return {owned:false,items:[] as RegisteredFile[]};
     const linked=this.scopes(),scopes=this.routeScopes(linked),parsed=projectLink(name);
     if(parsed&&!/^(?:\/|[a-z]:\/)/i.test(parsed.path)&&!scopes.some(scope=>scope.root.startsWith('/')&&parsed.path.startsWith(scope.root.split('/')[1]+'/')))return {owned:false,items:[] as RegisteredFile[]};
@@ -474,6 +479,21 @@ export class CodebaseBridge {
         if(!match)return {owned:true,items:[] as RegisteredFile[]};
         items.push(this.register(match.scope,match.path));
       }
+      return {owned:true,items};
+    }
+    if(!chosen&&!context&&this.storage?.environments&&parsed&&/^(?:\/|[a-z]:\/)/i.test(parsed.path)){
+      // Discover all eligible machines before a project can claim an
+      // unscoped absolute path. Each machine contributes its project match
+      // or a filesystem target, so a project cannot hide another machine.
+      if(!filesystem)return {owned:false,items:[] as RegisteredFile[]};
+      const connected=this.environmentIds(),environments=origins.length?[...new Set(origins.map(value=>value.environmentId))]:connected;
+      if(environments.some(environmentId=>!connected.includes(environmentId)))return {owned:true,items:[] as RegisteredFile[]};
+      const items=environments.flatMap(environmentId=>{
+        const route=projectPathRoutes(name,active.filter(scope=>scope.environmentId===environmentId&&!scope.filesystem));
+        if(route.owned)return route.matches.map(match=>this.register(match.scope,match.path));
+        const reference=filesystemReference(name,environmentId);
+        return reference&&allowed(reference.scope)?[this.register(reference.scope,reference.path)]:[];
+      });
       return {owned:true,items};
     }
     const preferred=[...(chosen&&allowed(chosen.scope)?[[chosen.scope]]:[]),...(context?[active.filter(s=>s.environmentId===context.environmentId&&s.projectId===context.projectId),active.filter(s=>s.environmentId===context.environmentId)]:[]),...(!sourceScope&&(!origin||collision)?[active.filter(scope=>!scope.filesystem&&(collision||!origins.length||origins.some(origin=>origin.environmentId===scope.environmentId)))]:[])];

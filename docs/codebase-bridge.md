@@ -4,6 +4,8 @@ Absolute file references also work outside registered projects and thread worksp
 
 Saved choices keep their original machine after restart, including while it is disconnected. Colliding response references retain both project and filesystem targets for the chooser; an unavailable target cannot silently select another machine. Live Preview keeps native click-to-open for rendered links, while links under the caret and Source mode retain plain-click editing and use the primary modifier to open.
 
+Unscoped absolute paths collect a project or filesystem candidate from each eligible machine before selection. Relative links and media in filesystem-backed files resolve from the absolute source directory on that same machine, including `../` targets; registered projects retain their workspace boundary.
+
 The plugin owns this bridge. T3 is unchanged. Project bytes remain in the project workspace, outside the vault. Obsidian's native MarkdownView, image viewer and PDF viewer operate on virtual TFile identities through a scoped storage adapter.
 
 ## Storage boundary

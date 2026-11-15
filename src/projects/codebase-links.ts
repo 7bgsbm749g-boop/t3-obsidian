@@ -18,6 +18,22 @@ export function validFilesystemScope(scope:CodebaseScope){
   return scope.filesystem===true&&scope.projectId===''&&!scope.threadId&&filesystemReference(target,scope.environmentId)?.scope.root===scope.root;
 }
 
+/** A filesystem cwd is not a boundary for links from a native file view. */
+export function relativeFilesystemReference(value:string,scope:CodebaseScope,sourcePath:string){
+  const link=projectLink(value);
+  if(!validFilesystemScope(scope)||!link?.path||/^(?:\/|[a-z]:)/i.test(link.path))return;
+  try{relativeCodebasePath(sourcePath);}catch{return;}
+  const source=scope.root.replace(/\/$/,'')+'/'+sourcePath,prefix=/^[a-z]:\//i.exec(source)?.[0]??'/';
+  const parts=source.slice(prefix.length).split('/').slice(0,-1);
+  for(const part of link.path.split('/')){
+    if(part==='.')continue;
+    if(part==='..'){if(!parts.length)return;parts.pop();}
+    else{if(!part)return;parts.push(part);}
+  }
+  const target=encodeURI(prefix+parts.join('/')).replace(/[?#]/g,value=>encodeURIComponent(value));
+  return filesystemReference(target,scope.environmentId);
+}
+
 export function projectMarkdownLink(scope:CodebaseScope,path:string,name:string){
   const target=encodeURI(scope.root.replace(/\\/g,'/').replace(/\/$/,'')+'/'+path).replace(/[?#]/g,value=>encodeURIComponent(value));
   return `[${name.replace(/[\\[\]]/g,value=>'\\'+value)}](<${target}>)`;
