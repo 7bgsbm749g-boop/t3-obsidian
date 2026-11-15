@@ -38,21 +38,7 @@ Use **Settings → T3 Code → Replies** to adjust reply behaviour, and **Projec
 
 **Hide Obsidian threads in T3**, under **Replies**, is off by default. It tags new threads created here with `t3-obsidian` and hides them across connected T3 environments and clients. It also enables T3’s existing hidden-tag filter, including other tags already listed there. Turning it off removes only `t3-obsidian` from that filter; thread tags and other entries remain. Existing threads created outside the plugin are not tagged. New threads can appear briefly before tagging. Unavailable machines and pending tags are checked again when Obsidian reconnects or returns to the foreground.
 
-## Let agents edit notes
-
-Open **Settings → T3 Code → Agent tools** and choose **Connect MCP**. It sets up enabled, installed Codex, Claude Code, Cursor and OpenCode agents across your connected T3 computers, skipping existing setups. The status shows anything that still needs attention. **Disconnect MCP** removes this plugin’s setup without stopping current sessions or disconnecting T3.
-
-Python 3.10 or later must be available on each T3 computer. Start a new agent session after setup. The tools and editing skill are included; no repository checkout or Python packages are needed. For another MCP client or a custom configuration, open **Advanced → Manual setup** in the same section.
-
-Agents can prepare and submit checked note edits through the running plugin. Compatible changes merge, conflicts are kept for review, and active replies use the same safe final save. Keep Obsidian open and connected while editing.
-
----
-
-Your chosen note content and attachments go to the connected T3 computer and its configured model provider. Optional thread hiding changes thread tags and visibility settings through T3’s authenticated API across your connected environments; it needs settings-write access. Optional agent setup writes the bundled MCP tools and changes the selected agent’s launch settings on that computer through the authenticated T3 connection, outside the vault. Obsidian does not run the helper or open an incoming command port. T3 and provider accounts or usage charges are separate from this free plugin. [Report an issue](https://github.com/7bgsbm749g-boop/t3-obsidian/issues) · [MIT license](LICENSE)
-
-Streaming RAM capture: [device-local streaming memory diagnostics](docs/stream-memory-diagnostics.md).
-
-### Right sidebar conversations
+## Right sidebar conversations
 
 Use **T3 Code: Open thread in right sidebar…** to select a connected project,
 open a regular thread, or start one. Messages sent from this page do not create
@@ -74,3 +60,17 @@ the tab to stop its live reader. Closing a side chat tab does not delete its T3
 conversation. Saved layouts retain open targets and unsent drafts. The sidebar
 shows the most recent 200 messages. Approval and question requests still use the
 existing T3 controls; the sidebar does not bypass them.
+
+## Let agents edit notes
+
+Open **Settings → T3 Code → Agent tools** and choose **Connect MCP**. It sets up enabled, installed Codex, Claude Code, Cursor and OpenCode agents across your connected T3 computers, skipping existing setups. The status shows anything that still needs attention. **Disconnect MCP** removes this plugin’s setup without stopping current sessions or disconnecting T3.
+
+Python 3.10 or later must be available on each T3 computer. Start a new agent session after setup. The tools and editing skill are included; no repository checkout or Python packages are needed. For another MCP client or a custom configuration, open **Advanced → Manual setup** in the same section.
+
+Agents can prepare and submit checked note edits through the running plugin. Compatible changes merge, conflicts are kept for review, and active replies use the same safe final save. Keep Obsidian open and connected while editing.
+
+---
+
+Your chosen note content and attachments go to the connected T3 computer and its configured model provider. Optional thread hiding changes thread tags and visibility settings through T3’s authenticated API across your connected environments; it needs settings-write access. Optional agent setup writes the bundled MCP tools and changes the selected agent’s launch settings on that computer through the authenticated T3 connection, outside the vault. Obsidian does not run the helper or open an incoming command port. T3 and provider accounts or usage charges are separate from this free plugin. [Report an issue](https://github.com/7bgsbm749g-boop/t3-obsidian/issues) · [MIT license](LICENSE)
+
+Streaming RAM capture: [device-local streaming memory diagnostics](docs/stream-memory-diagnostics.md).
