@@ -28,7 +28,7 @@ test('saved choices retain an offline machine across restart instead of selectin
     assert.equal(restored.opened,undefined);assert.deepEqual(restored.nativeLinks,[]);
     restored.setEnvironments(['env','other']);
     await restored.app.workspace.openLinkText('/srv/reports/report.md','Unlinked/Note.md',false);
-    assert.equal(restored.opened.scope.environmentId,'env');
+    const reopened:any=restored.opened;assert.equal(reopened.scope.environmentId,'env');
   }finally{first.bridge.dispose();restored.bridge.dispose();}
 });
 
@@ -79,7 +79,7 @@ test('native editing keeps plain clicks while rendered Live Preview links retain
     await new Promise(resolve=>setTimeout(resolve,0));assert.equal(opens,3,'A rendered link outside the caret keeps native click-to-open');
     livePreview=false;
     for(const type of ['mousedown','click']){let prevented=false;handlers.get(type)!({type,button:0,target:span,preventDefault(){prevented=true;},stopImmediatePropagation(){}});assert.equal(prevented,false,'Source mode always keeps plain-click editing');}
-    assert.equal(f.opened.scope.environmentId,'env');assert.equal(f.opened.scope.filesystem,true);assert.deepEqual(f.nativeLinks,[]);
+    const opened:any=f.opened;assert.equal(opened.scope.environmentId,'env');assert.equal(opened.scope.filesystem,true);assert.deepEqual(f.nativeLinks,[]);
   }finally{instance?.destroy();f.bridge.dispose();}
 });
 
