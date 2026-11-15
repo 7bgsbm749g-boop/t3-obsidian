@@ -18,13 +18,13 @@ import {SharedThreadStreams} from '../src/conversations/shared-thread-stream';
 
 function request():ResponseRequest{return {version:4,localOnly:true,nativeProjection:true,responseContainer:true,independent:true,id:randomUUID(),initialOwner:randomUUID(),vaultId:'vault',host:{environmentId:'env',workspaceRoot:'/synthetic',directory:'.obsidian/t3-code/inline/v1'},notePath:'Test.md',threadId:randomUUID(),projectId:randomUUID(),messageId:randomUUID(),threadEnvironmentId:'env',initialHash:contentHash(''),createdAt:'2026-10-14T00:00:00Z'};}
 function fixture(binding=request(),initial?:string,records:ResponseBindingData={},stops?:unknown){
-  let document=initial??`Before\n\n${responseAnchor(binding.id)}\n\nAfter`,open=true,ready=true,now=0,writes=0;
+  let document=initial??`Before\n\n${responseAnchor(binding.id)}\n\nAfter`,open=true,ready=true,hold=false,now=0,writes=0;
   const callbacks=new Map<string,(update:DirectInlineUpdate)=>void>(),registered:any[]=[],errors:any[]=[],finished:string[]=[];
   const io:any={localBindings:()=>responseBindingRequests(records),saveLocalBinding:async(request:ResponseRequest)=>{records=updateResponseBindingData(records,request,'test');},openedNotes:()=>open?[{path:binding.notePath,document}]:[],readNote:async()=>document,updateNote:async(_path:string,change:(text:string)=>string)=>document=change(document),saveLocalNote:async()=>{},syncReady:()=>ready,isOpen:()=>open,access:async()=>{throw Error('No host or T3 access needed by this replay.');},receiveCoordinated:(record:any)=>registered.push(record),receiveDirect:()=>{},localCompleted:(id:string)=>finished.push(id),completionFailed:(error:any)=>errors.push(error)};
   io.loadStops=()=>stops;
-  const notes={read:async(_path?:string):Promise<string|undefined>=>document,compareAndSet:async(_path:string,before:string,after:string,guard?:()=>boolean)=>{if(document!==before||guard?.()===false)return false;document=after;writes++;return true;}};
+  const notes={read:async(_path?:string):Promise<string|undefined>=>document,compareAndSet:async(_path:string,before:string,after:string,guard?:()=>boolean)=>{if(hold||document!==before||guard?.()===false)return false;document=after;writes++;return true;}};
   const manager=new LocalResponseManager(randomUUID(),'vault',io,notes,()=>now,(record,_access,receive)=>{callbacks.set(record.request.id,receive);return {tick:()=>{},update:()=>{},delivery:()=>{},reconnect:()=>{},suspend:()=>{},dispose:()=>{}} as any;});
-  return {binding,manager,io,notes,records:()=>records,receiveRecords:(value:ResponseBindingData)=>records=value,callbacks,registered,errors,finished,read:()=>document,write:(text:string)=>document=text,open:(value:boolean)=>open=value,ready:(value:boolean)=>ready=value,advance:()=>now+=1100,writes:()=>writes,emit:(body='Final answer',verified=true,messageId=binding.messageId)=>callbacks.get(binding.id)!({request:binding,messageId,sequence:5,body,turnId:'exact-turn',phase:'complete',completionVerified:verified})};
+  return {binding,manager,io,notes,records:()=>records,receiveRecords:(value:ResponseBindingData)=>records=value,callbacks,registered,errors,finished,read:()=>document,write:(text:string)=>document=text,open:(value:boolean)=>open=value,ready:(value:boolean)=>ready=value,hold:(value:boolean)=>{hold=value;if(!value)manager.changed(binding.notePath);},advance:()=>now+=1100,writes:()=>writes,emit:(body='Final answer',verified=true,messageId=binding.messageId)=>callbacks.get(binding.id)!({request:binding,messageId,sequence:5,body,turnId:'exact-turn',phase:'complete',completionVerified:verified})};
 }
 const drain=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
 const recover=async(h:ReturnType<typeof fixture>)=>{h.manager.resume();await (h.manager as any).recoveryWork;await drain();};
@@ -57,10 +57,10 @@ test('an absent anchor pauses recovery without recording a permanent removal or 
 });
 test('a transient empty pane retains a verified final and saves when its exact anchor returns',async()=>{
   const h=fixture(),receipts:boolean[]=[];h.io.retainLocalCompletion=async(_request:ResponseRequest,saved:boolean)=>{receipts.push(saved);};
-  await h.manager.register(h.binding);h.ready(false);h.emit('Retained mobile final');await drain();
+  await h.manager.register(h.binding);h.hold(true);h.emit('Retained mobile final');await drain();
   const opened=h.io.openedNotes,original=h.read();h.io.openedNotes=()=>[{path:h.binding.notePath,document:''}];h.manager.resume();await drain();
   assert.equal(h.read(),original);assert.deepEqual(receipts,[]);assert.equal(h.finished.length,0);assert.equal(h.manager.status(h.binding.id)?.pendingSaveReason,'note-changed');
-  h.io.openedNotes=opened;h.ready(true);h.manager.resume();await drain();
+  h.io.openedNotes=opened;h.hold(false);h.manager.resume();await drain();
   assert.equal(h.writes(),1);assert.match(h.read(),/Retained mobile final/);assert.deepEqual(receipts,[true]);h.manager.dispose();
 });
 test('an intact saved anchor recovers a legacy unsaved retirement without duplicating the prompt',async()=>{
@@ -245,20 +245,19 @@ test('two independent devices produce exactly identical final notes',async()=>{
   a.emit();b.emit();await drain();assert.equal(a.read(),b.read());assert.equal(a.writes(),1);assert.equal(b.writes(),1);
   assert.equal(localResponseBindings(a.read()).length,0);a.manager.dispose();b.manager.dispose();
 });
-test('completion waits for core Sync and resumes while the note remains loaded',async()=>{
-  const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit();await drain();assert.equal(h.writes(),0);
-  h.ready(true);h.manager.tick();await drain();assert.equal(h.writes(),1);h.manager.dispose();
+test('completion saves while legacy Sync hints remain busy',async()=>{
+  const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit();await drain();
+  assert.equal(h.writes(),1);assert.deepEqual(await h.manager.waitForSave(h.binding.id),{saved:true});h.manager.dispose();
 });
-test('final-save status, preparation, and the atomic write check the exact destination path',async()=>{
-  const h=fixture();await h.manager.register(h.binding);const paths:string[]=[];
-  h.io.syncReady=(path:string)=>{paths.push(path);return path===h.binding.notePath;};
-  h.emit();await drain();assert.equal(h.writes(),1);assert.ok(paths.length>=4);assert.ok(paths.every(path=>path===h.binding.notePath));h.manager.dispose();
+test('final saving never reads legacy Sync permission hints',async()=>{
+  const h=fixture();await h.manager.register(h.binding);h.io.syncReady=()=>assert.fail('Sync must not gate local writes');
+  h.emit();await drain();assert.equal(h.writes(),1);h.manager.dispose();
 });
-test('a note Sync update arriving at the write boundary prevents the old final save',async()=>{
+test('an actual note update at the write boundary prevents an obsolete final save',async()=>{
   const h=fixture();await h.manager.register(h.binding);const compare=h.notes.compareAndSet;
-  h.notes.compareAndSet=async(...args)=>{h.ready(false);return compare(...args);};
-  h.emit();await drain();assert.equal(h.writes(),0);assert.equal(h.manager.status(h.binding.id)?.pendingSaveReason,'sync');
-  h.notes.compareAndSet=compare;h.write(h.read().replace('Before','Incoming ordinary edit'));h.ready(true);h.advance();h.manager.tick();await drain();
+  h.notes.compareAndSet=async(...args)=>{h.write(h.read().replace('Before','Incoming ordinary edit'));return compare(...args);};
+  h.emit();await drain();assert.equal(h.writes(),0);assert.equal(h.manager.status(h.binding.id)?.pendingSaveReason,'note-changed');
+  h.notes.compareAndSet=compare;h.advance();h.manager.tick();await drain();
   assert.equal(h.writes(),1);assert.match(h.read(),/^Incoming ordinary edit/);h.manager.dispose();
 });
 test('renaming a destination while a final write waits invalidates its old path guard',async()=>{
@@ -280,12 +279,10 @@ test('an imported completed run saves through checked note IO after its tab clos
   assert.equal(h.writes(),1);assert.match(h.read(),/Imported final/);assert.doesNotMatch(h.read(),/:::send-to-t3-response/);
   assert.deepEqual(await h.manager.waitForSave(h.binding.id,0),{saved:true});h.manager.dispose();
 });
-test('a closed imported response retries its save when Sync becomes ready',async()=>{
+test('a closed imported response saves without waiting for Sync',async()=>{
   const h=fixture();h.binding.importTurn={turnId:'exact-turn',messageId:h.binding.messageId,state:'completed',requestedAt:h.binding.createdAt,completedAt:h.binding.createdAt};
   await h.manager.register(h.binding);h.open(false);h.ready(false);h.emit();await drain();
-  assert.deepEqual(await h.manager.waitForSave(h.binding.id,0),{saved:false,reason:'sync'});assert.equal(h.writes(),0);
-  assert.equal(h.manager.status(h.binding.id)?.pendingSaveReason,'sync');
-  h.ready(true);h.manager.tick();await drain();assert.equal(h.writes(),1);assert.deepEqual(await h.manager.waitForSave(h.binding.id,0),{saved:true});h.manager.dispose();
+  assert.equal(h.writes(),1);assert.deepEqual(await h.manager.waitForSave(h.binding.id),{saved:true});h.manager.dispose();
 });
 test('import completion reports missing verification and waits for a checked write without a deadline',async()=>{
   const h=fixture();await h.manager.register(h.binding);
@@ -324,16 +321,16 @@ test('a removed attachment cannot keep an unverified terminal preview active in 
   assert.equal(h.manager.responses().length,0,'Only a verified successful completion survives attachment retirement');
   h.manager.dispose();
 });
-test('explicit Stop saves its frozen local text while completion is waiting for Sync',async()=>{
-  const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit('Canonical final');await drain();
-  const receipt=await h.manager.stop(h.binding.id,'Frozen visible text');assert.equal(receipt.finalSaved,true);assert.equal(receipt.hostRecorded,true);assert.match(h.read(),/Frozen visible text/);assert.equal(h.writes(),1);h.manager.dispose();
+test('explicit Stop saves its frozen local text after a refused local completion',async()=>{
+  const h=fixture();await h.manager.register(h.binding);h.hold(true);h.emit('Canonical final');await drain();
+  const compare=h.notes.compareAndSet;h.notes.compareAndSet=async(_path,before,after,guard)=>{h.hold(false);return compare(_path,before,after,guard);};const receipt=await h.manager.stop(h.binding.id,'Frozen visible text');assert.equal(receipt.finalSaved,true);assert.equal(receipt.hostRecorded,true);assert.match(h.read(),/Frozen visible text/);assert.equal(h.writes(),1);h.manager.dispose();
 });
 test('a stale response block cannot restart a settled response or overwrite later Undo',async()=>{
   const h=fixture();await h.manager.register(h.binding);const original=h.read();h.emit();await drain();
   h.write(original);h.advance();h.manager.resume();h.emit();await drain();assert.equal(h.read(),original);assert.equal(h.writes(),1);h.manager.dispose();
 });
 test('verified final recovery survives reload without another T3 read and rejects another binding',async()=>{
-  const first=fixture();await first.manager.register(first.binding);first.ready(false);
+  const first=fixture();await first.manager.register(first.binding);first.hold(true);
   let saved:any;first.io.retainLocalFinal=async(update:DirectInlineUpdate)=>{saved=retainedLocalFinal(update);};first.emit('Retained canonical final');await drain();
   const next=fixture(first.binding,first.read(),first.records());next.io.loadLocalFinal=async(request:ResponseRequest)=>restoredLocalFinal(saved,request);next.manager.resume();await drain();assert.match(next.read(),/Retained canonical final/);assert.equal(next.writes(),1);
   assert.equal(restoredLocalFinal(saved,{...first.binding,messageId:randomUUID()}),undefined);
@@ -356,9 +353,9 @@ test('a copied, malformed, foreign-vault, or fenced binding cannot start a respo
   assert.equal(localResponseBindings(document.replace(binding.id,randomUUID())).length,0);
   const h=fixture({...binding,vaultId:'other'},document.replace(encodeURIComponent('"vaultId":"vault"'),encodeURIComponent('"vaultId":"other"')));h.manager.resume();assert.equal(h.registered.length,0);h.manager.dispose();
 });
-test('core Sync gate distinguishes synced, paused, disconnected, errors and absent transports',()=>{
+test('all Sync states permit the independent checked local save path',()=>{
   assert.equal(localSyncReady({}),true);
-  for(const status of ['synced','syncing','paused','error','disconnected'])assert.equal(localSyncReady({internalPlugins:{getEnabledPluginById:()=>({vaultId:'remote',getStatus:()=>status})}}),status==='synced');
+  for(const status of ['synced','syncing','paused','error','disconnected'])assert.equal(localSyncReady({internalPlugins:{getEnabledPluginById:()=>({vaultId:'remote',getStatus:()=>status})}}),true);
 });
 test('a synced local final answer is adopted without host evidence and keeps an unrelated editor edit',()=>{
   const binding=request(),document=`Before\n\n${responseAnchor(binding.id)}\n\nAfter`;
@@ -413,8 +410,8 @@ test('completion and Stop save checked proposals with the reply before marking t
     const binding=request(),document=`Before\n\n${responseAnchor(binding.id)}\n\nAfter`,proposed=document.replace('After','Agent edit after'),localStage={editId:randomUUID(),originalHash:contentHash(document),stagedHash:contentHash(proposed),transport:{environmentId:'env',workspaceRoot:'/scratch',base:'.t3-obsidian/clients/vault/'+randomUUID()}};
     const h=fixture({...binding,localStage},document),saved:any[]=[],files={read:async(path:string)=>path===editPath(localStage,'original')?document:path===editPath(localStage,'proposed')?proposed:undefined,write:async()=>{},list:async()=>[]};
 h.io.localFinalDraft=(text:string,request:ResponseRequest)=>checkedStageDraft(text,request,files);h.io.localEditSaved=async(_request:any,text:string)=>{assert.equal(text,h.read());saved.push(text);};
-    await h.manager.register(h.binding);h.ready(false);h.emit('Final reply');await drain();assert.equal(saved.length,0);h.write(h.read().replace('Before','Typed before'));
-    if(stop)await h.manager.stop(binding.id,'Frozen reply');else{h.ready(true);h.advance();h.manager.tick();await drain();}
+    await h.manager.register(h.binding);h.hold(true);h.emit('Final reply');await drain();assert.equal(saved.length,0);h.write(h.read().replace('Before','Typed before'));
+    if(stop){h.hold(false);await h.manager.stop(binding.id,'Frozen reply');}else{h.hold(false);h.advance();h.manager.tick();await drain();}
     assert.equal(saved.length,1);assert.match(h.read(),/Typed before/);assert.match(h.read(),/Agent edit after/);assert.ok(h.read().includes(stop?'Frozen reply':'Final reply'));assert.ok(!h.read().includes(responseAnchor(binding.id)));h.manager.dispose();
   }
 });
@@ -533,14 +530,14 @@ test('a refused final followed by peer save and local Stop verifies the existing
  assert.deepEqual(receipt,{saved:true,update:undefined},'Do not replace the peer receipt with the refused local rendering');assert.equal(h.read(),'User prefix\nPeer saved reply\nLater user edits');h.manager.dispose();
 });
 test('a reviewed retry can confirm an exact peer save after its anchor was removed',async()=>{
- const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit('Frozen local rendering');await drain();
+ const h=fixture();await h.manager.register(h.binding);h.hold(true);h.emit('Frozen local rendering');await drain();
  h.notes.compareAndSet=async()=>false;await assert.rejects(h.manager.stop(h.binding.id,'Frozen local rendering'),/waiting for its local save/);
  h.write('User text\nVerified peer reply');h.io.savedResponse=async()=>true;
  assert.deepEqual(await h.manager.retrySave(h.binding,contentHash(h.read()),'Frozen local rendering'),{saved:true});assert.equal(h.writes(),0);assert.equal(h.read(),'User text\nVerified peer reply');assert.equal(h.manager.frozenBody(h.binding.id),'Frozen local rendering');h.manager.dispose();
 });
 test('missing anchors without output proof, and a note changed during proof, never retire the reply',async()=>{
  for(const change of [false,true]){
-  const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit();await drain();h.manager.stopLocally(h.binding.id);h.write('User text');
+  const h=fixture();await h.manager.register(h.binding);h.hold(true);h.emit();await drain();h.manager.stopLocally(h.binding.id);h.write('User text');
   h.io.savedResponse=async()=>{if(change)h.write('New user text');return change;};
   await assert.rejects(h.manager.retrySave(h.binding,contentHash(h.read()),'Frozen reply'),change?/reviewed note changed/:/anchor is missing/);
   assert.equal(h.manager.status(h.binding.id)?.finalSaved,false);assert.equal(h.writes(),0);assert.equal(h.manager.health().pending.length,1);h.manager.dispose();
@@ -560,7 +557,7 @@ test('peer completion metadata arriving after the note rechecks a stopped refusa
 
 test('checked peer-save recovery adopts a moved stopped binding only with unchanged response identity',async()=>{
  for(const changed of [false,true]){
-  const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit('Frozen rendering');await drain();h.manager.stopLocally(h.binding.id);
+  const h=fixture();await h.manager.register(h.binding);h.hold(true);h.emit('Frozen rendering');await drain();h.manager.stopLocally(h.binding.id);
   const moved={...h.binding,notePath:'Moved.md',...(changed?{messageId:randomUUID()}:{})};h.receiveRecords(updateResponseBindingData(h.records(),moved,'peer'));
   const document='Saved peer output and user edits';h.notes.read=async(path?:string)=>path===moved.notePath?document:undefined;h.io.savedResponse=async()=>true;
   if(changed)await assert.rejects(h.manager.retrySave(moved,contentHash(document)),/binding changed/);
@@ -569,10 +566,10 @@ test('checked peer-save recovery adopts a moved stopped binding only with unchan
  }
 });
 test('a peer receipt updates a stopped destination before automatic output verification',async()=>{
- const h=fixture();await h.manager.register(h.binding);h.ready(false);h.emit();await drain();h.manager.stopLocally(h.binding.id);
+ const h=fixture();await h.manager.register(h.binding);h.hold(true);h.emit();await drain();h.manager.stopLocally(h.binding.id);
  const moved={...h.binding,notePath:'Moved.md'};h.receiveRecords(updateResponseBindingData(h.records(),moved,'peer'));
  h.io.knownCompleted=()=>true;h.io.savedResponse=async(request:ResponseRequest)=>request.notePath===moved.notePath;h.notes.read=async(path?:string)=>path===moved.notePath?'Peer output':undefined;
- h.ready(true);h.manager.resume();await drain();assert.equal(h.manager.status(h.binding.id)?.finalSaved,true);assert.equal(h.manager.request(h.binding.id)?.notePath,moved.notePath);assert.equal(h.writes(),0);h.manager.dispose();
+ h.hold(false);h.manager.resume();await drain();assert.equal(h.manager.status(h.binding.id)?.finalSaved,true);assert.equal(h.manager.request(h.binding.id)?.notePath,moved.notePath);assert.equal(h.writes(),0);h.manager.dispose();
 });
 
 test('a stopped unverified reply confirms a peer save without enabling any local write',async()=>{
@@ -593,7 +590,7 @@ test('completion receipts use the exact rewritten or stopped body recorded for p
   h.io.localFinalBody=async()=> 'Rewritten saved reference';
   h.io.rememberResponse=(request:ResponseRequest,body:string,before:string,after:string,offset:number)=>rememberResponse(data,request.notePath,request.id,body,before,after,offset);
   h.io.retainLocalCompletion=async(request:ResponseRequest,saved:boolean,update:DirectInlineUpdate|undefined,actual:string|undefined)=>{savedBody=actual;if(saved&&update)h.receiveRecords(completeResponseBinding(h.records(),request,update.turnId!,contentHash(actual??update.body),'peer'));};
-  await h.manager.register(h.binding);if(stopped)h.ready(false);h.emit('Original remote reference');await drain();if(stopped)await h.manager.stop(h.binding.id,'Frozen saved reference');
+  await h.manager.register(h.binding);if(stopped)h.hold(true);h.emit('Original remote reference');await drain();if(stopped){h.hold(false);await h.manager.stop(h.binding.id,'Frozen saved reference');}
   const expected=stopped?'Frozen saved reference':'Rewritten saved reference';assert.equal(savedBody,expected);assert.equal(h.records()[h.binding.id].completion?.outputHash,contentHash(expected));assert.equal(await savedResponseProof(h.binding,h.read(),h.records(),data),true);h.manager.dispose();
  }
 });

@@ -17,6 +17,7 @@ export interface DeviceResponseIO {
   saveLocalBinding?(request:ResponseRequest):Promise<void>;
   openedNotes?():Array<{path:string;document:string}>;
   saveLocalNote?(path:string):Promise<void>;
+  /** Legacy adapter hint, ignored: native note IO owns local write safety. */
   syncReady?(path:string):boolean;
   localCompleted?(id:string,path:string):void;
   localEditSaved?(request:ResponseRequest,document:string):Promise<void>;

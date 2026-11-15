@@ -44,8 +44,8 @@ for(const follow of [false,true])test(`confirmation closes before delayed save/f
 });
 test('a pending final save remains pending after the dialog closes',async()=>{
   const result=deferred<RunImportResult>(),h=await fixture(()=>result.promise);h.confirm.handler();
-  result.resolve({duplicate:false,following:false,saveState:'pending',pendingReason:'sync'});await drain();
-  assert.equal(h.modal.isOpen,false);assert.equal(h.modal.closed,1);assert.match(h.notices.at(-1)!.text,/not saved yet.*Sync/);assert.equal(h.notices.at(-1)!.duration,10000);
+  result.resolve({duplicate:false,following:false,saveState:'pending',pendingReason:'note-unavailable'});await drain();
+  assert.equal(h.modal.isOpen,false);assert.equal(h.modal.closed,1);assert.match(h.notices.at(-1)!.text,/not saved yet.*not available/);assert.equal(h.notices.at(-1)!.duration,10000);
   assert.ok(!h.notices.some(notice=>notice.text.includes('imported and saved')));
 });
 for(const synchronous of [false,true])test(`import errors remain visible after automatic close (synchronous=${synchronous})`,async()=>{

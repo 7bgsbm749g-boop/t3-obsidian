@@ -173,7 +173,6 @@ export class LocalResponseManager {
         this.finish(runtime);
         continue;
       }
-      if(this.io.syncReady?.(runtime.request.notePath)===false)runtime.attemptRevision=undefined;
       if(loaded.length===1)this.finish(runtime);
     }
     this.blockedLocations=blocked;this.recoverClosed(stored);
@@ -238,7 +237,6 @@ export class LocalResponseManager {
     if(runtime.detached)return {saved:false,reason:'note-changed'};
     if(runtime.update?.questionsPending)return {saved:false,reason:'answer'};
     if(!runtime.update?.completionVerified)return {saved:false,reason:'verification'};
-    if(this.io.syncReady?.(runtime.request.notePath)===false)return {saved:false,reason:'sync'};
     return {saved:false,reason:runtime.pendingSave??'saving'};
   }
   /** A blocked save reports its state; active saves retain their checked write. */
@@ -259,7 +257,7 @@ export class LocalResponseManager {
   }
   private finish(runtime:Runtime){
     this.reportState(runtime);
-    if(this.closed||runtime.done||(runtime.stopped||runtime.detached)&&!this.io.savedResponse||runtime.restoring||runtime.work||this.now()<runtime.retryAt||this.io.syncReady?.(runtime.request.notePath)===false)return;
+    if(this.closed||runtime.done||(runtime.stopped||runtime.detached)&&!this.io.savedResponse||runtime.restoring||runtime.work||this.now()<runtime.retryAt)return;
     const update=runtime.update,proofOnly=!!this.io.savedResponse&&(runtime.stopped||runtime.detached);if((!update?.completionVerified||update.questionsPending)&&!proofOnly)return;
     const path=runtime.request.notePath,revision=this.noteVersions.get(path)??0;
     if(runtime.attemptRevision===revision)return;
@@ -303,10 +301,10 @@ export class LocalResponseManager {
       // missing anchors alone never prove a save or removal.
       const proofRequest=runtime.request;
       if(!this.closed&&!runtime.done&&proofRequest.notePath===path&&this.current(runtime)&&await this.io.savedResponse?.(proofRequest,current)){
-        if(await this.notes.read(path)===current&&!this.closed&&runtime.request===proofRequest&&this.current(runtime)&&this.io.syncReady?.(path)!==false)await this.settle(runtime,true,false);
+        if(await this.notes.read(path)===current&&!this.closed&&runtime.request===proofRequest&&this.current(runtime))await this.settle(runtime,true,false);
         continue;
       }
-      if(this.closed||runtime.stopped||runtime.done||runtime.detached||runtime.request.notePath!==path||!this.current(runtime)||!update?.completionVerified||update.questionsPending||this.io.syncReady?.(path)===false){runtime.pendingSave='note-changed';continue;}
+      if(this.closed||runtime.stopped||runtime.done||runtime.detached||runtime.request.notePath!==path||!this.current(runtime)||!update?.completionVerified||update.questionsPending){runtime.pendingSave='note-changed';continue;}
       let range=this.range(document,runtime.request.id);
       if(!range){this.detach(runtime);continue;}
       if(range.request.threadId!==runtime.request.threadId||(range.request.localMessageId??range.request.messageId)!==update.messageId){runtime.pendingSave='note-changed';continue;}
@@ -321,7 +319,7 @@ export class LocalResponseManager {
       document=document.slice(0,range.from)+body+document.slice(range.to);changes.push({runtime,update,request,body});
     }
     if(!changes.length)return;
-    const guard=()=>!this.closed&&changes.every(({runtime,update,request})=>!runtime.stopped&&!runtime.detached&&runtime.update===update&&runtime.request.notePath===path&&this.current(runtime)&&JSON.stringify(compactResponseBinding(runtime.request))===request)&&this.io.syncReady?.(path)!==false;
+    const guard=()=>!this.closed&&changes.every(({runtime,update,request})=>!runtime.stopped&&!runtime.detached&&runtime.update===update&&runtime.request.notePath===path&&this.current(runtime)&&JSON.stringify(compactResponseBinding(runtime.request))===request);
     if(diagnosticEnabled('response.save.prepared'))logEvent('response.save.prepared',{noteAlias:contentHash(path),bindingIds:changes.map(change=>change.runtime.request.id),attachments:changes.length,documentLength:current.length,proposedLength:document.length,elapsedMs:Date.now()-started});
     if(!guard()||!await this.notes.compareAndSet(path,current,document,guard)){for(const {runtime} of changes)runtime.pendingSave='note-changed';if(diagnosticEnabled('response.save.pending'))logEvent('response.save.pending',{noteAlias:contentHash(path),bindingIds:changes.map(change=>change.runtime.request.id),reason:'note-changed',attachments:changes.length});return;}
     for(const {runtime,body} of changes){
