@@ -625,3 +625,41 @@ test('unsent evidence reaches adoption before a settings notification and is nev
  manager.delivered(h.binding.id,{messageId:h.binding.messageId,requestedAt:h.binding.createdAt,sequence:5});
  await manager.register(h.binding);assert.equal(hints.at(-1),undefined);manager.dispose();h.manager.dispose();
 });
+
+
+test('a proven fresh send skips old receipts after durable registration, including synchronous recovery notifications',async()=>{
+ const h=fixture();let reads=0,ticks=0,durable=false;
+ h.io.loadLocalFinal=async()=>{reads++;};h.io.loadLocalCompletion=async()=>{reads++;};
+ const save=h.io.saveLocalBinding;h.io.saveLocalBinding=async(value:ResponseRequest)=>{await save(value);durable=true;h.manager.resume();};
+ await h.manager.register(h.binding,false,undefined,h.binding.messageId,{freshIdentity:true,explicitSend:true});await drain();
+ const runtime=(h.manager as any).jobs.get(h.binding.id);runtime.preview.tick=()=>{assert.equal(durable,true);ticks++;};
+ h.manager.tick();assert.equal(ticks,1);assert.equal(reads,0);assert.equal(runtime.restoring,false);assert.equal(h.manager.responses()[0].active,true);
+ assert.equal(JSON.stringify(h.records()).includes('freshIdentity'),false);h.manager.dispose();
+});
+for(const mode of ['retry','stored','resume','continuation','import','wrong-message'] as const)test(`fresh optimization retains receipt recovery for ${mode}`,async()=>{
+ const binding=request();if(mode==='continuation')binding.localMessageId='next-message';
+ if(mode==='import')binding.importTurn={turnId:'imported'} as any;
+ const h=fixture(binding,undefined,(mode==='stored'||mode==='resume')?updateResponseBindingData({},binding,'test'):{});let reads=0;
+ h.io.loadLocalFinal=async()=>{reads++;};h.io.loadLocalCompletion=async()=>{reads++;return {saved:true};};
+ if(mode==='resume'){await recover(h);}else await h.manager.register(binding,false,undefined,mode==='wrong-message'?'wrong':binding.messageId,{freshIdentity:mode!=='retry',explicitSend:true});
+ await drain();assert.equal(reads,2);assert.equal(h.manager.status(binding.id)?.finalSaved,true);assert.equal(h.writes(),0);h.manager.dispose();
+});
+test('Stop during a fresh durable registration prevents source opening and rejects dispatch preparation',async()=>{
+ const h=fixture();let release!:()=>void;h.io.saveLocalBinding=()=>new Promise<void>(resolve=>release=resolve);
+ const registration=h.manager.register(h.binding,false,undefined,h.binding.messageId,{freshIdentity:true,explicitSend:true});await drain();h.manager.stopLocally(h.binding.id);release();
+ await assert.rejects(registration,/stopped/);assert.equal(h.manager.has(h.binding.id),false);assert.equal(h.manager.health().readers,0);assert.equal(h.writes(),0);h.manager.dispose();
+});
+test('a disabled plugin during registration rejects preparation without watching or changing the note',async()=>{
+ const h=fixture();let release!:()=>void;const before=h.read();h.io.saveLocalBinding=()=>new Promise<void>(resolve=>release=resolve);
+ const registration=h.manager.register(h.binding,false,undefined,h.binding.messageId,{freshIdentity:true,explicitSend:true});await drain();h.manager.dispose();release();
+ await assert.rejects(registration,/stopped/);assert.equal(h.manager.has(h.binding.id),false);assert.equal(h.read(),before);
+});
+test('explicit priority survives Sending and unknown updates, then ends at the exact bound message',async()=>{
+ const h=fixture();await h.manager.register(h.binding,false,undefined,h.binding.messageId,{freshIdentity:true,explicitSend:true});
+ const priorities=(h.manager as any).explicitMessages;
+ assert.equal(priorities.get(h.binding.id),h.binding.messageId);
+ h.callbacks.get(h.binding.id)!({request:h.binding,messageId:'other',sequence:1,body:'',phase:'running'});
+ assert.equal(priorities.get(h.binding.id),h.binding.messageId);
+ h.manager.attempted(h.binding.id);assert.equal(priorities.get(h.binding.id),h.binding.messageId,'Uncertain dispatch keeps exact-run recovery priority');
+ h.emit('Current',false);assert.equal(priorities.has(h.binding.id),false);h.manager.stopLocally(h.binding.id);h.manager.dispose();
+});

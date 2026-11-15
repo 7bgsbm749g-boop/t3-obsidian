@@ -60,3 +60,13 @@ test('dispatch suppresses history only before a durable plan and releases that p
   assert.deepEqual(attempts,[h.binding.id],'An unconfirmed attempt must restore genuine recovery');
  }
 });
+
+
+test('fresh registration proof is opt-in for newly prepared sends and never replaces the unsent identity fence',async()=>{
+ for(const fresh of [false,true])for(const planned of [false,true]){
+  const h=await fixture(),registrations:any[][]=[];h.binding.messageId=commandId(h.request.id,'message');
+  h.plugin.deviceInline={register:async(...args:any[])=>registrations.push(args),attempted:()=>{}};
+  await assert.rejects(h.plugin.dispatch({...h.request,...(planned?{directPlan:{phase:'created'}}:{})},true,fresh),/Direct request storage is unavailable/);
+  assert.equal(registrations[0][3],fresh);assert.equal(registrations[0][2],planned?undefined:h.binding.messageId);
+ }
+});

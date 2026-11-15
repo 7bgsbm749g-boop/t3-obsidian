@@ -160,11 +160,12 @@ test('silent v2 sources recover after ten seconds, while live events and pings r
  h.time(19000);h.starts[0][2].item({kind:'event',event:{sequence:2,type:'thread.metadata-updated',payload:{title:'Current'}}} as any);
  h.time(20000);h.pool.tick();await drain();assert.equal(h.reads(),1);h.pool.dispose();
 });
-test('hung recovery expires, backs off, and fences late results without blocking other sources',async()=>{
+test('hung recovery aborts without reusing capacity until the read settles, then backs off',async()=>{
  const h=recoveryFixture();h.subscribe();await drain();h.pool.tick(true);await drain();assert.equal(h.reads(),1);
  h.time(30000);h.pool.tick();await drain();h.time(34999);h.pool.tick();await drain();assert.equal(h.reads(),1);
- h.time(35000);h.pool.tick();await drain();assert.equal(h.reads(),2);
+ h.time(35000);h.pool.tick();await drain();assert.equal(h.reads(),1,'Elapsed time cannot complete the old read');
  h.pending[0].resolve(h.snapshot(99));await drain();assert.equal(h.received.length,0);
+ h.time(40000);h.pool.tick();await drain();assert.equal(h.reads(),2);
  h.pending[1].resolve(h.snapshot(2));await drain();assert.equal(h.received.at(-1).snapshot.snapshotSequence,2);h.pool.dispose();
 });
 test('recovery bounds concurrent reads and cancels queued and late work on disposal',async()=>{
@@ -215,4 +216,38 @@ test('a pre-acceptance canonical failure cannot reinstate backoff over the ackno
  const watcher=pool.forSource('exact')('thread',async()=>({origin:'https://fixture',api:async()=>{if(++reads===1)return new Promise((_done,reject)=>fail=reject);return {thread:{id:'thread',projectId:'project',messages:[]},snapshotSequence:2};}}),{item:()=>{},reconnecting:()=>{}});
  await drain();now=10_001;pool.tick();await drain();assert.equal(reads,1);
  watcher.refresh?.();fail(Error('Pre-acceptance missing snapshot'));await drain();assert.equal(reads,2);watcher.stop();pool.dispose();
+});
+
+
+test('two stalled restorations leave one bounded explicit-send opening without timer capacity',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});
+ const h=fixture(),readers=[h.subscribe('old-one'),h.subscribe('old-two'),h.subscribe('old-three')];await drain();
+ t.mock.timers.tick(120_000);await drain();assert.equal(h.starts.length,2);assert.equal(h.pool.status().opening,2);
+ const send=(key:string)=>h.pool.forSource(key,false,()=>3)(key,h.access,{item:()=>{},reconnecting:()=>{}});
+ const first=send('send-one'),second=send('send-two');await drain();
+ assert.equal(h.starts.length,3);assert.equal(h.starts[2][0],'send-one');assert.equal(h.pool.status().opening,3);
+ t.mock.timers.tick(120_000);await drain();assert.equal(h.starts.length,3);
+ first.stop();await drain();assert.equal(h.starts.length,4);assert.equal(h.starts[3][0],'send-two');assert.equal(h.pool.status().opening,3);
+ second.stop();for(const reader of readers)reader.stop();h.pool.dispose();assert.equal(h.pool.status().opening,0);
+});
+test('a pending shared source rechecks explicit priority without creating a second watcher',async()=>{
+ const h=fixture();h.subscribe('one');h.subscribe('two');let priority=0;
+ const reader=h.pool.forSource('promoted',false,()=>priority)('promoted',h.access,{item:()=>{},reconnecting:()=>{}});await drain();assert.equal(h.starts.length,2);
+ priority=3;h.pool.priorityChanged();await drain();assert.equal(h.starts.length,3);assert.equal(h.starts[2][0],'promoted');
+ h.pool.forSource('promoted',false,()=>3)('promoted',h.access,{item:()=>{},reconnecting:()=>{}});await drain();assert.equal(h.starts.length,3);
+ reader.stop();h.pool.dispose();
+});
+test('explicit canonical recovery bypasses stalled optional reads but keeps all three slots real',async()=>{
+ const h=recoveryFixture();h.subscribe('old-one');h.subscribe('old-two');h.subscribe('old-three');await drain();
+ for(const start of h.starts)start[2].item({kind:'synchronized'});await drain();h.pool.tick(true);await drain();assert.deepEqual(h.requests,['old-one','old-two']);
+ h.subscribe('send',3);await drain();h.starts.at(-1)![2].item({kind:'synchronized'});h.pool.tick(true);await drain();assert.deepEqual(h.requests,['old-one','old-two','send']);
+ const before=h.received.length;h.time(120_000);h.pool.tick(true);await drain();assert.equal(h.reads(),3);assert.equal(h.pool.status().canonicalReads,3);
+ h.pending[2].resolve(h.snapshot(90));await drain();assert.equal(h.received.length,before,'Aborted late data cannot bind any run');assert.equal(h.reads(),3,'The freed reserved slot cannot admit optional recovery');
+ h.pool.dispose();for(const pending of h.pending)pending.resolve(h.snapshot());await drain();
+});
+test('canceling the final reader fences late recovery and retains occupied read capacity',async()=>{
+ const h=recoveryFixture(1),old=h.subscribe('old');await drain();h.pool.tick(true);await drain();old.stop();
+ h.subscribe('next');await drain();h.pool.tick(true);await drain();assert.equal(h.reads(),1);
+ h.pending[0].resolve(h.snapshot(90));await drain();assert.equal(h.received.length,0);assert.equal(h.reads(),2);
+ h.pending[1].resolve(h.snapshot());await drain();assert.equal(h.received.length,1);h.pool.dispose();
 });

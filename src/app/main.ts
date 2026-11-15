@@ -2814,7 +2814,7 @@ export default class SendToT3 extends Plugin {
       else await this.prepareNoteSteering(request,file.path,smart.text,undefined,undefined,steeringSource);
       await options?.onPrepared?.(request);
       this.settings.pending.push(request); await this.save();
-      const sentThreadId=await this.dispatch(request,options?.quiet);
+      const sentThreadId=await this.dispatch(request,options?.quiet,true);
       return {threadId:sentThreadId,request};
     } catch(e) {if(request)await this.failRequest(request,e,'preparation',startedAt);else this.recordSendFailure(undefined,e,'preparation',startedAt);const detail=`${unsavedMessage(e)} The send failed. See the send failure log.`;if(options?.throwOnError)throw new RequestDeliveryError(detail,false,Boolean(request));new Notice(`T3 Code: ${detail}`,12000);}
     finally {clearSmartSendPreparation(this.smartData());finishPreview();this.busy = false;}
@@ -3010,7 +3010,7 @@ export default class SendToT3 extends Plugin {
     const result=await this.executeAgentCommand({version:1,id:commandId(request.id,'reserve-thread-response'),kind:'reserve-thread-response',source:{threadId:request.threadId??commandId(request.id,'thread'),projectId:request.project.id,environmentId:request.connection.environmentId??await this.localInlineEnvironment()},messageId:commandId(request.id,'message'),responses:[...responses].map(([path,bindingId])=>({path,bindingId}))});
     if(!result.ok)throw Error('error' in result&&typeof result.error==='string'?result.error:'The vault connection machine could not reserve the reply stream.');
   }
-  async dispatch(request:Request,quiet=false) {
+  async dispatch(request:Request,quiet=false,freshIdentity=false) {
     const startedAt=Date.now();let stage='response-registration';
     await this.assertRequestMode(request);
     await this.captureNoteContext(request);
@@ -3036,7 +3036,7 @@ export default class SendToT3 extends Plugin {
       // No mutation can precede the durable command plan. A saved plan may
       // have been sent despite a lost acknowledgement: keep its recovery.
       const unsentMessageId=request.directPlan||acceptedRequestThread(request)?undefined:commandId(request.id,'message');
-      for(const binding of request.inlineBindings??[request.inlineHost])await this.deviceInline.register(binding,undefined,binding.messageId===unsentMessageId&&binding.threadId===(request.threadId??commandId(request.id,'thread'))&&binding.projectId===request.project.id&&binding.threadEnvironmentId===request.connection.environmentId?unsentMessageId:undefined);
+      for(const binding of request.inlineBindings??[request.inlineHost])await this.deviceInline.register(binding,undefined,binding.messageId===unsentMessageId&&binding.threadId===(request.threadId??commandId(request.id,'thread'))&&binding.projectId===request.project.id&&binding.threadEnvironmentId===request.connection.environmentId?unsentMessageId:undefined,freshIdentity);
     }else if(request.inlineHost)throw Error('This legacy reply was cancelled. Create a new local reply.');
     // The watcher must acknowledge these exact identities before T3 can expose
     // the new message. Synced settings can arrive after the canonical run.
