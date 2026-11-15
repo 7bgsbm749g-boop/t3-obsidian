@@ -81,7 +81,7 @@ function safeInsertionOffset(document:string,initialOffset:number):number {
 export function startMarker(id:string){return `<!-- t3-inline:start:${id} -->`;}
 export function endMarker(id:string){return `<!-- t3-inline:end:${id} -->`;}
 export function activeInlineIds(document:string):string[]{
-  return responseIds(document).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · (?:Sending…?|Working(?: for)?|Waiting for subagents|Reconnecting)\*\*/m.test(regionBody(document,id)?.body??''));
+  return responseIds(document).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · (?:Sending…?|Importing|Working(?: for)?|Waiting for subagents|Reconnecting)\*\*/m.test(regionBody(document,id)?.body??''));
 }
 export function failedInlineIds(document:string):string[]{
   return responseIds(document).filter(id=>/^(?:> \[!t3-progress\][+-] )?\*\*[^\n]+ · Error\*\*/m.test(regionBody(document,id)?.body??''));
@@ -95,10 +95,10 @@ export function renderInlineInput(text:string,label='You'):string {
   return `> [!t3-steering] ${heading}\n${closeOpenFence(visibleInlineInput(text)).split('\n').map(line=>line?`> ${line}`:'>').join('\n')}`;
 }
 
-export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string,mode:IntermediateMode='remove',timing?:RunTiming,phase:'running'|'sending'='running'):{text:string;bodyHash:string} {
+export function initialRegion(id:string,initialInput?:InitialInlineInput,threadTitle?:string,mode:IntermediateMode='remove',timing?:RunTiming,phase:'running'|'sending'|'importing'='running'):{text:string;bodyHash:string} {
   const status=`${mode==='collapse'?'> [!t3-progress]+ ':''}**${inlineThreadLabel(threadTitle)} · Working for**${timing?' '+runTimer(timing):''} <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>`;
   const contents=[...(initialInput?[renderInitialInput(initialInput,timing?.startedAt)]:[]),responseActivityRow()].join('\n\n');
-  const body=phase==='sending'?renderInlineTurn({messages:[],activities:[]},'',id,'sending',mode,undefined,undefined,initialInput,threadTitle,timing).trimEnd():status+(mode==='collapse'?'\n>\n'+contents.split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'\n\n'+contents);
+  const body=phase!=='running'?renderInlineTurn({messages:[],activities:[]},'',id,phase,mode,undefined,undefined,initialInput,threadTitle,timing).trimEnd():status+(mode==='collapse'?'\n>\n'+contents.split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'\n\n'+contents);
   // The final blank line also closes the quote in Obsidian Live Preview when
   // this response is the last block in the note.
   return {text:`\n${startMarker(id)}\n${body}\n${endMarker(id)}\n\n`,bodyHash:contentHash(body)};
@@ -106,7 +106,7 @@ export function initialRegion(id:string,initialInput?:InitialInlineInput,threadT
 
 /** Update a waiting header without rebuilding an unbound response's contents. */
 export function renameInlineHeader(body:string,title:string):string {
-  return body.replace(/^((?:> \[!t3-progress\][+-] )?\*\*)[^\n]*( · (?:Sending…?|Working(?: for)?|Reconnecting)\*\*)/m,(_match,prefix,suffix)=>`${prefix}${inlineThreadLabel(title)}${suffix}`);
+  return body.replace(/^((?:> \[!t3-progress\][+-] )?\*\*)[^\n]*( · (?:Sending…?|Importing|Working(?: for)?|Reconnecting)\*\*)/m,(_match,prefix,suffix)=>`${prefix}${inlineThreadLabel(title)}${suffix}`);
 }
 
 export function regionBody(document:string,id:string):{from:number;to:number;body:string}|null {
@@ -516,7 +516,7 @@ export function rememberInlineTurns(state:InlineThreadState,turnIds:string[],sav
   return result;
 }
 
-export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate:boolean|IntermediateMode=false,environmentId?:string,conversation?:{messages:InlineMessage[];steering:InlineSteering[];preserveHistory?:boolean},initialInput?:InitialInlineInput,threadTitle?:string,timing?:RunTiming,format:FinalAnswerFormat='formatted'):string {
+export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:string,phase:'sending'|'importing'|'running'|'reconnecting'|'complete'|'interrupted'|'error'|'cancelled'='running',keepIntermediate:boolean|IntermediateMode=false,environmentId?:string,conversation?:{messages:InlineMessage[];steering:InlineSteering[];preserveHistory?:boolean},initialInput?:InitialInlineInput,threadTitle?:string,timing?:RunTiming,format:FinalAnswerFormat='formatted'):string {
   // Transport retries keep the normal live display and its last known activity.
   if(phase==='reconnecting')phase='running';
   const mode=intermediateMode(keepIntermediate),retain=mode!=='remove';
@@ -553,9 +553,10 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const label=inlineThreadLabel(state.title??threadTitle);
   const delegated=delegatedWork(state,[turnId]),waiting=phase==='running'&&delegated.paused;
   const handoffError=phase==='error'&&delegated.handoffFailed?'Worktree continuation failed. The response output has been kept.':'';
-  const heading=`**${label} · ${phase==='sending'?'Sending':delegated.moving&&phase==='running'?'Moving to worktree':waiting?'Waiting for subagents':phase==='running'?'Working for':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
+  const pendingLabel=phase==='importing'?'Importing':'Sending';
+  const heading=`**${label} · ${phase==='sending'||phase==='importing'?pendingLabel:delegated.moving&&phase==='running'?'Moving to worktree':waiting?'Waiting for subagents':phase==='running'?'Working for':phase==='cancelled'?'Stopped':phase==='interrupted'?'Interrupted':'Error'}**`;
   const timer=timing?' '+runTimer(timing):'';
-  const spinner=['running','sending'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
+  const spinner=['running','sending','importing'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
   const displayedTurns=[...new Set([turnId,...all.map(message=>message.turnId).filter((id):id is string=>!!id)])];
   const htmlResults=responseHtmlResults(state.activities,displayedTurns,environmentId,threadId);
   const htmlBodies:Array<{body:string;at:number;sequence?:number}>=htmlResults.map(reference=>({body:renderHtmlResult(reference),at:Date.parse(state.activities.find(activity=>activity.kind==='response.html'&&activity.payload?.itemId===reference.itemId)?.createdAt??'')||0}));
@@ -587,7 +588,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const historyRows=[...workRows,
     ...timelineEmissions.filter(item=>item!==currentEmission&&(mode==='collapse'||!['response.plan','response.proposed-plan'].includes(item.kind)))].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
   const activityGroup=toolGroups.filter(group=>group.turnId===turnId).at(-1);
-  const renderBottom=(groupId?:string)=>spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):'Sending',currentTool?.tool.icon,groupId)}`:'';
+  const renderBottom=(groupId?:string)=>spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):pendingLabel,currentTool?.tool.icon,groupId)}`:'';
   const bottom=renderBottom(activityGroup?.id);
   // A late answer resumes below the completed transcript. Keep its indicator
   // beside the most recent input, including before any follow-up prose arrives.
