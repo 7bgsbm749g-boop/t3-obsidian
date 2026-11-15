@@ -4,6 +4,17 @@ import {scheduleTimeout,cancelTimeout} from '../shared/clock';
 import {logEvent,logFailure} from '../app/diagnostics';
 import {streamMemory} from '../app/stream-memory-diagnostics';
 import {responseTooLarge} from '../connection/t3-response-limits';
+import {applyThreadItem} from './inline-thread';
+import {isRecord} from '../shared/values';
+
+/** JSON object key order is not a thread change. Missing optional fields and
+ * undefined fields are equivalent; array order and actual values are not. */
+function sameThreadValue(a:unknown,b:unknown):boolean {
+  if(a===b)return true;
+  if(Array.isArray(a)||Array.isArray(b))return Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((value,index)=>sameThreadValue(value,b[index]));
+  if(isRecord(a)&&isRecord(b))return [...new Set([...Object.keys(a),...Object.keys(b)])].every(key=>sameThreadValue(a[key],b[key]));
+  return false;
+}
 
 type Watch=typeof watchThread;
 type Reader={callbacks:ThreadStreamCallbacks;targets?:()=>InlineHistoryTargets;replay?:Parameters<Watch>[5];completed:boolean;priority:()=>number};
@@ -101,7 +112,9 @@ export class SharedThreadStreams {
     for(const source of this.sources.values()){
       if(source.readAt!==undefined&&this.now()-source.readAt>=30_000)source.expire?.();
       if(!source.watch||source.fatal||source.retryAt>this.now())continue;
-      if(foreground||this.now()-source.freshAt>=10_000){source.recovery=true;this.refresh(source);}
+      // Enqueue the entire eligible set before assigning the limited slots so
+      // a later visible source can precede earlier background sources.
+      if(foreground||this.now()-source.freshAt>=10_000){source.recovery=true;if(!source.refresh)source.refreshWanted=true;}
     }
     this.drainRefresh();
   }
@@ -114,6 +127,15 @@ export class SharedThreadStreams {
     const waiting=[...this.sources.values()].filter(source=>source.refreshWanted&&!source.refresh&&source.retryAt<=this.now())
       .sort((a,b)=>Math.max(...[...b.readers].map(reader=>reader.priority()),0)-Math.max(...[...a.readers].map(reader=>reader.priority()),0));
     for(const source of waiting){if(this.refreshing>=this.maxOpening)break;this.startRefresh(source);}
+  }
+  private missedThreadUpdate(source:Source,snapshot:Awaited<ReturnType<typeof readInlineSnapshot>>){
+    if((snapshot.snapshotSequence??0)<=source.sequence||!source.snapshot)return false;
+    // Use the already bounded replay window only while checking a recovery.
+    // Do not retain another transcript or compare a global cursor as content.
+    let current=applyThreadItem({messages:[],activities:[]},source.snapshot).state;
+    for(const event of source.events)current=applyThreadItem(current,event).state;
+    const next=applyThreadItem(current,{kind:'snapshot',snapshot}).state;
+    return !sameThreadValue({...current,sequence:undefined},{...next,sequence:undefined});
   }
   private startRefresh(source:Source){
     source.refreshWanted=false;this.refreshing++;source.readAt=this.now();
@@ -130,7 +152,7 @@ export class SharedThreadStreams {
     });
     const work=Promise.race([read,expired]).then(snapshot=>{
       if(!source.readers.size||this.stopped||controller.signal.aborted)return;
-      const behind=(snapshot.snapshotSequence??0)>source.sequence;
+      const behind=recovery&&this.missedThreadUpdate(source,snapshot);
       source.attempt=0;source.retryAt=0;source.freshAt=this.now();
       this.deliver(source,{kind:'snapshot',snapshot});
       if(recovery&&behind&&source.watch&&source.readers.size){

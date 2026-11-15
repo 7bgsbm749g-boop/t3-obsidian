@@ -95,20 +95,40 @@ test('a slow shared recovery read survives elapsed time and stops on its last re
 });
 
 function recoveryFixture(limit=2){
- let now=0,reads=0,sequence=1;const starts:Array<Parameters<typeof watchThread>>=[],received:any[]=[],pending:Array<{resolve:(value:any)=>void;reject:(error:Error)=>void}>=[];
+ let now=0,reads=0,sequence=1;const starts:Array<Parameters<typeof watchThread>>=[],received:any[]=[],requests:string[]=[],pending:Array<{resolve:(value:any)=>void;reject:(error:Error)=>void}>=[];
  const pool=new SharedThreadStreams((...args)=>{starts.push(args);return {stop(){}};},limit,()=>now);
- const snapshot=(value=sequence)=>({thread:{id:'thread',projectId:'project',messages:[],activities:[]},snapshotSequence:value});
- const access=async()=>({origin:'https://synthetic.invalid',api:async()=>{reads++;return new Promise((resolve,reject)=>pending.push({resolve,reject}));}}) as ThreadAccess;
- const subscribe=(key='same',priority=0)=>pool.forSource(key,false,()=>priority)('thread',access,{item:item=>received.push(item),reconnecting:()=>{}},undefined,()=>({messageIds:['prompt'],turnIds:[]}),{afterSequence:()=>0,pollSnapshots:false});
- return {pool,starts,received,pending,subscribe,snapshot,reads:()=>reads,time:(value:number)=>now=value,sequence:(value:number)=>sequence=value};
+ const snapshot=(value=sequence)=>({thread:{id:'thread',projectId:'project',protocolVersion:2 as const,messages:[],activities:[]},snapshotSequence:value});
+ const access=(key:string)=>async()=>({origin:'https://synthetic.invalid',api:async()=>{reads++;requests.push(key);return new Promise((resolve,reject)=>pending.push({resolve,reject}));}}) as ThreadAccess;
+ const subscribe=(key='same',priority=0)=>pool.forSource(key,false,()=>priority)('thread',access(key),{item:item=>received.push(item),reconnecting:()=>{}},undefined,()=>({messageIds:['prompt'],turnIds:[]}),{afterSequence:()=>0,pollSnapshots:false});
+ return {pool,starts,received,requests,pending,subscribe,snapshot,reads:()=>reads,time:(value:number)=>now=value,sequence:(value:number)=>sequence=value};
 }
 test('foreground recovers one shared v2 feed immediately without waiting for a socket close',async()=>{
  const h=recoveryFixture();h.subscribe();await drain();h.subscribe();await drain();
  h.starts[0][2].item({kind:'snapshot',snapshot:h.snapshot()} as any);
  await drain();h.pending[0].resolve(h.snapshot());await drain();const before=h.reads();
  h.pool.tick(true);h.pool.tick(true);await drain();assert.equal(h.reads(),before+1);
- h.pending.at(-1)!.resolve(h.snapshot(3));await drain();
+ const recovered=h.snapshot(3);Object.assign(recovered.thread,{title:'Recovered thread update'});h.pending.at(-1)!.resolve(recovered);await drain();
  assert.equal(h.received.at(-1).snapshot.snapshotSequence,3);assert.equal(h.starts.length,2,'A proven stale subscription reconnects after recovery');h.pool.dispose();
+});
+test('global cursor advances alone do not reopen a healthy quiet source',async()=>{
+ const h=recoveryFixture();h.subscribe();await drain();h.starts[0][2].item({kind:'snapshot',snapshot:h.snapshot()} as any);
+ try{for(let n=1;n<=3;n++){
+  h.time(n*10000);h.pool.tick();await drain();assert.equal(h.reads(),n);
+  h.pending[n-1].resolve(h.snapshot(n*50));await drain();
+  assert.equal(h.received.at(-1).snapshot.snapshotSequence,n*50);assert.equal(h.starts.length,1,'Only the global cursor changed');
+ }}finally{h.pool.dispose();}
+});
+test('recovery compares canonical thread content with already delivered live events',async()=>{
+ const h=recoveryFixture();h.subscribe();await drain();h.starts[0][2].item({kind:'snapshot',snapshot:h.snapshot()} as any);
+ h.starts[0][2].item({kind:'event',event:{sequence:2,type:'thread.metadata-updated',payload:{title:'Already current'}}});
+ h.starts[0][2].item({kind:'event',event:{sequence:3,type:'thread.message-sent',payload:{messageId:'answer',role:'assistant',text:'Live progress',streaming:true}}});
+ h.time(10000);h.pool.tick();await drain();const current=h.snapshot(50);Object.assign(current.thread,{title:'Already current',messages:[{streaming:true,text:'Live progress',turnId:null,role:'assistant',id:'answer'}]});
+ try{h.pending[0].resolve(current);await drain();assert.equal(h.starts.length,1,'The live feed already delivered this thread update');}finally{h.pool.dispose();}
+});
+test('foreground recovery selects the visible source before earlier background sources',async()=>{
+ const h=recoveryFixture(2);h.subscribe('background-one');h.subscribe('background-two');h.subscribe('visible',2);await drain();
+ for(const start of h.starts)start[2].item({kind:'synchronized'});await drain();
+ try{h.pool.tick(true);await drain();assert.deepEqual(h.requests,['visible','background-one']);assert.equal(h.reads(),2);}finally{h.pool.dispose();}
 });
 test('silent v2 sources recover after ten seconds, while live events and pings remain distinct',async()=>{
  const h=recoveryFixture();h.subscribe();await drain();h.starts[0][2].item({kind:'snapshot',snapshot:h.snapshot()} as any);

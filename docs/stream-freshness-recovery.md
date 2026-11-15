@@ -6,14 +6,20 @@ source. The existing response tick also checks sources with no transcript data
 for ten seconds, including protocol v2 streams. Socket pings do not postpone this
 check. A successful quiet snapshot starts a fresh ten-second window.
 
-Recovery reads are shared across attached views, prioritize the visible note,
-and run at most two at a time. Each source has at most one in-flight read. A read
+Recovery reads are shared across attached views. Each tick queues all eligible
+sources before assigning its two read slots, so the visible note can precede
+background notes regardless of source insertion order. Each source has at most
+one in-flight read. A read
 that hangs for thirty seconds is expired by the existing tick; late results are
 fenced even when its transport ignores cancellation. Failures back off from five
 to thirty seconds. Completed-only history retains its bounded one-shot retry.
 Stopping the last reader or disposing the plugin cancels pending recovery.
 
-A snapshot that proves the live feed missed newer state refreshes the ordinary
+A higher global snapshot cursor alone does not prove a missed thread update.
+Recovery compares the canonical thread content with the already bounded cached
+snapshot and live events, ignoring cursor changes and object key order. It does
+not retain a second transcript. A snapshot that proves the live feed missed
+newer thread state refreshes the ordinary
 response projection, then reopens the subscription at the readers' current
 cursors. A current quiet stream keeps its socket. Exact-message bindings,
 sequence checks, canonical final-item verification and checked native note IO
