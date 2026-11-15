@@ -361,21 +361,22 @@ test('historical recovery receipts require exact note/source revisions and retai
   moveSmartNotes(data,'History.md','Moved.md');assert.equal(hasSmartRecovery(data,identity.key),false);
 });
 
-test('negative historical recovery checks persist and receipts remain bounded',async()=>{
+test('negative historical recovery checks do not persist and positive receipts remain bounded',async()=>{
   const {smartRecovery,hasSmartRecovery,rememberSmartRecovery}=await import('../src/notes/smart-send');
   const data=loadSmartSend(undefined),identity=smartRecovery(data,'Empty.md','User request','checked-source');
-  rememberSmartRecovery(data,identity,[]);assert.equal(hasSmartRecovery(loadSmartSend(data),identity.key),true);
-  for(let n=0;n<160;n++)rememberSmartRecovery(data,smartRecovery(data,'Empty.md','User request '+n,'checked-source'),[]);
+  rememberSmartRecovery(data,identity,[]);assert.equal(hasSmartRecovery(loadSmartSend(data),identity.key),false);
+  await rememberResponse(data,'Empty.md','history:answer','> Reply','','',0);const refs=Object.keys(data.responses);
+  for(let n=0;n<160;n++)rememberSmartRecovery(data,smartRecovery(data,'Empty.md','User request '+n,'checked-source'),refs);
   assert.equal(Object.keys(mergeSmartSend(data).recoveries??{}).length,128);
 });
 
 
 test('newer checked recovery receipts survive old settings and bounded-cache merges',async()=>{
  const {smartRecovery,rememberSmartRecovery}=await import('../src/notes/smart-send');
- const data=loadSmartSend(undefined),identity=smartRecovery(data,'History.md','User request','source');rememberSmartRecovery(data,identity,[]);
+ const data=loadSmartSend(undefined),identity=smartRecovery(data,'History.md','User request','source');await rememberResponse(data,'History.md','history:answer','> Reply','','',0);const refs=Object.keys(data.responses);rememberSmartRecovery(data,identity,refs);
  const old=loadSmartSend(JSON.parse(JSON.stringify(data)));old.recoveries![identity.key].checkedAt=1;data.recoveries![identity.key].checkedAt=2;
  assert.equal(mergeSmartSend(data,old).recoveries![identity.key].checkedAt,2);
- for(let n=0;n<150;n++){const next=smartRecovery(data,'History.md','Revision '+n,'source');rememberSmartRecovery(data,next,[]);data.recoveries![next.key].checkedAt=100+n;}
- const latest=smartRecovery(data,'History.md','Latest revision','source');rememberSmartRecovery(data,latest,[]);
+ for(let n=0;n<150;n++){const next=smartRecovery(data,'History.md','Revision '+n,'source');rememberSmartRecovery(data,next,refs);data.recoveries![next.key].checkedAt=100+n;}
+ const latest=smartRecovery(data,'History.md','Latest revision','source');rememberSmartRecovery(data,latest,refs);
  assert.ok(mergeSmartSend(data,old).recoveries![latest.key]);
 });

@@ -80,7 +80,7 @@ export function loadSmartSend(value:unknown):SmartSendData{
     const source=e.source;if(e.added.every(([,to])=>source.encoding!=='text'||to<=source.data.length))out.noteEdits![id]={noteId:e.noteId,source,added:e.added};
   }
   for(const [id,h] of entries(value.heads))if(isRecord(h)&&typeof h.noteId==='string'&&typeof h.destination==='string'&&packed(h.source)&&spans(h.covered)&&strings(h.parents)&&(h.bindings===undefined||strings(h.bindings)))out.heads[id]=h as unknown as SentText;
-  for(const [key,r] of entries(value.recoveries))if(isRecord(r)&&typeof r.checkedAt==='number'&&Number.isSafeInteger(r.checkedAt)&&typeof r.noteId==='string'&&typeof r.revision==='number'&&typeof r.documentHash==='string'&&typeof r.sourceHash==='string'&&strings(r.responses)&&r.responses.length<=256&&typeof r.proof==='string'&&key===contentHash(JSON.stringify([r.noteId,r.revision,r.documentHash,r.sourceHash]))) (out.recoveries??={})[key]=r as unknown as SmartRecovery;
+  for(const [key,r] of entries(value.recoveries))if(isRecord(r)&&typeof r.checkedAt==='number'&&Number.isSafeInteger(r.checkedAt)&&typeof r.noteId==='string'&&typeof r.revision==='number'&&typeof r.documentHash==='string'&&typeof r.sourceHash==='string'&&strings(r.responses)&&r.responses.length>0&&r.responses.length<=256&&typeof r.proof==='string'&&key===contentHash(JSON.stringify([r.noteId,r.revision,r.documentHash,r.sourceHash]))) (out.recoveries??={})[key]=r as unknown as SmartRecovery;
   trimRecoveries(out);
   out.retired=Array.isArray(value.retired)?value.retired.filter((id:unknown):id is string=>typeof id==='string'):[];return out;
 }
@@ -333,7 +333,7 @@ export function hasSmartRecovery(data:SmartSendData,key:string){
   return !!note&&!note.deleted&&note.revision===r.revision&&r.responses.every(id=>data.responses[id]?.noteId===r.noteId&&data.bodies[data.responses[id].body])&&r.proof===recoveryProof(data,r.responses);
 }
 export function rememberSmartRecovery(data:SmartSendData,identity:ReturnType<typeof smartRecovery>,responses:string[]){
-  if(responses.length>256)return;
+  if(!responses.length||responses.length>256)return;
   const {key,...receipt}=identity;
   (data.recoveries??={})[key]={...receipt,checkedAt:Date.now(),responses,proof:recoveryProof(data,responses)};trimRecoveries(data);
 }

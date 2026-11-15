@@ -162,6 +162,7 @@ export default class SendToT3 extends Plugin {
   private smartHistoryPublished=0;
   private smartRecovering=new Map<string,{signature:string;controller:AbortController;work:Promise<void>;background:boolean}>();
   private smartPrepareTimer?:number;
+  private smartRecoveryEmpty=new Set<string>();
   private responseBindingReplica:ResponseBindingData={};
   private pairedSessions:Record<string,PairedSession>={};
   cloudAccount:CloudAccount|null=null;
@@ -1132,7 +1133,7 @@ export default class SendToT3 extends Plugin {
     // Persist only a digest of non-secret ownership and source membership.
     // Device/account changes must not inherit another session's negative proof.
     return contentHash(JSON.stringify([this.deviceId,this.settings.vaultId,this.nativeAccount?.userId,this.nativeAccount?.sessionId,this.cloudAccount?.identity,
-      this.settings.paired.map(route=>[route.id,route.environmentId,route.url,route.managed,this.pairedSessions[route.id]?.accountId,this.pairedSessions[route.id]?.dpopKeyId]),
+      this.settings.paired.map(route=>[route.id,route.environmentId,route.url,route.managed,this.pairedSessions[route.id]?.accountId,this.pairedSessions[route.id]?.dpopKeyId,this.pairedSessions[route.id]?.expiresAt]),
       responseBindingRequests(this.settings.responseBindings??{}).filter(request=>request.notePath===path),previousNoteThreads(this.settings.noteThreads,path)]));
   }
   private prepareSmartReplies(file:TFile|null){
@@ -1148,8 +1149,8 @@ export default class SendToT3 extends Plugin {
   }
   private async recoverSmartReplies(path:string,document:string,background=false){
     if(this.stopped)throw Error('T3 Code is stopped.');
-    const fence=this.smartRecoveryFence(path),account=this.nativeAccount,cloud=this.cloudAccount,generation=this.cloudGeneration,settingsRevision=this.smartPreparationSettingsRevision;
-    const check=()=>{if(this.stopped||account!==this.nativeAccount||cloud!==this.cloudAccount||generation!==this.cloudGeneration||settingsRevision!==this.smartPreparationSettingsRevision||fence!==this.smartRecoveryFence(path))throw Error('Saved reply preparation changed. Try again.');};
+    const fence=this.smartRecoveryFence(path),account=this.nativeAccount,cloud=this.cloudAccount,generation=this.cloudGeneration;
+    const check=()=>{if(this.stopped||account!==this.nativeAccount||cloud!==this.cloudAccount||generation!==this.cloudGeneration||fence!==this.smartRecoveryFence(path))throw Error('Saved reply preparation changed. Try again.');};
     const data=this.smartData(),bindings=responseBindingRequests(this.settings.responseBindings??{}).filter(request=>request.notePath===path&&!hasResponseMarkers(document,request.id)&&!Object.keys(data.responses).some(id=>id.startsWith(request.id+':')));
     const sources=new Map<string,{environment:string;project:string;thread:string;bindings:string[]}>();
     for(const request of bindings){const key=JSON.stringify([request.threadEnvironmentId,request.projectId,request.threadId]),source=sources.get(key)??{environment:request.threadEnvironmentId,project:request.projectId,thread:request.threadId,bindings:[]};source.bindings.push(request.id);sources.set(key,source);}
@@ -1167,7 +1168,7 @@ export default class SendToT3 extends Plugin {
       const notice=background?undefined:new Notice('Checking saved replies before sending…',0);
       try{await previous.work;check();}finally{notice?.hide?.();}return;
     }
-    const pending=identities.filter(entry=>!hasSmartRecovery(data,entry.identity.key));
+    const pending=identities.filter(entry=>!hasSmartRecovery(data,entry.identity.key)&&!this.smartRecoveryEmpty.has(entry.identity.key));
     if(!pending.length)return;
     previous?.controller.abort();
     const controller=new AbortController(),signal=controller.signal;
@@ -1196,7 +1197,9 @@ export default class SendToT3 extends Plugin {
         if(!file||(view?this.notePromptDocument(view):await this.app.vault.read(file))!==document)throw Error('The note changed while checking saved replies. Try again.');
         requestAborted(signal);check();
         Object.assign(current,mergeSmartSend(current,staged));
-        rememberSmartRecovery(current,identity,Object.keys(staged.responses));
+        const responses=Object.keys(staged.responses);
+        rememberSmartRecovery(current,identity,responses);
+        if(!responses.length){this.smartRecoveryEmpty.add(identity.key);while(this.smartRecoveryEmpty.size>128)this.smartRecoveryEmpty.delete(this.smartRecoveryEmpty.values().next().value!);}
         // Publish proof and its provenance together. A failed write leaves the
         // gate intact on reload; it never authorizes an uncertain send.
         if(Object.keys(staged.responses).length)await this.save(true);
@@ -2417,7 +2420,7 @@ export default class SendToT3 extends Plugin {
     const login=await beginLogin();if(this.stopped||generation!==this.cloudGeneration)return;
     this.cloudLogin=login;this.cloudChanged?.();this.scheduleCloudPoll();
   }
-  cancelCloudLogin(){for(const entry of this.smartRecovering.values())entry.controller.abort();this.projectDiscovery?.invalidate();this.cloudGeneration++;this.refreshRun++;this.connecting=false;if(this.cloudTimer)clearTimeout(this.cloudTimer);this.cloudLogin=null;this.emailLogin=null;this.cloudChanged?.();}
+  cancelCloudLogin(){this.smartRecoveryEmpty.clear();for(const entry of this.smartRecovering.values())entry.controller.abort();this.projectDiscovery?.invalidate();this.cloudGeneration++;this.refreshRun++;this.connecting=false;if(this.cloudTimer)clearTimeout(this.cloudTimer);this.cloudLogin=null;this.emailLogin=null;this.cloudChanged?.();}
   private scheduleCloudPoll(){
     const login=this.cloudLogin;if(!login||this.stopped)return;const generation=this.cloudGeneration;
     this.cloudTimer=setTimeout(()=>{void this.pollCloudLogin(login,generation).catch(error=>logFailure('connection.account.poll',error));},Math.max(1000,login.nextPollAt-Date.now()));
@@ -3007,7 +3010,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
-  onunload(){if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void this.diagnostics?.close().catch(()=>{});void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async setThreadHiding(enabled:boolean){this.settings.hideObsidianThreads=enabled;await this.save();await this.syncThreadVisibility();}
   private syncThreadVisibility(force=false):Promise<void>{
     if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve();

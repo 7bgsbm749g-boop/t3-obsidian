@@ -966,7 +966,7 @@ test('a note changed without an editor event refuses late historical provenance'
 });
 
 test('historical recovery discards changed ownership and source membership during an awaited canonical read',async()=>{
- for(const change of ['account','vault','device','source','generation'] as const){
+ for(const change of ['account','vault','device','source','session'] as const){
   const h=await folderMenuHarness(),p=h.plugin,path='Fenced history.md',thread='history-thread';
   const document=`User request\n\n<!-- send-to-t3-fold-key ${thread} -->\n\n> Synthetic reply\n`;
   let release:()=>void=()=>{};
@@ -978,7 +978,7 @@ test('historical recovery discards changed ownership and source membership durin
   if(change==='vault')p.settings.vaultId='other';
   if(change==='device')p.deviceId='other';
   if(change==='source')p.settings.noteThreads[0].environmentId='other';
-  if(change==='generation')p.smartPreparationSettingsRevision++;
+  if(change==='session')p.pairedSessions.c.expiresAt++;
   release();await assert.rejects(work,/preparation changed/);
   assert.equal(Object.keys(p.smartData().responses).length,0,change);
   assert.equal(Object.keys(p.smartData().recoveries??{}).length,0,change);
