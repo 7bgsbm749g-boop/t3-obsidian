@@ -93,7 +93,7 @@ export class SharedThreadStreams {
   }
   private targets(source:Source):InlineHistoryTargets {
     const targets=[...source.readers].map(reader=>reader.targets?.());
-    return {messageIds:[...new Set(targets.flatMap(target=>target?.messageIds??[]))],turnIds:[...new Set(targets.flatMap(target=>target?.turnIds??[]))]};
+    return {messageIds:[...new Set(targets.flatMap(target=>target?.messageIds??[]))],turnIds:[...new Set(targets.flatMap(target=>target?.turnIds??[]))],recoveryVersion:JSON.stringify(targets.map(target=>target?.recoveryVersion))};
   }
   private deliver(source:Source,item:ThreadStreamItem){
     source.slot?.();
@@ -170,7 +170,7 @@ export class SharedThreadStreams {
     const read=source.access().then(async access=>{
       try{
         if(controller.signal.aborted)throw Error('T3 response recovery read was cancelled.');
-        return await readInlineSnapshot({...access,api:(path,payload)=>access.api(path,payload,{signal:controller.signal})},source.threadId,undefined,this.targets(source));
+        return await readInlineSnapshot({...access,api:(path,payload)=>access.api(path,payload,{signal:controller.signal})},source.threadId,undefined,()=>this.targets(source));
       }finally{await access.close?.();}
     });
     const work=Promise.race([read,expired]).then(snapshot=>{

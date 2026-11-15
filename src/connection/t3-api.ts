@@ -8,7 +8,7 @@ import {htmlRenderFromToolItem} from '../responses/html-results';
 
 interface Attachment {id:string;dataUrl?:string;type?:string;name?:string;mimeType?:string;sizeBytes?:number}
 
-export interface T3RequestOptions {beforeThreadCreate?:()=>void|Promise<void>;signal?:AbortSignal;compactImport?:boolean;onImportSnapshot?:(snapshot:import('./wire-types').ThreadSnapshot)=>void}
+export interface T3RequestOptions {beforeThreadCreate?:()=>void|Promise<void>;signal?:AbortSignal;compactImport?:boolean;continueHistory?:()=>boolean;onImportSnapshot?:(snapshot:import('./wire-types').ThreadSnapshot)=>void}
 export type AbortableT3Api=(path:string,payload?:unknown,options?:T3RequestOptions)=>Promise<unknown>;
 
 export function cancelledRequest(message='Request cancelled.'):Error{return typeof DOMException==='function'?new DOMException(message,'AbortError'):Object.assign(Error(message),{name:'AbortError'});}
@@ -213,7 +213,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       };
       const importedSnapshot=()=>{const recovered=recoveredSnapshot();return normalizeV2Snapshot({...recovered,projection:{...recovered.projection,turnItems:recovered.projection.turnItems.map(item=>htmlRenderFromToolItem(item)?{...item,input:undefined}:item),visibleTurnItems:[]}});};
       if(importOnly&&options?.onImportSnapshot)options.onImportSnapshot(importedSnapshot());
-      while(more){
+      while(more&&options?.continueHistory?.()!==false){
         if(!cursor||cursors.has(cursor))throw Error('T3 returned an invalid or repeated history cursor.');
         cursors.add(cursor);
         const page=readHistory(await raw(root+'/history?cursor='+encodeURIComponent(cursor)+(importOnly?'&view=conversation&deferWork=1':''),undefined,{...options,...(importOnly?{compactImport:true}:{})}));

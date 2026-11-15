@@ -15,7 +15,7 @@ export type ThreadAccessCloseReason='cache-expired'|'auth-rejected'|'host-dispos
 export interface ThreadAccess {origin:string;api:T3Api;expiresAt?:number;diagnosticRoute?:{routeId:string;environmentId:string;routeKind:'local'|'remote'};close?:(reason?:ThreadAccessCloseReason)=>Promise<void>|void;trace?:(event:'borrow-released'|'recovered',reason?:ThreadAccessCloseReason)=>void}
 export type ThreadAccessFactory=()=>Promise<ThreadAccess>;
 export interface ThreadStreamCallbacks {item:(item:ThreadStreamItem)=>void;reconnecting:(error:Error)=>void;failure?:(error:Error)=>void}
-export interface InlineHistoryTargets {messageIds:string[];turnIds:string[]}
+export interface InlineHistoryTargets {messageIds:string[];turnIds:string[];recoveryVersion?:string}
 export interface StreamDiagnosticContext {role?:'response'|'title'|'host'|'shared-response';bindingId?:string;environmentId?:string;projectId?:string;messageId?:string;turnId?:string}
 let streamMonitors=0;
 
@@ -25,16 +25,19 @@ export function needsInlineHistory(state:InlineThreadState,targets:InlineHistory
 
 /** Recent polling stays small. A stranded response can request the complete
  * canonical transcript, including prompts older than the polling window. */
-export async function readInlineSnapshot(access:ThreadAccess,threadId:string,projectId?:string,targets?:InlineHistoryTargets,full=false,importOnly=false,importRunId?:string):Promise<ThreadSnapshot> {
+export async function readInlineSnapshot(access:ThreadAccess,threadId:string,projectId?:string,targets?:InlineHistoryTargets|(()=>InlineHistoryTargets),full=false,importOnly=false,importRunId?:string):Promise<ThreadSnapshot> {
+  const currentTargets=()=>typeof targets==='function'?targets():targets,version=currentTargets()?.recoveryVersion;
+  const current=()=>version===undefined||currentTargets()?.recoveryVersion===version;
   const read=async(all:boolean)=>{
     const started=Date.now();
-    const snapshot=readThreadSnapshot(normalizeV2Snapshot(await access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true${all?'':'&turnLimit=20'}${importOnly?'&importRuns=true':''}${importRunId?'&importRunId='+encodeURIComponent(importRunId):''}`)));
+    const snapshot=readThreadSnapshot(normalizeV2Snapshot(await access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true${all?'':'&turnLimit=20'}${importOnly?'&importRuns=true':''}${importRunId?'&importRunId='+encodeURIComponent(importRunId):''}`,undefined,all&&typeof targets==='function'?{continueHistory:current}:undefined)));
     if(snapshot?.thread?.id!==threadId||projectId&&snapshot.thread.projectId!==projectId)throw Error('Waiting for the requested T3 thread.');
-    logEvent('response.source.snapshot',{threadId,fullHistory:all,snapshotSequence:snapshot.snapshotSequence,turns:Object.keys(snapshot.thread.turns??{}).length,messages:snapshot.thread.messages?.length,elapsedMs:Date.now()-started,targets:targets?.messageIds.length});
+    logEvent('response.source.snapshot',{threadId,fullHistory:all,snapshotSequence:snapshot.snapshotSequence,turns:Object.keys(snapshot.thread.turns??{}).length,messages:snapshot.thread.messages?.length,elapsedMs:Date.now()-started,targets:currentTargets()?.messageIds.length});
     return snapshot;
   };
   const snapshot=await read(full);
-  if(!full&&targets&&needsInlineHistory(applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state,targets)){logEvent('response.source.history-required',{threadId,targets:targets.messageIds.length});return read(true);}
+  const wanted=currentTargets();
+  if(!full&&current()&&wanted&&needsInlineHistory(applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state,wanted)){logEvent('response.source.history-required',{threadId,targets:wanted.messageIds.length});return read(true);}
   return snapshot;
 }
 
@@ -129,7 +132,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
         if(stopped||ended||access!==ready||polling||!pollEnabled())return;
         polling=true;const beforeActivity=activityVersion;
         try{
-          const snapshot=historyTargets?await readInlineSnapshot(ready,threadId,undefined,historyTargets()):readThreadSnapshot(normalizeV2Snapshot(await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true&turnLimit=20`)));
+          const snapshot=historyTargets?await readInlineSnapshot(ready,threadId,undefined,historyTargets):readThreadSnapshot(normalizeV2Snapshot(await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true&turnLimit=20`)));
           if(!stopped&&!ended&&access===ready&&snapshot?.thread){
             // The global snapshot cursor can advance for unrelated threads.
             // Keep only a small digest; still deliver every canonical snapshot
