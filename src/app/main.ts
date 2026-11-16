@@ -1842,10 +1842,10 @@ export default class SendToT3 extends Plugin {
     // Verify authorization before exposing a candidate to sends or writes.
     // A failed open can try another endpoint for the same machine; the caller
     // operation is never part of this fallback.
-    const key=this.unaryCredentialKey(paired,session);
+    let key=this.unaryCredentialKey(paired,session);
     const previousUnary=this.unaryOwners.get(paired.id);
     if(previousUnary&&previousUnary.key!==key)this.disposeUnaryOwner(paired.id);
-    const pool=this.unaryOwners.get(paired.id)?.pool??new T3UnaryRpcOwner();
+    let pool=this.unaryOwners.get(paired.id)?.pool??new T3UnaryRpcOwner();
     this.unaryOwners.set(paired.id,{key,pool});
     while(this.unaryOwners.size>16)this.disposeUnaryOwner(this.unaryOwners.keys().next().value!);
     const verified=(ownerKey:string,credential:PairedSession|undefined,owner:T3UnaryRpcOwner,force=false)=>this.verifiedConnections.open(ownerKey,async setupSignal=>{
@@ -1856,39 +1856,63 @@ export default class SendToT3 extends Plugin {
     let api:T3Api=await abortableRead(opening,signal);requestAborted(signal);
     if(this.stopped||this.unaryOwners.get(paired.id)?.pool!==pool){pool.dispose();throw Error('The connection owner changed.');}
     if(!Platform.isMobile&&localRoute(paired))this.eventLocalEnvironmentId=environmentId;
+    const current=async(signal?:AbortSignal)=>{
+      requestAborted(signal);
+      const route=this.settings.paired.find(candidate=>candidate.id===paired.id);
+      if(this.stopped||!route||route.url!==connection.url||route.environmentId!==environmentId)throw Error('The connection owner changed.');
+      const stored=this.pairedSessions[paired.id];
+      if(this.unaryOwners.get(paired.id)?.pool===pool&&(!stored||this.unaryCredentialKey(route,stored)===key)&&(session?.expiresAt??Infinity)>Date.now()+5000)return;
+      // Cached consumers can outlive activity-based renewal or owner eviction.
+      // Refresh BEFORE an operation; never retry a mutation sent on an old lease.
+      const credential=await abortableRead(this.sessionFor(paired.id),signal);requestAborted(signal);
+      const freshKey=this.unaryCredentialKey(route,credential),owner=this.unaryOwners.get(paired.id);
+      if(owner&&owner.key!==freshKey)this.disposeUnaryOwner(paired.id);
+      const freshPool=this.unaryOwners.get(paired.id)?.pool??new T3UnaryRpcOwner();
+      this.unaryOwners.set(paired.id,{key:freshKey,pool:freshPool});
+      while(this.unaryOwners.size>16)this.disposeUnaryOwner(this.unaryOwners.keys().next().value!);
+      const opening=verified(freshKey,credential,freshPool).catch(error=>{if(this.unaryOwners.get(paired.id)?.pool===freshPool)this.disposeUnaryOwner(paired.id);throw error;});
+      const freshApi=await abortableRead(opening,signal);requestAborted(signal);
+      const live=this.settings.paired.find(candidate=>candidate.id===paired.id);
+      if(this.stopped||this.unaryOwners.get(paired.id)?.pool!==freshPool||!live||live.url!==connection.url||live.environmentId!==environmentId){freshPool.dispose();throw Error('The connection owner changed.');}
+      session=credential;key=freshKey;pool=freshPool;api=freshApi;
+    };
     let renewing:Promise<void>|undefined;
     const renew=async(attemptedApi:typeof api)=>{
+      await current();
       if(api!==attemptedApi)return;
       renewing??=(async()=>{
         const started=Date.now(),fields={environmentId,routeId:paired.id,cause:'http-401',status:401};logEvent('connection.auth.renewing',fields);
         try{
           session=await this.sessionFor(paired.id,true);
           const freshKey=this.unaryCredentialKey(paired,session),current=this.unaryOwners.get(paired.id);
-          if(current&&current.key!==freshKey)this.disposeUnaryOwner(paired.id);
+          if(current&&(current.pool===pool||current.key!==freshKey))this.disposeUnaryOwner(paired.id);
           attemptedApi.disposeUnaryRpc?.();
           const freshPool=this.unaryOwners.get(paired.id)?.pool??new T3UnaryRpcOwner();
           this.unaryOwners.set(paired.id,{key:freshKey,pool:freshPool});
           api=await verified(freshKey,session,freshPool);
           if(this.stopped||this.unaryOwners.get(paired.id)?.pool!==freshPool){freshPool.dispose();throw Error('The connection owner changed.');}
+          key=freshKey;pool=freshPool;
           logEvent('connection.auth.recovered',{...fields,elapsedMs:Date.now()-started});
         }catch(error){logEvent('connection.auth.failed',{...fields,elapsedMs:Date.now()-started,error},'warning');throw error;}
       })().finally(()=>{renewing=undefined;});
       await renewing;
     };
     const routed:ThreadAccess['api']=async(path,payload,options)=>this.routeStatus.request(paired.id,async()=>{
+      let attemptedApi:T3Api|undefined;
       try{
-        const attemptedApi=api;
+        await current(options?.signal);attemptedApi=api;
         try{return await attemptedApi(path,payload,options);}catch(error){
           // Retrying reads can recover a revoked environment token. Dispatch is
           // never replayed; account expiry is handled by nativeCredential.
           const safe=payload===undefined||['/api/auth/websocket-ticket','/api/orchestration/turn-item','/api/assets/create-url'].includes(path);
           if(!(error instanceof T3HttpError)||error.status!==401||!paired.managed||!safe)throw error;
           await abortableRead(renew(attemptedApi),options?.signal);requestAborted(options?.signal);
-          return await api(path,payload,options);
+          attemptedApi=api;return await attemptedApi(path,payload,options);
         }
-      }catch(error){requestAborted(options?.signal);if(error instanceof T3HttpError&&(error.status===401||error.status===403)){this.verifiedConnections.delete(key);this.disposeUnaryOwner(paired.id);api.disposeUnaryRpc?.();}this.routeFailures.set(paired.id,message(error));throw error;}
+      }catch(error){requestAborted(options?.signal);if(error instanceof T3HttpError&&(error.status===401||error.status===403)&&api===attemptedApi){this.verifiedConnections.delete(key);if(this.unaryOwners.get(paired.id)?.pool===pool)this.disposeUnaryOwner(paired.id);api.disposeUnaryRpc?.();}this.routeFailures.set(paired.id,message(error));throw error;}
     });
     routed.acquireUnaryRpc=signal=>this.routeStatus.request(paired.id,async()=>{
+      await current(signal);
       const attemptedApi=api;
       let rpc:Awaited<ReturnType<typeof connectT3Rpc>>;
       try{rpc=await attemptedApi.acquireUnaryRpc!(signal);}catch(error){
@@ -1902,7 +1926,7 @@ export default class SendToT3 extends Plugin {
     routed.trackConnection=connection=>this.routeStatus.track(paired.id,connection);
     routed.cachedImportThreads=projectId=>api.cachedImportThreads?.(projectId);
     Object.defineProperty(routed,'importCacheIdentity',{get:()=>api.importCacheIdentity});
-    routed.prepareImportCatalog=signal=>api.prepareImportCatalog?.(signal)??Promise.resolve();
+    routed.prepareImportCatalog=async signal=>{await current(signal);await api.prepareImportCatalog?.(signal);};
     routed.watchImportThreads=(projectId,changed)=>api.watchImportThreads?.(projectId,changed)??(()=>{});
     return {origin:endpoint(paired.url),diagnosticRoute:{routeId:paired.id,environmentId,routeKind:localRoute(paired)?'local':'remote'},get expiresAt(){return session?.expiresAt;},api:routed};
   }

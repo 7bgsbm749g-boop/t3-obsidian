@@ -468,3 +468,14 @@ test('locally proven unsent adoption marks pending status before storage-trigger
  preview.pendingSend();preview.accepted('prompt');assert.deepEqual(wakes,['prompt']);assert.equal(issues.at(-1)?.kind,'reconnecting','acceptance keeps an actual offline error until data arrives');
  callbacks.item(h.snapshot());assert.equal(issues.at(-1),undefined);preview.dispose();h.preview.dispose();
 });
+
+test('a settled failed attempt ends exact-missing suppression without inventing acceptance',async()=>{
+ const {PendingThreadError}=await import('../src/conversations/thread-stream');
+ const h=fixture(false),issues:any[]=[];let callbacks!:ThreadStreamCallbacks;
+ const preview=new DirectInlinePreview(h.record,async()=>{throw Error('No transport');},()=>{},(_id,_access,cb)=>{callbacks=cb;return {stop(){}};},h.clock,issue=>issues.push(issue));
+ try{
+  preview.pendingSend('prompt');preview.tick(true);callbacks.reconnecting(new PendingThreadError('thread'));assert.equal(issues.length,0);
+  preview.pendingSend();callbacks.reconnecting(new PendingThreadError('thread'));
+  assert.equal(issues.at(-1)?.kind,'reconnecting');
+ }finally{preview.dispose();h.preview.dispose();}
+});

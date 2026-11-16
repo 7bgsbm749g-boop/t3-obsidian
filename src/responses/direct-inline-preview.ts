@@ -91,7 +91,7 @@ export class DirectInlinePreview {
   steeringProse(){return steeringBoundary(this.prose);}
   /** Only the sender can prove a command has not yet been attempted. This
    * hint is local and never survives reload or substitutes for run evidence. */
-  pendingSend(messageId?:string){if(messageId&&messageId!==this.unsentMessageId)this.recoveryVersion++;this.unsentMessageId=messageId;if(messageId)this.sending(messageId);}
+  pendingSend(messageId?:string){if(messageId&&messageId!==this.unsentMessageId)this.recoveryVersion++;this.unsentMessageId=messageId;if(messageId)this.sending(messageId);else this.pendingDelivery=undefined;}
   sending(messageId:string){if(!this.stopped&&!turnForMessage(this.state,messageId)&&!this.state.starts?.[messageId])this.pendingDelivery=messageId;}
   delivery(delivery:InlineStartRequest){
     if(this.stopped)return;

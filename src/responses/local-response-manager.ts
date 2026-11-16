@@ -146,7 +146,7 @@ export class LocalResponseManager {
     }
     if(this.closed||this.stoppedIds.has(request.id))throw Error('This response was stopped before registration completed.');
     this.documents.set(request.notePath,[{document:after,bindings:localResponseBindings(after,this.stored()),references:new Map(responseIds(after).map(id=>[id,this.index(this.stored()).get(id)]))}]);
-    const runtime=this.adopt(request);if(!explicitLocation&&!request.importTurn)runtime.preview.sending?.(request.localMessageId??request.messageId);if(importedSnapshot)runtime.preview.seedImport?.(importedSnapshot);this.watch(runtime,true);this.sources.priorityChanged();
+    const runtime=this.adopt(request);if(importedSnapshot)runtime.preview.seedImport?.(importedSnapshot);this.watch(runtime,true);this.sources.priorityChanged();
     }catch(error){this.explicitMessages.delete(request.id);this.attempted(request.id);throw error;}finally{this.freshRegistrations.delete(request.id);}
   }
   attempted(id:string){this.unsentMessages.delete(id);this.jobs.get(id)?.preview.pendingSend?.();}

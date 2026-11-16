@@ -98,3 +98,23 @@ test('active recovery keeps continuation and cancellation options; explicit hist
   assert.equal(options.at(-1).continueHistory(),true);version++;assert.equal(options.at(-1).continueHistory(),false);
  }
 });
+
+test('cancelling stalled tool hydration releases its lease without closing another reader or caching late output',async()=>{
+ let release!:(v:unknown)=>void,calls=0;
+ const item=tool('required',current.id),Socket=settingsSocket(undefined,undefined,()=>{calls++;return calls===1?new Promise(resolve=>release=resolve):{item:{...item,output:'Fresh',outputOmitted:false}};});
+ const api=t3Api(async path=>path==='/api/auth/websocket-ticket'?{ticket:'fixture'}:wire({turnItems:[item]}),'https://fixture',url=>new Socket(url) as any);
+ const controller=new AbortController();
+ try{
+  const other=await api.acquireUnaryRpc!();
+  const pending=readInlineSnapshot({origin:'https://fixture',api},'thread',undefined,undefined,false,false,undefined,controller.signal);
+  const rejected=assert.rejects(pending,/cancelled/);
+  for(let i=0;i<8&&!release;i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(calls,1);controller.abort(Error('Historical preparation cancelled'));await rejected;
+  assert.equal(other.closed,false);
+  const available=await Promise.all(Array.from({length:7},()=>api.acquireUnaryRpc!()));
+  await assert.rejects(api.acquireUnaryRpc!(),/concurrent/);for(const lease of available)lease.close();
+  release({item:{...item,output:'Late',outputOmitted:false}});await new Promise(resolve=>setImmediate(resolve));
+  const next=await readInlineSnapshot({origin:'https://fixture',api},'thread');
+  assert.equal(calls,2);assert.equal(data(next,item.id).output,'Fresh');other.close();
+ }finally{api.disposeUnaryRpc?.();}
+});

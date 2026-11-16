@@ -663,3 +663,16 @@ test('explicit priority survives Sending and unknown updates, then ends at the e
  h.manager.attempted(h.binding.id);assert.equal(priorities.get(h.binding.id),h.binding.messageId,'Uncertain dispatch keeps exact-run recovery priority');
  h.emit('Current',false);assert.equal(priorities.has(h.binding.id),false);h.manager.stopLocally(h.binding.id);h.manager.dispose();
 });
+
+test('saved or uncertain registrations never enable pending-creation suppression',async()=>{
+ for(const unsent of [undefined,'wrong-message']){
+  const h=fixture(),sending:string[]=[],hints:Array<string|undefined>=[];
+  const manager=new LocalResponseManager('test','vault',h.io,h.notes,undefined,()=>({
+   sending:(id:string)=>sending.push(id),pendingSend:(id?:string)=>hints.push(id),tick:()=>{},update:()=>{},delivery:()=>{},reconnect:()=>{},suspend:()=>{},dispose:()=>{},
+  }) as any);
+  try{
+   await manager.register(h.binding,false,undefined,unsent,{explicitSend:true});
+   assert.deepEqual(sending,[]);assert.ok(hints.every(id=>id===undefined));
+  }finally{manager.dispose();h.manager.dispose();}
+ }
+});

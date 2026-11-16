@@ -43,7 +43,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
     return {...message,attachments:message.attachments.map(a=>typeof a.dataUrl==='string'?attachments[index++]:a),
       ...(message.context?.records?{context:{...message.context,records:message.context.records.map(r=>({...r,...(typeof r.attachmentId==='string'&&ids.has(r.attachmentId)?{attachmentId:ids.get(r.attachmentId)}:{})}))}}:{})};
   }
-  async function senderMessages(snapshot:WireSnapshot,refresh=true){
+  async function senderMessages(snapshot:WireSnapshot,refresh=true,signal?:AbortSignal){
     const messages=snapshot.projection.messages;
     const ids=[...new Set<string>(messages.filter(m=>m.createdBy==='agent'&&uuid.test(m.senderThreadId??'')).map(m=>m.senderThreadId!))].slice(-256);
     const age=Date.now()-senderRefresh;
@@ -51,7 +51,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       senderRefresh=Date.now();
       try{
         // Shell metadata resolves exact IDs without reading other conversations.
-        const shell:unknown=await raw('/api/orchestration/shell');
+        const shell:unknown=await abortableRead(raw('/api/orchestration/shell',undefined,{signal}),signal);
         if(isRecord(shell)&&Array.isArray(shell.threads)){
           const threads=readThreadList({threads:[...(shell.threads as unknown[]),...(Array.isArray(shell.archivedThreads)?shell.archivedThreads as unknown[]:[])]});
           for(const id of ids){
@@ -61,13 +61,13 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
           }
           while(senderTitles.size>256)senderTitles.delete(senderTitles.keys().next().value!);
         }
-      }catch{/* Missing sender metadata must not block reply recovery. */}
+      }catch{requestAborted(signal);/* Missing sender metadata must not block reply recovery. */}
     }
     return messages.map(m=>m.createdBy==='agent'&&uuid.test(m.senderThreadId??'')?{...m,senderThreadTitle:senderTitles.get(m.senderThreadId!)??m.senderThreadTitle}:m);
   }
-  async function hydrate(snapshot:WireSnapshot|import('./wire-readers').MetadataSnapshot,deferred?:T3RequestOptions['deferHistoricalDetails']){
+  async function hydrate(snapshot:WireSnapshot|import('./wire-readers').MetadataSnapshot,deferred?:T3RequestOptions['deferHistoricalDetails'],signal?:AbortSignal){
     if(!('projection' in snapshot)||!snapshot.projection)return snapshot;
-    const messages=await senderMessages(snapshot,!deferred);
+    const messages=await senderMessages(snapshot,!deferred,signal);requestAborted(signal);
     const items=snapshot.projection.turnItems??[];
     const omitted=items.filter(i=>i.outputOmitted===true);
     // Handoff results can precede a long resumed run. Retain their lifecycle
@@ -87,16 +87,18 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
     const hydrated=new Map<string,WireTurnItem>();let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined;
     try{
       for(const item of needed){
+        requestAborted(signal);
         const key=JSON.stringify([snapshot.projection.thread.id,item.id,item.updatedAt]);
         if(outputs.has(key)){hydrated.set(key,outputs.get(key)!);continue;}
-        rpc??=await unary.acquire();
+        rpc??=await unary.acquire(signal);
         const result=await rpc.call('orchestration.getTurnItem',{threadId:snapshot.projection.thread.id,itemId:item.id,revision:item.updatedAt});
+        requestAborted(signal);
         if(isRecord(result)&&isRecord(result.item)&&result.item.id===item.id&&result.item.updatedAt===item.updatedAt){
           const full=result.item as unknown as WireTurnItem;hydrated.set(key,full);const characters=JSON.stringify(full).length;
           if(characters<=2_000_000){outputCharacters+=characters-(outputSizes.get(key)??0);outputs.set(key,full);outputSizes.set(key,characters);}
         }
       }
-    }catch{/* A missing tool detail must not block canonical reply recovery. */}
+    }catch{requestAborted(signal);/* A missing tool detail must not block canonical reply recovery. */}
     finally{rpc?.close();}
     while(outputs.size>256||outputCharacters>2_000_000){const key=outputs.keys().next().value!;outputs.delete(key);outputCharacters-=outputSizes.get(key)??0;outputSizes.delete(key);}
     return {...snapshot,projection:{...snapshot.projection,messages,turnItems:items.map(i=>hydrated.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??outputs.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??i)}};
@@ -207,7 +209,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
         normalized.thread.hasPendingApprovals||=pending.some(item=>!['user_input','user-input'].includes(item.kind));
         return normalized;
       }
-      if(!snapshot?.projection||path.includes('turnLimit=')&&!importRunId)return normalizeV2Snapshot(await hydrate(snapshot,options?.deferHistoricalDetails));
+      if(!snapshot?.projection||path.includes('turnLimit=')&&!importRunId)return normalizeV2Snapshot(await hydrate(snapshot,options?.deferHistoricalDetails,options?.signal));
       // Full recovery follows opaque cursors rather than asking for one
       // unbounded HTTP body. Keep the initial control-plane watermark so live
       // events committed during pagination still replay after this snapshot.
@@ -236,7 +238,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
         if(importOnly&&options?.onImportSnapshot&&more&&page.items.some(row=>row.item.type==='user_message'))options.onImportSnapshot(importedSnapshot());
       }
       if(importOnly)return importedSnapshot();
-      return normalizeV2Snapshot(await hydrate(recoveredSnapshot(),options?.deferHistoricalDetails));
+      return normalizeV2Snapshot(await hydrate(recoveredSnapshot(),options?.deferHistoricalDetails,options?.signal));
     }
     return normalizeV2Snapshot(await request(path,payload));
   };
