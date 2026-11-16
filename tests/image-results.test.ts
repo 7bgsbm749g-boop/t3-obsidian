@@ -85,3 +85,26 @@ test('partial snapshots with omitted historical output keep an already known ima
  assert.equal(next.activities.filter(item=>item.kind==='response.image').length,1);
  assert.equal(restoreInlineBindings({...next,activities:partial.thread.activities},inlineBindingCheckpoint(current)).activities.filter(item=>item.kind==='response.image').length,1);
 });
+
+test('omitted live tool output keeps known images in progress and recovery until replaced',()=>{
+ const imageTool=tool({toolName:'screenshot',input:{},output:[image]});
+ let current:InlineThreadState={...state(),activities:itemActivities(imageTool),sequence:1};
+ const update=(payload:any,sequence:number)=>normalizeV2StreamItem({kind:'event',sequence,event:{type:'turn-item.updated',payload}});
+ current=applyThreadItem(current,update({...imageTool,output:undefined,outputOmitted:true},2)).state;
+ assert.match(renderInlineTurn(current,'run','thread','running','collapse','env'),/```t3-image/);
+ assert.equal(inlineBindingCheckpoint(current).imageResults?.length,1);
+ const known=current;
+ for(const status of ['failed','interrupted','cancelled','rolled_back','expired']){
+  const failed=applyThreadItem(known,update({...imageTool,status,output:undefined,outputOmitted:true},3)).state;
+  assert.equal(failed.activities.filter(item=>item.kind==='response.image').length,0,status);
+ }
+ const replaced=applyThreadItem(known,update({...imageTool,output:[],outputOmitted:false},3)).state;
+ assert.equal(replaced.activities.filter(item=>item.kind==='response.image').length,0,'Full output can remove an old image');
+ const replacement=applyThreadItem(known,update({...imageTool,output:[{...image,mimeType:'image/jpeg'}]},3)).state;
+ assert.equal(replacement.activities.filter(item=>item.kind==='response.image').length,1);
+ assert.deepEqual(inlineBindingCheckpoint(replacement).imageResults![0].payload!.imageSources,[{kind:'output',index:0,mimeType:'image/jpeg'}]);
+ const viewedTool=tool({output:[image]});
+ const viewed={...state(),activities:itemActivities(viewedTool),sequence:1};
+ const omitted=applyThreadItem(viewed,update({...viewedTool,output:undefined,outputOmitted:true},2)).state;
+ assert.deepEqual(inlineBindingCheckpoint(omitted).imageResults,inlineBindingCheckpoint(viewed).imageResults,'Omission must not replace an output image with the view_image file fallback');
+});

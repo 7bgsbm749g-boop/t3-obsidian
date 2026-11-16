@@ -211,8 +211,11 @@ export function applyV2ControlEvent(state:InlineThreadState,input:unknown):Inlin
     }
     items=[item];
   }
-  const updates=items.flatMap(item=>itemActivities(item,requests)),ids=new Set(updates.map(item=>item.id));
-  const replacedImages=new Set(items.map(item=>`v2:${item.id}:images`));
+  // Omitted output is not evidence that a previously displayed image vanished.
+  // A full replacement or unsuccessful terminal status can retire that image.
+  const preservedImages=new Set(items.filter(item=>item.outputOmitted===true&&(!terminal(item.status)||item.status==='completed')).map(item=>`v2:${item.id}:images`));
+  const updates=items.flatMap(item=>itemActivities(item,requests)).filter(activity=>!preservedImages.has(activity.id)||!state.activities.some(known=>known.id===activity.id)),ids=new Set(updates.map(item=>item.id));
+  const replacedImages=new Set(items.map(item=>`v2:${item.id}:images`).filter(id=>!preservedImages.has(id)));
   return {...state,v2Requests:requests,v2Controls:controls,activities:[...state.activities.filter(activity=>!ids.has(activity.id)&&!replacedImages.has(activity.id)),...updates]};
 }
 
