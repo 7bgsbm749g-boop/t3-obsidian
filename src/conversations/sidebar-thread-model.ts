@@ -1,9 +1,15 @@
+import {acquireT3UnaryRpc} from '../connection/t3-rpc';
+import {readNewThreadDefaults} from './model-defaults';
+import {composerModels,type ComposerSettings} from './composer-models';
+import type {OutgoingAttachment,OutgoingContext} from '../connection/send-contracts';
 import {isRecord} from '../shared/values';
 import {readInlineSnapshot,type ThreadAccess} from './thread-stream';
 import {existingThreadTurn,threadIsActive} from './thread-target';
 import type {ThreadTarget} from './thread-display';
 import type {InlineSubagent,InlineThreadState} from './inline-thread';
 
+export interface SidebarProject {key:string;label:string;projectId:string;environmentId:string;workspaceRoot?:string}
+export interface SidebarSendOptions extends ComposerSettings {attachments?:OutgoingAttachment[];context?:OutgoingContext;delivery?:{intent:'auto'|'steer';mode:{type:'start_immediately'}|{type:'steer_active';targetRunId:string}}}
 export type SidebarKind='thread'|'side-chat'|'subagent';
 export interface SidebarTarget extends ThreadTarget {title:string;kind:SidebarKind;parent?:ThreadTarget}
 export function sidebarTarget(value:unknown):SidebarTarget|undefined {
@@ -29,14 +35,38 @@ export class SidebarThreadTransport {
     return snapshot;
   }
   snapshot(target:ThreadTarget){return this.use(target,access=>this.read(access,target));}
-  async send(target:SidebarTarget,text:string,commandId:string,messageId:string){
+  async send(target:SidebarTarget,text:string,commandId:string,messageId:string,options:SidebarSendOptions={}){
     if(target.kind==='subagent')throw Error('Subagent threads are read-only. Continue in the parent thread.');
-    if(!text.trim()||text.length>120_000)throw Error('Enter a message of at most 120,000 characters.');
+    if(!text.trim()&&!options.attachments?.length||text.length>120_000)throw Error('Enter a message of at most 120,000 characters.');
     return this.use(target,async access=>{
       const {thread}=await this.read(access,target);
-      const command=existingThreadTurn(thread,target,commandId,{messageId,role:'user',text,attachments:[]});
-      await access.api('/api/orchestration/dispatch',command);
+      const existing=thread.messages.find(message=>message.id===messageId);if(existing){if(existing.role!=='user'||existing.text!==text)throw Error('This message ID belongs to different content.');return;}
+      existingThreadTurn(thread,target,commandId,{messageId,role:'user',text,attachments:[]});
+      options.delivery??=thread.session?.activeTurnId?{intent:'steer',mode:{type:'steer_active',targetRunId:thread.session.activeTurnId}}:{intent:'auto',mode:{type:'start_immediately'}};
+      await access.api('/api/orchestration/dispatch',{type:'message.dispatch',commandId,threadId:target.threadId,messageId,text,attachments:options.attachments??[],createdBy:'user',creationSource:'web',...(options.context?{context:options.context}:{}),deliveryIntent:options.delivery.intent,dispatchMode:options.delivery.mode,...(options.modelSelection?{modelSelection:options.modelSelection}:{})});
     });
+  }
+  async defaults(project:SidebarProject){
+    const access=await this.access(project.environmentId);try{return await readNewThreadDefaults(access.api,access.origin,{id:project.projectId,workspaceRoot:project.workspaceRoot});}finally{await access.close?.();}
+  }
+  async catalog(target:ThreadTarget,cwd?:string){return this.use(target,async access=>{const rpc=await acquireT3UnaryRpc(access.api,access.origin);try{return composerModels(await rpc.call('server.getConfig',{}),cwd);}finally{rpc.close();}});}
+  async files(target:ThreadTarget,cwd:string,query:string){return this.use(target,async access=>{const rpc=await acquireT3UnaryRpc(access.api,access.origin);try{const result=await rpc.call('projects.searchEntries',{cwd,query:query.slice(0,256),limit:100,kind:'file'});return isRecord(result)&&Array.isArray(result.entries)?result.entries.flatMap(row=>isRecord(row)&&typeof row.path==='string'?[row.path]:[]):[];}finally{rpc.close();}});}
+  async configure(target:SidebarTarget,settings:ComposerSettings){
+    if(target.kind==='subagent')throw Error('Subagent threads are read-only.');
+    return this.use(target,async access=>{const {thread}=await this.read(access,target);for(const [field,type] of [['modelSelection','thread.model-selection.set'],['runtimeMode','thread.runtime-mode.set'],['interactionMode','thread.interaction-mode.set']] as const)if(settings[field]!==undefined&&JSON.stringify(settings[field])!==JSON.stringify(thread[field]))await access.api('/api/orchestration/dispatch',{type,commandId:this.uuid(),threadId:target.threadId,[field]:settings[field]});});
+  }
+  async launch(project:SidebarProject,text:string,commandId:string,threadId:string,messageId:string,options:SidebarSendOptions={}):Promise<SidebarTarget>{
+    const access=await this.access(project.environmentId);try{
+      const shell=await access.api('/api/orchestration/shell');const entries:unknown[]=isRecord(shell)&&Array.isArray(shell.projects)?shell.projects:[];const found=entries.find(row=>isRecord(row)&&row.id===project.projectId);
+      if(!isRecord(found)||typeof found.id!=='string')throw Error('This project is no longer available.');
+      const defaults=await readNewThreadDefaults(access.api,access.origin,{id:found.id,workspaceRoot:typeof found.workspaceRoot==='string'?found.workspaceRoot:undefined});
+      await access.api('/api/orchestration/launch',{commandId,threadId,projectId:project.projectId,title:text.slice(0,80)||'New thread',generateTitle:true,creationSource:'web',modelSelection:options.modelSelection??defaults.modelSelection,runtimeMode:options.runtimeMode??defaults.runtimeMode,interactionMode:options.interactionMode??'default',workspaceStrategy:defaults.workspaceStrategy??{type:'root'},initialMessage:{messageId,role:'user',text,attachments:options.attachments??[],...(options.context?{context:options.context}:{})}});
+      return {kind:'thread',threadId,projectId:project.projectId,environmentId:project.environmentId,title:text.slice(0,80)||'New thread'};
+    }finally{await access.close?.();}
+  }
+  async deleteSideChat(target:SidebarTarget){
+    if(target.kind!=='side-chat')throw Error('Choose a side chat to delete.');
+    return this.use(target,async access=>{await this.read(access,target);await access.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:this.uuid(),threadId:target.threadId});});
   }
   async fork(parent:SidebarTarget):Promise<SidebarTarget>{
     return this.use(parent,async access=>{

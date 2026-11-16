@@ -1,19 +1,28 @@
-import {Component,FuzzySuggestModal,ItemView,MarkdownRenderer,Notice,type App,type Plugin,type WorkspaceLeaf} from 'obsidian';
+import type {OutgoingContext} from '../connection/send-contracts';
+import {FuzzySuggestModal,ItemView,Modal,Notice,Setting,setIcon,type App,type Plugin,type WorkspaceLeaf} from 'obsidian';
+import {ChatTranscript} from './chat-transcript';
+import {ChatComposer} from './chat-composer';
+import {readComposerSettings,type ComposerModel,type ComposerSettings} from './composer-models';
+import type {SidebarSendOptions,SidebarProject} from './sidebar-thread-model';
 import {applyThreadItem,type InlineThreadState} from './inline-thread';
-import {watchThread,type ThreadAccess} from './thread-stream';
+import {watchThread,type ThreadStreamCallbacks,type ThreadAccess} from './thread-stream';
 import {SidebarThreadTransport,sidebarTarget,sidebarRunning,subagentTarget,type SidebarKind,type SidebarTarget} from './sidebar-thread-model';
 import type {ThreadChoice} from './thread-target';
-import {responseToolGroups} from '../responses/response-tools';
 import {isRecord} from '../shared/values';
 
 const TYPES:Record<SidebarKind,string>={thread:'t3-thread','side-chat':'t3-side-chat',subagent:'t3-subagent'};
 const LABELS:Record<SidebarKind,string>={thread:'T3 thread','side-chat':'Side chat',subagent:'Subagent'};
-interface ProjectChoice {key:string;label:string;projectId:string;environmentId:string}
+type ProjectChoice=SidebarProject;
 export interface SidebarHost {
+  watch?(target:SidebarTarget,callbacks:ThreadStreamCallbacks):{stop():void};
   access(environmentId:string):Promise<ThreadAccess>;
   projects():ProjectChoice[];
   threads(project:ProjectChoice):Promise<ThreadChoice[]>;
-  create(project:ProjectChoice,text:string):Promise<SidebarTarget>;
+  create?(project:ProjectChoice,text:string,options?:SidebarSendOptions):Promise<SidebarTarget>;
+  catalog?(target:SidebarTarget):Promise<ComposerModel[]>;
+  files?(target:SidebarTarget,cwd:string,query:string):Promise<string[]>;
+  renderRequests?(element:HTMLElement,target:SidebarTarget,state:InlineThreadState):()=>void;
+  created?(target:SidebarTarget):void;
   source():SidebarTarget|undefined;
   ready():boolean;
   uuid():string;
@@ -66,109 +75,104 @@ export class SidebarThreads {
   }
 }
 
-/** Three native workspace pages share one transcript, activity list and composer. */
+class DeleteSideChat extends Modal {
+  constructor(app:App,private remove:()=>Promise<void>){super(app);}
+  onOpen(){this.titleEl.setText('Delete side chat?');this.contentEl.createEl('p',{text:'This permanently deletes this side chat and its conversation history.'});new Setting(this.contentEl).addButton(button=>button.setButtonText('Cancel').onClick(()=>this.close())).addButton(button=>button.setButtonText('Delete side chat').setDestructive().onClick(async()=>{button.setDisabled(true);try{await this.remove();this.close();}catch(error){new Notice(error instanceof Error?error.message:String(error));button.setDisabled(false);}}));}
+}
+
+/** Native workspace shell; note streams own their own editor/save adapters. */
 export class SidebarThreadView extends ItemView {
   target?:SidebarTarget;
-  private project?:ProjectChoice;
-  private state:InlineThreadState={messages:[],activities:[]};
+  private project?:ProjectChoice;private state:InlineThreadState={messages:[],activities:[]};
   private monitor?:{stop():void};private epoch=0;private closed=true;private sending=false;private online=false;
-  private childrenKey='';private sequence=-1;
-  private draft='';private pending?:{text:string;commandId:string;messageId:string};
-  private transcript?:HTMLElement;private children?:HTMLElement;private status?:HTMLElement;private input?:HTMLTextAreaElement;private sendButton?:HTMLButtonElement;private stopButton?:HTMLButtonElement;private forkButton?:HTMLButtonElement;private backButton?:HTMLButtonElement;private title?:HTMLElement;
-  private rendered=new Map<string,{text:string;el:HTMLElement;component:Component}>();
+  private draftContext?:OutgoingContext;private draft='';private sequence=-1;private settings:ComposerSettings={};private root?:string;
+  private pending?:{text:string;commandId:string;messageId:string;threadId:string;options:SidebarSendOptions};
+  private transcript?:ChatTranscript;private composer?:ChatComposer;private status?:HTMLElement;private title?:HTMLElement;private backButton?:HTMLButtonElement;private breadcrumb?:HTMLElement;
+  private requests?:HTMLElement;private requestKey='';private disposeRequests?:()=>void;private parentBusy=false;
   constructor(leaf:WorkspaceLeaf,readonly owner:SidebarThreads,private kind:SidebarKind){super(leaf);}
   getViewType(){return TYPES[this.kind];}getDisplayText(){return this.target?.title??LABELS[this.kind];}getIcon(){return this.kind==='subagent'?'bot':this.kind==='side-chat'?'messages-square':'message-circle';}
-  getState(){return {target:this.target,project:this.project,draft:this.draft,pending:this.pending};}
+  getState(){return {target:this.target,project:this.project,draft:this.draft,pending:this.pending,settings:this.settings,context:this.composer?.options().context??this.draftContext};}
   async setState(state:Record<string,unknown>,result:import('obsidian').ViewStateResult){
     this.target=sidebarTarget(state.target);if(this.target?.kind!==this.kind)this.target=undefined;
     const project=state.project;this.project=isRecord(project)?this.owner.host.projects().find(choice=>choice.key===project.key):undefined;
     this.draft=typeof state.draft==='string'?state.draft.slice(0,120_000):'';
+    this.settings=readComposerSettings(state.settings);this.draftContext=isRecord(state.context)&&Array.isArray(state.context.records)?{version:1,records:state.context.records.filter(isRecord).slice(0,100)}:undefined;
     this.pending=isRecord(state.pending)&&typeof state.pending.text==='string'&&typeof state.pending.commandId==='string'&&typeof state.pending.messageId==='string'?state.pending as unknown as typeof this.pending:undefined;
     await super.setState(state,result);if(!this.closed){this.layout();this.connect();}
   }
   async onOpen(){this.closed=false;this.layout();this.connect();}
-  async onClose(){this.closed=true;this.epoch++;this.monitor?.stop();this.clearMessages();}
-  private clearMessages(){for(const item of this.rendered.values()){this.removeChild(item.component);item.component.unload();}this.rendered.clear();}
+  async onClose(){this.closed=true;this.epoch++;this.monitor?.stop();this.clearComponents();}
+  private clearComponents(){this.disposeRequests?.();this.disposeRequests=undefined;if(this.transcript)this.removeChild(this.transcript);if(this.composer)this.removeChild(this.composer);this.transcript=undefined;this.composer=undefined;this.requestKey='';}
+  private action(parent:HTMLElement,label:string,icon:string|undefined,run:()=>void|Promise<void>){const button=parent.createEl('button',{cls:icon?'clickable-icon t3-chat-icon':'t3-chat-text-action',attr:{type:'button','aria-label':label,title:label}});if(icon)setIcon(button,icon);else button.setText(label);button.addEventListener('click',()=>{void Promise.resolve().then(run).catch(error=>this.owner.report(error));});return button;}
   private layout(){
-    this.clearMessages();this.childrenKey='';this.contentEl.empty();this.contentEl.addClass('t3-sidebar-chat');
-    const header=this.contentEl.createDiv({cls:'t3-sidebar-header'});this.title=header.createEl('strong',{text:this.getDisplayText()});
-    if(this.target?.parent)this.button(header,'Parent',()=>this.owner.open({...this.target!.parent!,title:'Parent thread',kind:'thread'}));
-    if(this.kind==='side-chat')this.backButton=this.button(header,'Bring back',async()=>{await this.owner.transport.bringBack(this.target!);new Notice('Side chat added to the parent’s next message.');});
-    if(this.kind!=='subagent')this.forkButton=this.button(header,'Side chat',()=>this.owner.startSideChat(this.target!));
-    this.status=this.contentEl.createDiv({cls:'t3-sidebar-status',attr:{role:'status','aria-live':'polite'}});
-    this.children=this.contentEl.createDiv({cls:'t3-sidebar-children'});
-    this.transcript=this.contentEl.createDiv({cls:'t3-sidebar-transcript',attr:{role:'log','aria-label':`${LABELS[this.kind]} messages`}});
-    if(this.kind==='subagent')this.contentEl.createDiv({cls:'t3-sidebar-status',text:'Subagent view · continue in the parent thread.'});
-    else{
-      const composer=this.contentEl.createDiv({cls:'t3-sidebar-composer'});
-      this.input=composer.createEl('textarea',{attr:{'aria-label':'Message T3',placeholder:'Ask a follow-up…',rows:'3'}});this.input.value=this.draft;
-      this.input.addEventListener('input',()=>{this.draft=this.input!.value;this.app.workspace.requestSaveLayout();this.updateControls();});
-      this.input.addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&!event.isComposing){event.preventDefault();void this.send();}});
-      const actions=composer.createDiv({cls:'t3-sidebar-actions'});actions.createSpan({text:'No note stream added',cls:'t3-sidebar-hint'});
-      this.stopButton=this.button(actions,'Stop',()=>this.owner.transport.stop(this.target!));this.sendButton=this.button(actions,'Send',()=>this.send());this.sendButton.addClass('mod-cta');
+    this.clearComponents();this.contentEl.empty();this.contentEl.addClass('t3-sidebar-chat');
+    const header=this.contentEl.createDiv({cls:'t3-chat-header'});this.title=header.createSpan({cls:'t3-chat-title',text:this.getDisplayText()});
+    if(this.kind==='side-chat'){
+      this.backButton=this.action(header,'Bring back',undefined,async()=>{await this.owner.transport.bringBack(this.target!);new Notice('Side chat added to the parent’s next message.');});
+      this.action(header,'Delete side chat','trash-2',()=>new DeleteSideChat(this.app,async()=>{await this.owner.transport.deleteSideChat(this.target!);this.leaf.detach();}).open());
+    }else if(this.kind==='thread')this.action(header,'Start side chat','messages-square',()=>{if(this.target)return this.owner.startSideChat(this.target);});
+    this.action(header,'Close '+LABELS[this.kind],'x',()=>this.leaf.detach());
+    const body=this.contentEl.createDiv({cls:'t3-chat-body'});
+    if(this.target?.parent){const context=body.createDiv({cls:'t3-chat-context'});setIcon(context.createSpan(),'messages-square');this.breadcrumb=this.action(context,'Context from parent thread',undefined,()=>this.owner.open({...this.target!.parent!,title:'Parent thread',kind:'thread'}));}
+    this.status=body.createDiv({cls:'t3-chat-status',attr:{role:'status','aria-live':'polite'}});this.status.hidden=true;
+    const transcript=body.createDiv({cls:'t3-chat-transcript',attr:{role:'log','aria-label':`${LABELS[this.kind]} messages`}});
+    this.transcript=new ChatTranscript(this.app,transcript,error=>this.owner.report(error),child=>{const target=this.target&&subagentTarget(this.target,child);if(target)void this.owner.open(target).catch(error=>this.owner.report(error));});this.addChild(this.transcript);
+    this.requests=this.contentEl.createDiv({cls:'t3-chat-requests'});
+    if(this.kind!=='subagent'){
+      this.composer=new ChatComposer(this.app,this.contentEl.createDiv(),{uuid:()=>this.owner.host.uuid(),changed:text=>{this.draft=text;this.app.workspace.requestSaveLayout();},send:()=>this.send(),stop:()=>this.owner.transport.stop(this.target!),
+        models:async()=>{const target=this.target??this.draftTarget();if(!target)return [];return this.owner.host.catalog?this.owner.host.catalog(target):this.owner.transport.catalog(target,this.root??this.project?.workspaceRoot);},
+        configure:async settings=>{if(this.target)await this.owner.transport.configure(this.target,settings);this.settings=settings;this.app.workspace.requestSaveLayout();},
+        files:async query=>{const target=this.target??this.draftTarget(),cwd=this.root??this.project?.workspaceRoot;if(!target||!cwd)return [];return this.owner.host.files?this.owner.host.files(target,cwd,query):this.owner.transport.files(target,cwd,query);},
+      },this.draft);this.addChild(this.composer);this.composer.restoreContext(this.pending?.options?.context??this.draftContext);if(this.pending?.options?.attachments)this.composer.restoreAttachments(this.pending.options.attachments);
     }
     this.updateControls();
   }
-  private button(parent:HTMLElement,label:string,action:()=>void|Promise<void>){const button=parent.createEl('button',{text:label,attr:{type:'button','aria-label':label}});button.addEventListener('click',()=>{void Promise.resolve().then(action).catch(error=>this.owner.report(error));});return button;}
+  private draftTarget():SidebarTarget|undefined{return this.project?{kind:'thread',threadId:'draft',environmentId:this.project.environmentId,projectId:this.project.projectId,title:'New thread'}:undefined;}
+  private setStatus(text?:string){if(this.status){this.status.hidden=!text;this.status.setText(text??'');}}
   private connect(){
     this.monitor?.stop();this.monitor=undefined;const epoch=++this.epoch;this.state={messages:[],activities:[]};this.sequence=-1;this.online=false;
-    if(!this.target){this.status?.setText(this.project?'New thread · '+this.project.label:'Choose a thread with the T3 Code sidebar command.');this.updateControls();return;}
-    this.status?.setText('Connecting…');const target=this.target;
-    this.monitor=this.owner.watch(target.threadId,()=>this.owner.host.access(target.environmentId),{
+    if(!this.target){this.root=this.project?.workspaceRoot;this.setStatus(this.project?undefined:'Choose a connected T3 thread.');if(this.project&&!this.settings.modelSelection)void this.owner.transport.defaults(this.project).then(defaults=>{if(this.closed||epoch!==this.epoch||this.settings.modelSelection)return;this.settings=defaults;this.updateControls();void this.composer?.refreshModels().catch(()=>{});}).catch(()=>{});this.updateControls();return;}
+    this.setStatus('Connecting…');const target=this.target;
+    const callbacks:ThreadStreamCallbacks={
       item:item=>{
         if(this.closed||epoch!==this.epoch)return;
-        if(item.kind==='snapshot'&&(item.snapshot.thread.id!==target.threadId||item.snapshot.thread.projectId!==target.projectId||item.snapshot.thread.archivedAt||item.snapshot.thread.deletedAt)){this.online=false;this.status?.setText('This thread is no longer available.');this.monitor?.stop();this.updateControls();return;}
         const sequence=item.kind==='snapshot'?item.snapshot.snapshotSequence:item.kind==='event'?item.event.sequence:undefined;
         if(typeof sequence==='number'){if(sequence<this.sequence||item.kind==='event'&&sequence===this.sequence)return;this.sequence=sequence;}
-        if(item.kind==='snapshot')this.online=true;
-        this.state=applyThreadItem(this.state,item).state;this.render();
+        if(item.kind==='snapshot'){
+          const thread=item.snapshot.thread;if(thread.id!==target.threadId||thread.projectId!==target.projectId||thread.archivedAt||thread.deletedAt){this.online=false;this.setStatus('This thread is no longer available.');this.monitor?.stop();this.updateControls();return;}
+          const metadata=thread as typeof thread&{worktreePath?:string};this.settings={...this.settings,...readComposerSettings(metadata)};
+          this.root=metadata.worktreePath??this.owner.host.projects().find(project=>project.projectId===target.projectId&&project.environmentId===target.environmentId)?.workspaceRoot;
+          const first=!this.online;this.online=true;this.setStatus();if(first)void this.composer?.refreshModels().catch(()=>{});
+        }
+        if(item.kind==='event'&&item.event.type==='thread.metadata-updated')this.settings={...this.settings,...readComposerSettings(item.event.payload)};
+        this.state=applyThreadItem(this.state,item).state;this.transcript?.update(this.state);
+        const key=JSON.stringify(this.state.activities.filter(activity=>/approval|user-input/.test(activity.kind)));if(key!==this.requestKey){this.requestKey=key;this.disposeRequests?.();this.requests?.empty();if(this.requests)this.disposeRequests=this.owner.host.renderRequests?.(this.requests,target,this.state);}
+        this.updateControls();
       },
-      reconnecting:error=>{if(!this.closed&&epoch===this.epoch){this.online=false;this.status?.setText('Reconnecting · '+error.message);this.updateControls();}},
-      failure:error=>{if(!this.closed&&epoch===this.epoch){this.online=false;this.status?.setText(error.message);this.updateControls();}},
-    });
-    this.updateControls();
-  }
-  private render(){
-    if(!this.transcript||this.closed)return;
-    const pinned=this.transcript.scrollHeight-this.transcript.scrollTop-this.transcript.clientHeight<64;
-    const title=this.state.title;if(title&&this.target){this.target.title=title;this.title?.setText(title);}
-    this.status?.setText(!this.online?'Reconnecting…':sidebarRunning(this.state)?'Working…':'Ready');
-    const keys=new Set<string>();
-    for(const message of this.state.messages.filter(message=>message.role==='user'||message.role==='assistant').slice(-200)){
-      keys.add(message.id);let row=this.rendered.get(message.id);
-      if(!row){const el=this.transcript.createEl('article',{cls:'t3-sidebar-message '+(message.role==='user'?'is-user':'is-assistant')});el.createDiv({cls:'t3-sidebar-message-role',text:message.role==='user'?'You':'Assistant'});const body=el.createDiv({cls:'markdown-rendered'});const component=new Component();this.addChild(component);row={text:'',el:body,component};this.rendered.set(message.id,row);}
-      if(row.text!==message.text){row.text=message.text;row.component.unload();row.component.load();row.el.empty();void MarkdownRenderer.render(this.app,message.text,row.el,'',row.component).catch(error=>this.owner.report(error));}
-    }
-    for(const [key,row] of this.rendered)if(!keys.has(key)){this.removeChild(row.component);row.component.unload();row.el.parentElement?.remove();this.rendered.delete(key);}
-    const groups=responseToolGroups(this.state,Object.keys(this.state.turns??{})),latest=groups.at(-1);
-    const childrenKey=JSON.stringify([this.state.subagents,latest?.tools]);
-    if(childrenKey!==this.childrenKey){this.childrenKey=childrenKey;this.children?.empty();
-    for(const child of Object.values(this.state.subagents??{})){
-      const target=this.target&&subagentTarget(this.target,child);if(target&&this.children)this.button(this.children,`${child.title||'Subagent'} · ${child.status}`,()=>this.owner.open(target));
-    }
-    if(latest&&this.children){const details=this.children.createEl('details');details.createEl('summary',{text:`Activity · ${latest.tools.length} tools`});for(const tool of latest.tools)details.createDiv({text:`${tool.label} · ${tool.status}`});}
-    }
-    if(pinned)this.transcript.scrollTop=this.transcript.scrollHeight;
+      reconnecting:error=>{if(!this.closed&&epoch===this.epoch){this.online=false;this.setStatus('Reconnecting · '+error.message);this.updateControls();}},
+      failure:error=>{if(!this.closed&&epoch===this.epoch){this.online=false;this.setStatus(error.message);this.updateControls();}},
+    };
+    this.monitor=this.owner.host.watch?this.owner.host.watch(target,callbacks):this.owner.watch(target.threadId,()=>this.owner.host.access(target.environmentId),callbacks);
+    if(target.parent)void this.owner.transport.snapshot(target.parent).then(({thread})=>{if(this.closed||epoch!==this.epoch)return;this.parentBusy=sidebarRunning(thread);this.breadcrumb?.setText('Context from · '+(thread.title||'Parent thread'));this.updateControls();}).catch(()=>{});
     this.updateControls();
   }
   private updateControls(){
     const available=!!this.target&&this.online;
-    if(this.sendButton)this.sendButton.disabled=this.sending||!this.draft.trim()||!available&&!this.project;
-    if(this.stopButton)this.stopButton.disabled=this.sending||!available||!this.state.session?.activeTurnId;
-    if(this.forkButton)this.forkButton.disabled=this.sending||!available;
-    if(this.backButton)this.backButton.disabled=this.sending||!available||sidebarRunning(this.state)||!Object.values(this.state.turns??{}).some(turn=>turn.state==='completed');
+    if(this.state.title&&this.target){this.target.title=this.state.title;this.title?.setText(this.state.title);}
+    this.composer?.update(available||!!this.project,sidebarRunning(this.state),this.sending,this.settings,!!this.pending);
+    if(this.backButton){this.backButton.disabled=this.sending||!available||this.parentBusy||sidebarRunning(this.state)||!Object.values(this.state.turns??{}).some(turn=>turn.state==='completed');this.backButton.title=this.parentBusy?'Available when the parent thread is idle.':'Add a finished side chat to the parent’s next message.';}
   }
   async send(){
-    if(this.sending||!this.draft.trim()||this.kind==='subagent'||!this.target&&!this.project)return;
-    this.sending=true;this.updateControls();const text=this.draft;
+    const text=this.draft,options:SidebarSendOptions=this.composer?.options()??this.settings;
+    if(this.sending||!text.trim()&&!options.attachments?.length||this.kind==='subagent'||!this.target&&!this.project)return;
+    this.sending=true;this.updateControls();
     try{
-      if(this.target){
-        if(!this.online)throw Error('Wait for this thread to reconnect.');
-        if(this.pending&&this.pending.text!==text)throw Error('The previous send is unconfirmed. Retry its unchanged draft before sending another message.');
-        this.pending??={text,commandId:this.owner.host.uuid(),messageId:this.owner.host.uuid()};this.app.workspace.requestSaveLayout();
-        await this.owner.transport.send(this.target,text,this.pending.commandId,this.pending.messageId);this.pending=undefined;
-      }else{this.target=await this.owner.host.create(this.project!,text);this.project=undefined;this.connect();}
-      this.draft='';if(this.input)this.input.value='';this.app.workspace.requestSaveLayout();
+      if(this.target&&!this.online)throw Error('Wait for this thread to reconnect.');
+      if(this.pending&&(this.pending.text!==text||JSON.stringify(this.pending.options?.attachments??[])!==JSON.stringify(options.attachments??[])))throw Error('The previous send is unconfirmed. Retry its unchanged draft before sending another message.');
+      this.pending??={text,commandId:this.owner.host.uuid(),messageId:this.owner.host.uuid(),threadId:this.owner.host.uuid(),options};this.app.workspace.requestSaveLayout();
+      if(this.target)await this.owner.transport.send(this.target,text,this.pending.commandId,this.pending.messageId,this.pending.options);
+      else{this.target=this.owner.host.create?await this.owner.host.create(this.project!,text,options):await this.owner.transport.launch(this.project!,text,this.pending.commandId,this.pending.threadId,this.pending.messageId,this.pending.options);this.project=undefined;this.owner.host.created?.(this.target);this.connect();}
+      this.pending=undefined;this.draftContext=undefined;this.draft='';this.composer?.clear();this.app.workspace.requestSaveLayout();
     }catch(error){this.owner.report(error);}finally{this.sending=false;this.updateControls();}
   }
 }

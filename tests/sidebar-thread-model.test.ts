@@ -26,7 +26,7 @@ test('target restoration and subagents require exact identities and a local chil
 });
 test('sidebar send checks fresh identity and sends only typed text with stable IDs and no note destinations',async()=>{
  const f=fixture();await f.transport.send(target,'Exact follow-up','command','message');
- const command=f.dispatch()[0].body;assert.equal(command.threadId,'parent');assert.equal(command.message.text,'Exact follow-up');assert.equal(command.commandId,'command');assert.equal(command.message.messageId,'message');assert.deepEqual(command.message.attachments,[]);assert.deepEqual(f.closed,['env']);
+ const command=f.dispatch()[0].body;assert.equal(command.threadId,'parent');assert.equal(command.text,'Exact follow-up');assert.equal(command.commandId,'command');assert.equal(command.messageId,'message');assert.deepEqual(command.attachments,[]);assert.deepEqual(f.closed,['env']);
  f.threads.get('parent')!.projectId='wrong';await assert.rejects(f.transport.send(target,'Do not send','command2','message2'),/requested T3 thread/);assert.equal(f.dispatch().length,1);assert.equal(f.closed.length,2);
 });
 test('archived, deleted, pending-input and read-only child threads reject mutation',async()=>{
@@ -45,4 +45,16 @@ test('bring back requires idle parent and a finished child reply; stop uses curr
  f.threads.get('parent')!.session={status:'running',activeTurnId:'active'};
  await assert.rejects(f.transport.bringBack(side),/finish/);await f.transport.stop(target);assert.equal(f.dispatch().at(-1).body.runId,'active');
  f.threads.get('parent')!.session={status:'ready',activeTurnId:null};await f.transport.bringBack(side);const merged=f.dispatch().at(-1).body;assert.equal(merged.type,'thread.merge_back');assert.equal(merged.targetThreadId,'parent');assert.deepEqual(merged.sourcePoint,{type:'run',runId:'done'});
+});
+
+test('composer sends attachments and selected model, and steers the exact active app run',async()=>{
+ const f=fixture();f.threads.get('parent')!.session={status:'running',activeTurnId:'active'};
+ const attachment={id:'image',name:'synthetic.png',mimeType:'image/png',dataUrl:'data:image/png;base64,aA=='};
+ await f.transport.send(target,'Follow up','command','message',{attachments:[attachment],modelSelection:{instanceId:'codex',model:'model',options:[{id:'reasoningEffort',value:'high'}]}});
+ const command=f.dispatch()[0].body;assert.equal(command.type,'message.dispatch');assert.deepEqual(command.dispatchMode,{type:'steer_active',targetRunId:'active'});assert.equal(command.deliveryIntent,'steer');assert.deepEqual(command.attachments,[attachment]);assert.equal(command.modelSelection.options[0].value,'high');
+});
+test('model, effort, permissions and plan changes use the stock thread controls; deletion is side-chat scoped',async()=>{
+ const f=fixture();await f.transport.configure(target,{modelSelection:{instanceId:'codex',model:'model'},runtimeMode:'approval-required',interactionMode:'plan'});
+ assert.deepEqual(f.dispatch().map(call=>call.body.type),['thread.model-selection.set','thread.runtime-mode.set','thread.interaction-mode.set']);
+ await assert.rejects(f.transport.deleteSideChat(target),/side chat/);const side=await f.transport.fork(target);await f.transport.deleteSideChat(side);assert.equal(f.dispatch().at(-1).body.type,'thread.delete');assert.equal(f.dispatch().at(-1).body.threadId,side.threadId);
 });

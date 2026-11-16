@@ -47,8 +47,9 @@ under **Manage T3 streams in this note…**.
 
 From a linked note or an open sidebar conversation, use **Start side chat in
 right sidebar**. This creates a hidden T3 side chat from the parent’s latest
-stable point. **Parent** returns to the source conversation. **Bring back** adds
-a finished side chat to the idle parent’s next message.
+stable point. The context breadcrumb returns to the source conversation.
+**Bring back** adds a finished side chat to the idle parent’s next message.
+The trash control deletes the side chat after confirmation.
 
 Use **View subagent in right sidebar…**, or a child button in a sidebar thread,
 to inspect a subagent that exposes a local child thread. This view is read-only;
@@ -60,6 +61,15 @@ the tab to stop its live reader. Closing a side chat tab does not delete its T3
 conversation. Saved layouts retain open targets and unsent drafts. The sidebar
 shows the most recent 200 messages. Approval and question requests still use the
 existing T3 controls; the sidebar does not bypass them.
+
+The transcript shares the note stream’s work, tool, and activity presentation
+and its conversation connection. Prompts appear as right-aligned bubbles;
+completed work folds above the answer. The composer provides image attachments,
+provider/model and reasoning options, permissions, plan mode when supported,
+and file/skill/command suggestions. Enter sends, Shift+Enter inserts a new line,
+and an empty composer shows Stop while a reply runs. Voice input is available
+only on devices with browser speech recognition; T3’s remote transcription
+service is not yet connected.
 
 ## Let agents edit notes
 

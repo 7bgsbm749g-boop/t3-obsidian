@@ -1,3 +1,6 @@
+import {SharedThreadStreams} from '../conversations/shared-thread-stream';
+import {pendingQuestions} from '../interaction/questions';
+import {pendingApprovals,approvalOptions} from '../interaction/approvals';
 import {SidebarThreads,type SidebarHost} from '../conversations/sidebar-thread-view';
 import type {SidebarTarget} from '../conversations/sidebar-thread-model';
 import {savedResponseProof} from '../responses/saved-response-proof';
@@ -200,6 +203,7 @@ export default class SendToT3 extends Plugin {
   private cloudGeneration=0;
   private cloudRefreshing:Promise<CloudAccount>|undefined;
   private readonly localKey = 'send-to-t3-code-device-v1';
+  private conversationSources=new SharedThreadStreams();
   private sidebarThreads?:SidebarThreads;
   private readonly chatDraftKey = 'send-to-t3-code-chat-draft-v1';
   private deviceId = '';
@@ -456,19 +460,24 @@ export default class SendToT3 extends Plugin {
     await this.codebase.install();
     this.sidebarThreads=new SidebarThreads(this.app,this,{
       access:environmentId=>this.inlineThreadAccess(environmentId),uuid:randomId,
+      watch:(target,callbacks)=>{const key=JSON.stringify([target.environmentId,target.projectId,target.threadId]);return this.conversationSources.forSource(key,false,()=>3)(target.threadId,()=>this.conversationSources.access(()=>this.inlineThreadAccess(target.environmentId),key),callbacks);},
       ready:()=>!this.stopped&&!this.chatReadinessError(),
-      projects:()=>this.projects().flatMap(project=>{const environmentId=this.connection(project).environmentId;return environmentId?[{key:projectKey(project),label:project.title,projectId:project.id,environmentId}]:[];}),
+      projects:()=>this.projects().flatMap(project=>{const environmentId=this.connection(project).environmentId;return environmentId?[{key:projectKey(project),label:this.projectChoiceLabel(project),projectId:project.id,environmentId,workspaceRoot:project.workspaceRoot}]:[];}),
       threads:async choice=>{const project=this.projects().find(project=>projectKey(project)===choice.key);if(!project)throw Error('This project is no longer available.');return projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id);},
-      create:async(choice,text)=>{
-        let target:SidebarTarget|undefined;
-        await this.sendChat(text,undefined,{newThread:true,projectOverrideKey:choice.key,expectedProjectKey:choice.key,barePrompt:true,onPrepared:request=>{target={kind:'thread',title:request.title,threadId:request.threadId??commandId(request.id,'thread'),projectId:request.project.id,environmentId:request.connection.environmentId??choice.environmentId};}});
-        if(!target)throw Error('The new thread was not confirmed.');return target;
-      },
+      created:target=>{if(this.settings.hideObsidianThreads===true){this.threadVisibility?.queue({id:randomId(),threadId:target.threadId,projectId:target.projectId,environmentId:target.environmentId});void this.syncThreadVisibility(true);}},
       source:()=>this.sidebarNoteSource(),
+      renderRequests:(element,target,state)=>{
+        const disposers:Array<()=>void>=[];
+        this.questions?.observe(target.environmentId,target.threadId,state.activities,state.sequence);
+        for(const request of pendingQuestions(state.activities))if(this.questions){const identity={environmentId:target.environmentId,threadId:target.threadId,requestId:request.requestId},row=element.createDiv({cls:'t3-chat-request'});row.createDiv({text:request.questions.map(question=>question.question).join(' ')});const control=questionButton(this.questions,identity,value=>this.openQuestion(value),element.ownerDocument);row.appendChild(control.button);disposers.push(control.unsubscribe);}
+        for(const request of pendingApprovals(state.activities))if(this.approvals){const identity={environmentId:target.environmentId,threadId:target.threadId,requestId:request.requestId},row=element.createDiv({cls:'t3-chat-request'});row.createDiv({text:request.summary});for(const option of approvalOptions(request.options)){const control=approvalButton(this.approvals,identity,option.decision,element.ownerDocument);row.appendChild(control.button);disposers.push(control.unsubscribe);}}
+        return ()=>{for(const dispose of disposers)dispose();};
+      },
     } satisfies SidebarHost);
     this.sidebarThreads.install();
     }
     this.deviceInline=new DeviceResponseManager(this.inlineActor,this.settings.vaultId,{
+      threadSources:this.conversationSources,
       ...deviceNoteIO(this.app),
       localFinalNotes:deviceFinalNoteIO(this.app,()=>!this.stopped),
       rememberResponse:async(request,body,before,after,offset)=>{await this.retainSmartChange(()=>rememberResponse(this.smartData(),request.notePath,request.id,body,before,after,offset));},
@@ -3168,7 +3177,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
-  onunload(){this.connectionSetupOwner.abort();this.disposeUnaryOwners();if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void Promise.allSettled([this.saving,this.diagnostics?.close()]).then(()=>closeSharedStateDatabase());void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){this.connectionSetupOwner.abort();this.disposeUnaryOwners();if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.conversationSources.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void Promise.allSettled([this.saving,this.diagnostics?.close()]).then(()=>closeSharedStateDatabase());void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async setThreadHiding(enabled:boolean){this.settings.hideObsidianThreads=enabled;await this.save();await this.syncThreadVisibility();}
   private syncThreadVisibility(force=false):Promise<void>{
     if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve();
