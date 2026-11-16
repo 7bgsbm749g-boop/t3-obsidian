@@ -22,9 +22,10 @@ standard GitHub Actions with the repository's `GITHUB_TOKEN`; no Pro plan, PAT,
 local daemon or agent is required. It assigns versions after merge rather than
 changing development branches, so new PRs do not fight over version-only edits.
 
-The workflow reconciles merged PRs after the cutover time in
-[`pr-versions.json`](../pr-versions.json). Existing historical versions remain
-unchanged. It reads the current main metadata, other open PR manifests at their
+On first use the workflow detects the merge that introduced the ledger, then
+reconciles that PR and later merges. It saves the cutover in
+[`pr-versions.json`](../pr-versions.json). PRs merged before activation retain
+their historical versions. It reads the current main metadata, other open PR manifests at their
 exact heads (including forks), numeric release tags and recorded history. It
 selects the next unused number and atomically commits all four version files and
 a PR receipt. The receipt records the version and original merge commit.

@@ -56,7 +56,10 @@ class FakeGitHub:
             merge = path.split('/compare/')[1].split('...')[0]
             return {'status': 'behind' if merge in self.unreachable else 'ahead'}
         if '/tags?' in path:return [{'name': '0.0.1005'}, {'name': '0.0.377-alpha'}]
-        if '/commits?sha=' in path:return [{'sha': self.stamps[-1]}]
+        if '/commits?sha=' in path:
+            if 'per_page=100' in path:return [{'sha': 'a' * 40, 'commit': {'committer': {'date': '2026-11-16T12:00:00Z'}}}]
+            return [{'sha': self.stamps[-1]}]
+        if '/commits/' in path and path.endswith('/pulls?per_page=100&page=1'):return [pr(12)]
         if '/git/commits/' in path:return {'tree': {'sha': path.rsplit('/', 1)[1]}}
         if path.endswith('/git/blobs'):
             key = self.identity(); self.blobs[key] = json.loads(base64.b64decode(payload['content']))
@@ -170,6 +173,15 @@ class AutomaticVersionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'No completed'):
             versions.assign('owner/repo')
         self.assertEqual(self.github.mutations, [])
+
+    def test_cutover_uses_actual_introduction_merge_not_development_time(self):
+        self.github.states[self.github.head][versions.LEDGER]['since'] = None
+        self.github.closed.insert(0, pr(11, '2026-11-16T12:00:30Z'))
+        result = versions.assign('owner/repo')
+        self.assertEqual([row['pr'] for row in result['assignments']], [12, 13])
+        ledger = self.github.states[self.github.head][versions.LEDGER]
+        self.assertEqual(ledger['since'], pr(12)['merged_at'])
+        self.assertEqual(ledger['startCommit'], pr(12)['merge_commit_sha'])
 
 
 class VersionSnapshotTests(unittest.TestCase):

@@ -137,9 +137,10 @@ receipt in `pr-versions.json` in one Git commit. It advances main without force,
 so a concurrent source change cannot be overwritten. A confirmed non-fast-forward
 rejection causes a fresh read and bounded retry; unknown write outcomes stop.
 
-The ledger is the durable receipt, not a local queue. Every run scans for merged
-PRs after the initial cutover, skips receipts already present, and handles
-pending merges in chronological order. This supports manual GitHub merges,
+The ledger is the durable receipt, not a local queue. Its cutover is initialized
+from the PR that actually introduced it to main, not from development time. Each
+run scans that PR and later merges, skips existing receipts, and handles pending
+merges in chronological order. This supports manual GitHub merges,
 agent merges, retries, delayed runs and missed push events without asking the
 user to pick a number. Historical PRs before the cutover retain their versions.
 Preserve the ledger and do not change its cutover timestamp on subsequent edits.

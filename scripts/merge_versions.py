@@ -19,7 +19,11 @@ FILES = (*release.VERSION_FILES, LEDGER)
 def ledger_state(value: dict) -> dict:
     if value.get('schemaVersion') != 1 or not isinstance(value.get('pullRequests'), dict):
         raise ValueError('Invalid PR version ledger.')
-    datetime.fromisoformat(value['since'].replace('Z', '+00:00'))
+    if value.get('since') is None:
+        if value['pullRequests'] or value.get('latest'):
+            raise ValueError('Assigned ledger cannot reset its cutover.')
+    else:
+        datetime.fromisoformat(value['since'].replace('Z', '+00:00'))
     assigned = []
     for number, row in value['pullRequests'].items():
         if not re.fullmatch(r'[1-9][0-9]*', number) or not release.NUMERIC_VERSION.fullmatch(row['version']):
@@ -41,6 +45,22 @@ def ledger_state(value: dict) -> dict:
     return value
 
 
+def activate(repo: str, source: str, ledger: dict) -> None:
+    if ledger['since'] is not None:
+        return
+    # A development timestamp would renumber PRs merged while this change was
+    # awaiting review. Find the PR that actually introduced the ledger to main.
+    history = release.pages(f'repos/{repo}/commits?sha={source}&path={LEDGER}')
+    initial = history[-1]
+    prs = release.pages(f'repos/{repo}/commits/{initial["sha"]}/pulls')
+    merged = sorted((row for row in prs if row.get('merged_at') and row['base']['ref'] == 'main'),
+                    key=lambda row: row['merged_at'])
+    ledger['since'] = merged[0]['merged_at'] if merged else initial['commit']['committer']['date']
+    ledger['startCommit'] = merged[0]['merge_commit_sha'] if merged else initial['sha']
+    if not re.fullmatch(r'[a-f0-9]{40}', ledger['startCommit']):
+        raise ValueError('Invalid versioning cutover source.')
+
+
 def pending_prs(repo: str, source: str, ledger: dict) -> list[dict]:
     since = datetime.fromisoformat(ledger['since'].replace('Z', '+00:00'))
     rows = release.pages(f'repos/{repo}/pulls?state=closed&base=main&sort=updated&direction=desc')
@@ -48,11 +68,15 @@ def pending_prs(repo: str, source: str, ledger: dict) -> list[dict]:
     for row in rows:
         if (row.get('merged_at') is None or row['base']['ref'] != 'main'
                 or str(row['number']) in ledger['pullRequests']
-                or datetime.fromisoformat(row['merged_at'].replace('Z', '+00:00')) <= since):
+                or datetime.fromisoformat(row['merged_at'].replace('Z', '+00:00')) < since):
             continue
         merged = row['merge_commit_sha']
         if not re.fullmatch(r'[a-f0-9]{40}', merged):
             raise ValueError('Invalid PR merge identity.')
+        if ledger.get('startCommit'):
+            order = release.api(f'repos/{repo}/compare/{ledger["startCommit"]}...{merged}')
+            if order['status'] not in ('ahead', 'identical'):
+                continue
         comparison = release.api(f'repos/{repo}/compare/{merged}...{source}')
         # A newer merge may appear after this main snapshot was read. Its push
         # or the next reconciliation will handle it, without stamping old code.
@@ -107,6 +131,7 @@ def assign(repo: str) -> dict:
         source = release.api(f'repos/{repo}/git/ref/heads/main')['object']['sha']
         values = {name: release.remote_json(repo, source, name) for name in FILES}
         ledger = ledger_state(values[LEDGER])
+        activate(repo, source, ledger)
         release.metadata_version(values)
         pending = pending_prs(repo, source, ledger)
         if not pending:
