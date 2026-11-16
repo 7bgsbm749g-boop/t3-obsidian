@@ -7,6 +7,7 @@ const compiled=build({entryPoints:['src/conversations/sidebar-thread-view.ts'],b
 async function fixture(kind='thread',parentRunning=false){
  const {document,window}=parseHTML('<html><body></body></html>');
  const proto=window.HTMLElement.prototype as any;
+ proto.setCssProps=function(values:Record<string,string>){for(const [name,value] of Object.entries(values))this.style.setProperty(name,value);};
  proto.createEl=function(tag:string,options:any={}){const el=document.createElement(tag);el.textContent=options.text??'';el.className=options.cls??'';for(const [key,value] of Object.entries(options.attr??{}))el.setAttribute(key,String(value));this.appendChild(el);return el;};
  proto.createDiv=function(options:any){return this.createEl('div',options);};proto.createSpan=function(options:any){return this.createEl('span',options);};proto.empty=function(){this.replaceChildren();};proto.addClass=function(value:string){this.classList.add(value);};proto.setText=function(value:string){this.textContent=value;};proto.toggleClass=function(value:string,on:boolean){this.classList.toggle(value,on);};
  class Component{load(){}unload(){}addChild(){}removeChild(){}register(){}registerDomEvent(){}}

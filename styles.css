@@ -712,7 +712,7 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 .t3-chat-request { border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); padding: var(--size-4-3); }
 .t3-chat-composer { position: relative; flex-shrink: 0; display: flex; flex-direction: column; margin: var(--size-4-1) var(--size-4-2) var(--size-4-2); border: 1px solid var(--background-modifier-border); border-radius: calc(2 * var(--radius-l)); background: var(--background-primary-alt); font-size: var(--font-ui-small); }
 .t3-chat-composer:focus-within { border-color: var(--background-modifier-border-focus); }
-.t3-chat-composer textarea.t3-composer-input { width: 100%; min-height: 96px; max-height: 30vh; padding: var(--size-4-3); resize: none; border: 0; border-radius: inherit; box-shadow: none; background: transparent; font: inherit; }
+.t3-chat-composer textarea.t3-composer-input { width: 100%; height: var(--t3-composer-height, auto); min-height: 96px; max-height: 30vh; padding: var(--size-4-3); resize: none; border: 0; border-radius: inherit; box-shadow: none; background: transparent; font: inherit; }
 .t3-chat-composer textarea.t3-composer-input:focus { box-shadow: none; }
 .t3-composer-controls { display: flex; align-items: center; gap: var(--size-4-1); padding: 0 var(--size-4-2) var(--size-4-2); }
 .t3-composer-spacer { flex: 1; min-width: 0; }

@@ -57,7 +57,7 @@ export class ChatComposer extends Component {
   const Observer=this.el.ownerDocument.defaultView?.ResizeObserver;
   if(Observer){this.resizer=new Observer(()=>{const next=this.el.clientWidth;if(next!==width){width=next;this.resizeInput();}});this.resizer.observe(this.el);}
  }
- private resizeInput(){this.input.style.height='auto';this.input.style.height=this.input.scrollHeight+'px';}
+ private resizeInput(){this.input.setCssProps({'--t3-composer-height':'auto'});this.input.setCssProps({'--t3-composer-height':this.input.scrollHeight+'px'});}
  private icon(parent:HTMLElement,icon:string,label:string,action:()=>void){const button=parent.createEl('button',{cls:'clickable-icon t3-chat-icon',attr:{type:'button','aria-label':label,title:label}});setIcon(button,icon);button.addEventListener('click',action);return button;}
  private failure(error:unknown){if(this.dead)return;new Notice(error instanceof Error?error.message:String(error),8000);}
  update(available:boolean,running:boolean,busy:boolean,settings?:ComposerSettings,locked=false){this.locked=locked;this.available=available;this.running=running;this.busy=busy;if(settings)this.settings={...settings};this.controls();}
