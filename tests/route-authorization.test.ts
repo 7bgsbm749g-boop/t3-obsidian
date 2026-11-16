@@ -1,6 +1,25 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {RouteAuthorizationCache,verifyOrchestrationRead} from '../src/connection/route-authorization';
+import {abortableRead} from '../src/connection/t3-api';
+import {CONNECTION_SETUP_MS} from '../src/connection/connection-setup';
+
+test('one stopped waiter cannot cancel another shared route setup',async()=>{
+ const cache=new RouteAuthorizationCache<number>(),stop=new AbortController();let finish!:(value:number)=>void,owned!:AbortSignal;
+ const first=cache.open('credential',async signal=>{owned=signal;return new Promise(resolve=>{finish=resolve;});});
+ const stopped=abortableRead(first,stop.signal),second=cache.open('credential',async()=>{assert.fail('Shared establishment');});
+ await Promise.resolve();stop.abort(Error('Stopped'));await assert.rejects(stopped,/Stopped/);assert.equal(owned.aborted,false);
+ finish(42);assert.equal(await second,42);
+});
+
+test('shared setup has its own deadline and late success cannot replace a fresh authorization',async context=>{
+ context.mock.timers.enable({apis:['setTimeout']});
+ const cache=new RouteAuthorizationCache<number>();let finish!:(value:number)=>void;
+ const pending=cache.open('credential',()=>new Promise(resolve=>{finish=resolve;}));await Promise.resolve();
+ const rejected=assert.rejects(pending,/timed out/);context.mock.timers.tick(CONNECTION_SETUP_MS);await rejected;
+ assert.equal(await cache.open('credential',async()=>2),2);finish(1);await Promise.resolve();
+ assert.equal(await cache.open('credential',async()=>3),2);
+});
 
 test('route identity and authorization setup is shared, bounded, and expires',async()=>{
  let now=0,creates=0;const cache=new RouteAuthorizationCache<object>(()=>now);

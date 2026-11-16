@@ -21,9 +21,11 @@ build refuses test adapters and retired filesystem dependencies in its inputs.
 `npm test` runs and caches these gates before the affected tests. Cache keys
 include installed dependency bytes, runtime, source and configuration. Passing
 bounded test batches retain their own logs; failed batches have no success
-receipt. GitHub runs release-tool regression checks on PRs and main pushes
-without requiring a version bump. Its explicit release-tag workflow runs lint
-and build before attesting and publishing. Branch pushes do not publish releases.
+receipt. GitHub runs release-tool regression checks on PRs and main pushes.
+Every PR must also have an aligned numeric version newer than its target.
+The nightly schedule tags the selected `main` snapshot at midnight UTC; the
+tag build runs lint and build before attesting and publishing. Branch pushes
+do not immediately publish releases.
 
 ## Necessary capabilities and overrides
 
@@ -70,7 +72,11 @@ worker will perform these checks.
 
 Documentation changes need a diff and link review without local installation.
 Tooling changes need their affected checks. Product, documentation and workflow
-PRs can retain the current version, including when merged to `main`.
+PRs all need a version bump. Fetch the target and run
+`python3 scripts/github_release.py bump --base origin/main`, then commit the
+aligned metadata with the change. If already bumped above the current target,
+keep that number across further edits and test builds. Update and bump again
+when a merged PR consumes that number.
 
 ## Commit, push and open a PR
 
@@ -89,16 +95,28 @@ refs or use `--tags`, `--follow-tags`, or `--mirror`.
 
 ## GitHub owns releases
 
-The local release queue and workers remain removed. Developing agents finish
-with a commit and PR. Branch pushes, main merges and PR completion do not
-authorize publication, version assignment or installation. Historical tags,
-archives, receipts and private comparison records remain intact.
+The local release queue and workers remain removed. PRs carry version metadata;
+merging a PR does not immediately publish or install the plugin. Historical
+tags, archives, receipts and private comparison records remain intact.
 
-When the user requests a GitHub release, prepare a new unused numeric
-`0.0.BUILD` aligned in `manifest.json`, `package.json`, both package-lock version
-fields and the `versions.json` compatibility entry. Validate and commit those
-release metadata changes, then tag that exact commit with its version. Push
-only that explicitly authorized tag. The
+The [release workflow](../.github/workflows/release-provenance.yml) schedules
+publication every night at midnight UTC (`0 0 * * *`). GitHub can delay scheduled
+starts. The preparation job validates the version files on the exact scheduled
+`main` snapshot, creates its matching immutable numeric tag, then explicitly
+dispatches the tag build. This dispatch is necessary because a tag created with
+`GITHUB_TOKEN` does not trigger another push workflow. Preparation can write
+contents and dispatch Actions; PR jobs have only read access. No private token,
+local worker or vault access is needed.
+
+If that exact commit is already published, preparation does nothing. If the
+tag exists with an unfinished release, it dispatches the same tag again. If
+the number belongs to another commit or is older than the latest release, it
+fails without moving tags or publishing old code. Keep every PR updated and
+bumped above its current target before merging. Unmerged PRs are never released.
+
+An explicitly requested early release can still use the aligned numeric
+version committed on its source: tag that exact commit and push only that tag.
+The
 [release workflow](../.github/workflows/release-provenance.yml) installs
 dependencies, lints, builds, attests `main.js`, `manifest.json` and `styles.css`,
 then publishes a regular release titled `t3-obsidian VERSION`. The tag must
@@ -107,7 +125,8 @@ match the source version. Existing tags and assets cannot be overwritten.
 To retry a tagged release, dispatch the workflow at that same numeric tag, for
 example `gh workflow run release-provenance.yml --ref 0.0.BUILD` with the actual
 version substituted. Dispatching at a branch fails the numeric-tag check.
-The workflow does not choose or bump versions. Keep the
+The release workflow does not choose or bump versions; the PR preparation
+command does that before merge. Keep the
 [alpha version policy](versioning.md).
 
 Personal-vault delivery runs only when the user explicitly asks to try changes.

@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {environmentAccess,type EnvironmentAccessIO} from '../src/connection/environment-access';
 import type {ThreadAccess} from '../src/conversations/thread-stream';
+import {CONNECTION_SETUP_MS} from '../src/connection/connection-setup';
 
 type Equal<A,B>=(<T>()=>T extends A?1:2) extends (<T>()=>T extends B?1:2)?true:false;
 type Expect<T extends true>=T;
@@ -58,4 +59,23 @@ test('a caller operation is never replayed or rerouted after access was establis
   const chosen=await environmentAccess('target',io),command={type:'thread.turn.start',commandId:'stable-id'};
   await assert.rejects(chosen.api('/api/orchestration/dispatch',command),error=>error===failure);
   assert.deepEqual(calls,[{path:'/api/orchestration/dispatch',payload:command}]);
+});
+
+test('a stalled route expires before fallback; the selected mutation keeps lost-ack uncertainty',async context=>{
+ context.mock.timers.enable({apis:['setTimeout']});
+ const calls:string[]=[],stale={...connection,id:'stale'},stop=new AbortController();let owned!:AbortSignal,dispatches=0;
+ const work=environmentAccess('target',{paired:[stale,{...connection,environmentId:'unrelated'},connection],openPaired:async(selected,signal)=>{
+  calls.push(selected.id);if(selected===stale){owned=signal;return new Promise(()=>{});}
+  return {origin:selected.url,api:async()=>{dispatches++;throw Error('Acknowledgement lost');}};
+ }},stop.signal);
+ await Promise.resolve();assert.deepEqual(calls,['stale']);context.mock.timers.tick(CONNECTION_SETUP_MS);
+ const chosen=await work;assert.equal(owned.aborted,true);assert.deepEqual(calls,['stale','paired']);
+ await assert.rejects(chosen.api('/api/orchestration/dispatch',{commandId:'unchanged'}),/Acknowledgement lost/);assert.equal(dispatches,1);
+});
+
+test('Stop during route setup cannot advance to another endpoint',async()=>{
+ const stop=new AbortController();let owned!:AbortSignal;
+ const work=environmentAccess('target',{paired:[connection,{...connection,id:'spare'}],openPaired:async(selected,signal)=>{assert.equal(selected.id,'paired');owned=signal;return new Promise(()=>{});}},stop.signal);
+ await Promise.resolve();stop.abort(Error('Stopped'));
+ await assert.rejects(work,/Stopped/);assert.equal(owned.aborted,true);
 });

@@ -18,3 +18,9 @@ export async function ensureNoProject(api:T3Api):Promise<Project>{
   if(!project||typeof project.id!=='string'||typeof project.title!=='string'||typeof project.workspaceRoot!=='string'||!project.workspaceRoot)throw Error('T3 has not returned its No project workspace. Try again.');
   return {id:project.id,title:'No project',workspaceRoot:project.workspaceRoot};
 }
+
+/** Reuse only an ensured identity still present at the same catalog workspace.
+ * Titles are presentation, so they cannot establish a scratch-project identity. */
+export function verifiedNoProject(project:Project|undefined,catalog:readonly Project[]):Project|undefined {
+  return project&&catalog.some(item=>item.id===project.id&&item.connectionId===project.connectionId&&item.workspaceRoot===project.workspaceRoot)?project:undefined;
+}

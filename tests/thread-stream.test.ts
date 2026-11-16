@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {watchThread,readInlineEvents} from '../src/conversations/thread-stream';
+import {watchThread,readInlineEvents,readInlineSnapshot} from '../src/conversations/thread-stream';
 import {T3ResponseTooLargeError} from '../src/connection/t3-response-limits';
 import {completedSetup,preparationItem} from './fixtures/worktree-setup';
 import {RouteStatus} from '../src/connection/route-status';
@@ -290,4 +290,42 @@ test('reconnect resets a quiet deadline and releases the old access',async t=>{
     assert.equal(reads.at(-1),11800);assert.deepEqual(closed,['stream-reconnect']);
     watcher.stop();assert.deepEqual(closed,['stream-reconnect','stream-stopped']);
   }finally{watcher.stop();t.mock.timers.reset();}
+});
+
+test('obsolete historical snapshot reads stop waiting and pass cancellation to the API',async()=>{
+ const controller=new AbortController();let received:AbortSignal|undefined;
+ const work=readInlineSnapshot({origin:'https://fixture',api:async(_path,_payload,options)=>{received=options?.signal;return new Promise(()=>{});}},'thread','project',undefined,true,false,undefined,controller.signal);
+ controller.abort();await assert.rejects(work,{name:'AbortError'});assert.equal(received,controller.signal);
+ let calls=0;
+ await assert.rejects(readInlineSnapshot({origin:'https://fixture',api:async()=>{calls++;}},'thread','project',undefined,true,false,undefined,controller.signal),{name:'AbortError'});
+ assert.equal(calls,0);
+});
+
+test('acceptance wakes a retry immediately and ignores the cancelled retry timer after stop',async t=>{
+ t.mock.timers.enable({apis:['setTimeout','Date']});let attempts=0;const sockets:any[]=[];
+ const settle=async()=>{for(let n=0;n<16;n++)await Promise.resolve();};
+ const watcher=watchThread('thread',async()=>{if(++attempts===1)throw Error('Offline');return {origin:'https://fixture',api:async()=>({ticket:'synthetic'})};},{item:()=>{},reconnecting:()=>{}},()=>{const socket:any={send(){},close(){this.onclose?.();}};sockets.push(socket);return socket;},undefined,{afterSequence:()=>7,pollSnapshots:false});
+ try{await settle();assert.equal(attempts,1);watcher.refresh?.(false);await settle();assert.equal(attempts,2);assert.equal(sockets.length,1);watcher.stop();t.mock.timers.tick(30_000);await settle();assert.equal(attempts,2);}finally{watcher.stop();t.mock.timers.reset();}
+});
+
+test('acceptance during an older snapshot read requests a fresh read without waiting or overlapping',async()=>{
+ let release!:(value:unknown)=>void,reads=0,active=0,maximum=0;const items:any[]=[];
+ const snapshot={snapshotSequence:2,thread:{id:'thread',projectId:'project',messages:[]}};
+ const watcher=watchThread('thread',async()=>({origin:'https://fixture',api:async path=>{
+  if(path==='/api/auth/websocket-ticket')return {ticket:'synthetic'};
+  reads++;maximum=Math.max(maximum,++active);try{return reads===1?await new Promise(done=>release=done):snapshot;}finally{active--;}
+ }}),{item:item=>items.push(item),reconnecting:()=>{}},()=>({send(){},close(){}} as any),()=>({messageIds:[],turnIds:[]}),{afterSequence:()=>0,pollImmediately:true});
+ const settle=async()=>{for(let n=0;n<20;n++)await Promise.resolve();};
+ try{await settle();watcher.refresh?.();watcher.refresh?.();assert.equal(reads,1);release(snapshot);await settle();assert.equal(reads,2);assert.equal(maximum,1);assert.equal(items.length,2);}finally{watcher.stop();}
+});
+
+test('only a missing exact snapshot is typed as pending; offline, authentication and wrong-source errors remain distinct',async()=>{
+ const {readInlineSnapshot,PendingThreadError}=await import('../src/conversations/thread-stream');
+ const {T3HttpError}=await import('../src/conversations/thread-access-cache');
+ for(const status of [401,403,404,500]){
+  const error=new T3HttpError(status,'Synthetic HTTP failure');
+  await assert.rejects(readInlineSnapshot({origin:'https://fixture',api:async()=>{throw error;}},'thread'),failure=>status===404?failure instanceof PendingThreadError&&failure.threadId==='thread':failure===error);
+ }
+ const offline=Error('Offline');await assert.rejects(readInlineSnapshot({origin:'https://fixture',api:async()=>{throw offline;}},'thread'),failure=>failure===offline);
+ await assert.rejects(readInlineSnapshot({origin:'https://fixture',api:async()=>({thread:{id:'other',projectId:'project',messages:[]}})},'thread'),failure=>failure instanceof Error&&!(failure instanceof PendingThreadError));
 });

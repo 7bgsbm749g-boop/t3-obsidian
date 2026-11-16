@@ -30,7 +30,7 @@ function threadFingerprint(state:ReturnType<typeof replayState>){
 
 type Watch=typeof watchThread;
 type Reader={callbacks:ThreadStreamCallbacks;targets?:()=>InlineHistoryTargets;replay?:Parameters<Watch>[5];completed:boolean;priority:()=>number};
-type Source={key:string;threadId:string;access:Parameters<Watch>[1];readers:Set<Reader>;watch?:ReturnType<Watch>;snapshot?:ThreadStreamItem;events:ThreadStreamItem[];characters:number;comparison?:string;comparisonDirty?:boolean;slot?:()=>void;timeout?:ReturnType<typeof scheduleTimeout>;refresh?:Promise<void>;started:boolean;retry?:ReturnType<typeof scheduleTimeout>;attempt?:number;refreshAgain?:boolean;controller?:AbortController;freshAt:number;sequence:number;retryAt:number;readAt?:number;expire?:()=>void;refreshWanted?:boolean;recovery?:boolean;fatal?:boolean};
+type Source={acknowledgement?:string;key:string;threadId:string;access:Parameters<Watch>[1];readers:Set<Reader>;watch?:ReturnType<Watch>;snapshot?:ThreadStreamItem;events:ThreadStreamItem[];characters:number;comparison?:string;comparisonDirty?:boolean;slot?:()=>void;refresh?:Promise<void>;started:boolean;retry?:ReturnType<typeof scheduleTimeout>;attempt?:number;refreshAgain?:boolean;controller?:AbortController;freshAt:number;sequence:number;retryAt:number;readAt?:number;expire?:()=>void;refreshWanted?:boolean;recovery?:boolean;fatal?:boolean};
 
 /** One source connection per authenticated environment/project/thread. Each
  * consumer still owns its exact run binding, projection and final save. */
@@ -49,7 +49,7 @@ export class SharedThreadStreams {
     const routed:ThreadAccess['api']=(path,payload,options)=>{
       // Signals remain owned by their caller. Never combine cancellable reads,
       // dispatches, decisions, tickets or credential mutations.
-      if(options?.signal||!(payload===undefined&&path.startsWith('/api/orchestration/threads/')||path==='/api/orchestration/turn-item'))return api(path,payload,options);
+      if(options?.signal||options?.continueHistory||!(payload===undefined&&path.startsWith('/api/orchestration/threads/')||path==='/api/orchestration/turn-item'))return api(path,payload,options);
       let pending=scopeKey?this.scopedReads.get(scopeKey):this.reads.get(api);
       if(!pending){pending=new Map();if(scopeKey)this.scopedReads.set(scopeKey,pending);else this.reads.set(api,pending);}
       const key=JSON.stringify([path,payload]),old=pending.get(key);if(old)return old;
@@ -77,10 +77,19 @@ export class SharedThreadStreams {
         // A union-target read supplies it without opening another watcher.
         if(current.readers.has(reader))this.refresh(current,true);
       });
-      return {stop:()=>{
+      return {refresh:(_read=true,accepted)=>{
+        if(this.stopped||!current.readers.has(reader)||current.fatal)return;
+        if(accepted&&current.acknowledgement===accepted)return;
+        current.acknowledgement=accepted;
+        current.retryAt=0;current.attempt=0;
+        if(current.retry)cancelTimeout(current.retry);current.retry=undefined;
+        // Wake only this source. Keep the bounded canonical read queue and
+        // request a fresh read after any pre-acknowledgement read settles.
+        current.watch?.refresh?.(false);this.refresh(current,true);
+      },stop:()=>{
         if(!current.readers.delete(reader)||current.readers.size)return;
         this.sources.delete(key);this.pending=this.pending.filter(value=>value!==current);
-        current.watch?.stop();current.slot?.();current.controller?.abort();current.expire?.();if(current.retry)cancelTimeout(current.retry);if(current.timeout)cancelTimeout(current.timeout);
+        current.watch?.stop();current.slot?.();current.controller?.abort();current.expire?.();if(current.retry)cancelTimeout(current.retry);
         current.events=[];current.snapshot=undefined;current.characters=0;this.memory('end',current);
       }};
     };
@@ -93,7 +102,7 @@ export class SharedThreadStreams {
   }
   private targets(source:Source):InlineHistoryTargets {
     const targets=[...source.readers].map(reader=>reader.targets?.());
-    return {messageIds:[...new Set(targets.flatMap(target=>target?.messageIds??[]))],turnIds:[...new Set(targets.flatMap(target=>target?.turnIds??[]))]};
+    return {messageIds:[...new Set(targets.flatMap(target=>target?.messageIds??[]))],turnIds:[...new Set(targets.flatMap(target=>target?.turnIds??[]))],recoveryVersion:JSON.stringify(targets.map(target=>target?.recoveryVersion))};
   }
   private deliver(source:Source,item:ThreadStreamItem){
     source.slot?.();
@@ -141,10 +150,14 @@ export class SharedThreadStreams {
     if(source.refresh){if(again)source.refreshAgain=true;return;}
     source.refreshWanted=true;this.drainRefresh();
   }
+  private priority(source:Source){return Math.max(0,...[...source.readers].map(reader=>reader.priority()));}
+  /** Two optional restorations cannot consume the one reserved send slot.
+   * Count real work until it settles; elapsed time never supplies capacity. */
+  private available(count:number,source:Source){return count<this.maxOpening+(this.priority(source)>=3?1:0);}
   private drainRefresh(){
     const waiting=[...this.sources.values()].filter(source=>source.refreshWanted&&!source.refresh&&source.retryAt<=this.now())
-      .sort((a,b)=>Math.max(...[...b.readers].map(reader=>reader.priority()),0)-Math.max(...[...a.readers].map(reader=>reader.priority()),0));
-    for(const source of waiting){if(this.refreshing>=this.maxOpening)break;this.startRefresh(source);}
+      .sort((a,b)=>this.priority(b)-this.priority(a));
+    for(const source of waiting)if(this.available(this.refreshing,source))this.startRefresh(source);
   }
   private missedThreadUpdate(source:Source,snapshot:Awaited<ReturnType<typeof readInlineSnapshot>>){
     if((snapshot.snapshotSequence??0)<=source.sequence)return false;
@@ -164,17 +177,16 @@ export class SharedThreadStreams {
     source.refreshWanted=false;this.refreshing++;source.readAt=this.now();
     const recovery=source.recovery;source.recovery=false;
     const controller=source.controller=new AbortController();
-    let expire!:()=>void;
-    const expired=new Promise<never>((_resolve,reject)=>{expire=()=>{controller.abort();reject(Error('T3 response recovery read expired.'));};});
-    source.expire=expire;
+    source.expire=()=>controller.abort();
     const read=source.access().then(async access=>{
       try{
         if(controller.signal.aborted)throw Error('T3 response recovery read was cancelled.');
-        return await readInlineSnapshot({...access,api:(path,payload)=>access.api(path,payload,{signal:controller.signal})},source.threadId,undefined,this.targets(source));
+        return await readInlineSnapshot({...access,api:(path,payload,options)=>access.api(path,payload,{...options,signal:controller.signal})},source.threadId,undefined,()=>this.targets(source));
       }finally{await access.close?.();}
     });
-    const work=Promise.race([read,expired]).then(snapshot=>{
-      if(!source.readers.size||this.stopped||controller.signal.aborted)return;
+    const work=read.then(snapshot=>{
+      if(controller.signal.aborted)throw Error('T3 response recovery read was cancelled.');
+      if(!source.readers.size||this.stopped)return;
       const behind=recovery&&this.missedThreadUpdate(source,snapshot);
       source.attempt=0;source.retryAt=0;source.freshAt=this.now();
       this.deliver(source,{kind:'snapshot',snapshot});
@@ -196,18 +208,19 @@ export class SharedThreadStreams {
       this.refreshing--;source.readAt=undefined;source.expire=undefined;
       if(source.controller===controller)source.controller=undefined;
       if(source.refresh===work)source.refresh=undefined;
-      if(source.refreshAgain){source.refreshAgain=false;if(!source.retry)this.refresh(source);}
+      if(source.refreshAgain){source.refreshAgain=false;source.retryAt=0;if(!source.retry)this.refresh(source);}
       this.drainRefresh();
     });
     source.refresh=work;void work.catch(()=>{});
   }
+  priorityChanged(){if(!this.stopped){this.drain();this.drainRefresh();}}
   private drain(){
-    while(!this.stopped&&this.opening<this.maxOpening&&this.pending.length){
-      this.pending.sort((a,b)=>Math.max(...[...b.readers].map(reader=>reader.priority()),0)-Math.max(...[...a.readers].map(reader=>reader.priority()),0));
-      const source=this.pending.shift()!;if(!source.readers.size||source.started)continue;
+    while(!this.stopped&&this.pending.length){
+      this.pending.sort((a,b)=>this.priority(b)-this.priority(a));
+      const index=this.pending.findIndex(source=>this.available(this.opening,source));if(index<0)break;
+      const [source]=this.pending.splice(index,1);if(!source.readers.size||source.started)continue;
       source.started=true;this.opening++;let released=false;
-      source.slot=()=>{if(released)return;released=true;this.opening--;if(source.timeout)cancelTimeout(source.timeout);source.timeout=undefined;queueMicrotask(()=>this.drain());};
-      source.timeout=scheduleTimeout(()=>source.slot?.(),20_000);
+      source.slot=()=>{if(released)return;released=true;this.opening--;queueMicrotask(()=>this.drain());};
       if([...source.readers].every(reader=>reader.completed)){this.refresh(source);continue;}
       source.watch=this.watch(source.threadId,source.access,{
         item:item=>this.deliver(source,item),
@@ -223,5 +236,5 @@ export class SharedThreadStreams {
     }
   }
   status(){return {sources:this.sources.size,readers:[...this.sources.values()].reduce((count,source)=>count+source.readers.size,0),opening:this.opening,queued:this.pending.length,canonicalReads:[...this.sources.values()].filter(source=>!!source.refresh).length,retryTimers:[...this.sources.values()].filter(source=>!!source.retry).length,cacheCharacters:[...this.sources.values()].reduce((sum,source)=>sum+source.characters,0)};}
-  dispose(){this.stopped=true;for(const source of this.sources.values()){source.readers.clear();source.watch?.stop();source.slot?.();source.controller?.abort();source.expire?.();if(source.retry)cancelTimeout(source.retry);if(source.timeout)cancelTimeout(source.timeout);}this.sources.clear();this.scopedReads.clear();this.pending=[];this.memory('dispose');}
+  dispose(){this.stopped=true;for(const source of this.sources.values()){source.readers.clear();source.watch?.stop();source.slot?.();source.controller?.abort();source.expire?.();if(source.retry)cancelTimeout(source.retry);}this.sources.clear();this.scopedReads.clear();this.pending=[];this.memory('dispose');}
 }

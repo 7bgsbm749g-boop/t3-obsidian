@@ -1,3 +1,4 @@
+import {abortableRead,requestAborted} from '../connection/t3-api';
 import type {ThreadStreamItem} from '../connection/thread-events';
 export type {ThreadStreamItem} from '../connection/thread-events';
 import {parseJson,isRecord} from '../shared/values';
@@ -10,12 +11,18 @@ import {T3_PROTOCOL_VERSION,normalizeV2StreamItem,normalizeV2Snapshot,normalizeV
 import {responseTooLarge} from '../connection/t3-response-limits';
 import {readWorktreeSetup,workspacePreparation} from '../projects/worktree-setup';
 import type {T3Api} from '../connection/t3-rpc';
+import {T3HttpError} from './thread-access-cache';
 
 export type ThreadAccessCloseReason='cache-expired'|'auth-rejected'|'host-disposed'|'stop-complete'|'stop-timeout'|'stream-reconnect'|'stream-stopped'|'late-access'|'caller-closed';
 export interface ThreadAccess {origin:string;api:T3Api;expiresAt?:number;diagnosticRoute?:{routeId:string;environmentId:string;routeKind:'local'|'remote'};close?:(reason?:ThreadAccessCloseReason)=>Promise<void>|void;trace?:(event:'borrow-released'|'recovered',reason?:ThreadAccessCloseReason)=>void}
 export type ThreadAccessFactory=()=>Promise<ThreadAccess>;
 export interface ThreadStreamCallbacks {item:(item:ThreadStreamItem)=>void;reconnecting:(error:Error)=>void;failure?:(error:Error)=>void}
-export interface InlineHistoryTargets {messageIds:string[];turnIds:string[]}
+export interface ThreadWatch {stop():void;refresh?(read?:boolean,acknowledgement?:string):void}
+/** Only a missing exact snapshot can be a pending creation, never a transport failure. */
+export class PendingThreadError extends Error {
+  constructor(readonly threadId:string){super('Waiting for the requested T3 thread.');}
+}
+export interface InlineHistoryTargets {messageIds:string[];turnIds:string[];recoveryVersion?:string}
 export interface StreamDiagnosticContext {role?:'response'|'title'|'host'|'shared-response';bindingId?:string;environmentId?:string;projectId?:string;messageId?:string;turnId?:string}
 let streamMonitors=0;
 
@@ -24,17 +31,24 @@ export function needsInlineHistory(state:InlineThreadState,targets:InlineHistory
 }
 
 /** Recent polling stays small. A stranded response can request the complete
- * canonical transcript, including prompts older than the polling window. */
-export async function readInlineSnapshot(access:ThreadAccess,threadId:string,projectId?:string,targets?:InlineHistoryTargets,full=false,importOnly=false,importRunId?:string):Promise<ThreadSnapshot> {
+ * canonical transcript, including prompts older than the polling window.
+ * Active reads defer optional historical display details even on that fallback;
+ * explicit history/import reads retain the full detail path. */
+export async function readInlineSnapshot(access:ThreadAccess,threadId:string,projectId?:string,targets?:InlineHistoryTargets|(()=>InlineHistoryTargets),full=false,importOnly=false,importRunId?:string,signal?:AbortSignal):Promise<ThreadSnapshot> {
+  const currentTargets=()=>typeof targets==='function'?targets():targets,version=currentTargets()?.recoveryVersion;
+  const current=()=>version===undefined||currentTargets()?.recoveryVersion===version;
   const read=async(all:boolean)=>{
-    const started=Date.now();
-    const snapshot=readThreadSnapshot(normalizeV2Snapshot(await access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true${all?'':'&turnLimit=20'}${importOnly?'&importRuns=true':''}${importRunId?'&importRunId='+encodeURIComponent(importRunId):''}`)));
+    requestAborted(signal);const started=Date.now();
+    const raw=await abortableRead(access.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true${all?'':'&turnLimit=20'}${importOnly?'&importRuns=true':''}${importRunId?'&importRunId='+encodeURIComponent(importRunId):''}`,undefined,{signal,...(!full&&!importOnly&&!importRunId?{deferHistoricalDetails:currentTargets()??{messageIds:[],turnIds:[]}}:{}),...(all&&typeof targets==='function'?{continueHistory:current}:{})}),signal).catch((error:unknown)=>{if(error instanceof T3HttpError&&error.status===404)throw new PendingThreadError(threadId);throw error;});
+    requestAborted(signal);
+    const snapshot=readThreadSnapshot(normalizeV2Snapshot(raw));
     if(snapshot?.thread?.id!==threadId||projectId&&snapshot.thread.projectId!==projectId)throw Error('Waiting for the requested T3 thread.');
-    logEvent('response.source.snapshot',{threadId,fullHistory:all,snapshotSequence:snapshot.snapshotSequence,turns:Object.keys(snapshot.thread.turns??{}).length,messages:snapshot.thread.messages?.length,elapsedMs:Date.now()-started,targets:targets?.messageIds.length});
+    logEvent('response.source.snapshot',{threadId,fullHistory:all,snapshotSequence:snapshot.snapshotSequence,turns:Object.keys(snapshot.thread.turns??{}).length,messages:snapshot.thread.messages?.length,elapsedMs:Date.now()-started,targets:currentTargets()?.messageIds.length});
     return snapshot;
   };
   const snapshot=await read(full);
-  if(!full&&targets&&needsInlineHistory(applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state,targets)){logEvent('response.source.history-required',{threadId,targets:targets.messageIds.length});return read(true);}
+  const wanted=currentTargets();
+  if(!full&&current()&&wanted&&needsInlineHistory(applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot}).state,wanted)){logEvent('response.source.history-required',{threadId,targets:wanted.messageIds.length});return read(true);}
   return snapshot;
 }
 
@@ -75,23 +89,24 @@ export async function readInlineEvents(access:ThreadAccess,threadId:string,after
 
 /** The Effect RPC stream stays open until stopped. Every reconnect asks for a
  * fresh snapshot, so lost deltas cannot duplicate text or leave a gap. */
-export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url),historyTargets?:()=>InlineHistoryTargets,replay?:{afterSequence:()=>number|undefined;pollSnapshots?:boolean|(()=>boolean);pollImmediately?:boolean;jitter?:boolean;titleOnly?:boolean;diagnostics?:()=>StreamDiagnosticContext}) {
+export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,callbacks:ThreadStreamCallbacks,makeSocket:(url:string)=>WebSocket=url=>new WebSocket(url),historyTargets?:()=>InlineHistoryTargets,replay?:{afterSequence:()=>number|undefined;pollSnapshots?:boolean|(()=>boolean);pollImmediately?:boolean;jitter?:boolean;titleOnly?:boolean;diagnostics?:()=>StreamDiagnosticContext}):ThreadWatch {
   let stopped=false,socket:WebSocket|undefined,timer:ReturnType<typeof setTimeout>|undefined,pollTimer:ReturnType<typeof setTimeout>|undefined,attempt=0;
   let access:ThreadAccess|undefined;
   let snapshotBlocked=false,lastFrameDiagnostic=0;
+  let readNow:((force?:boolean)=>void)|undefined;
   type Attempt={id:string;startedAt:number;openedAt?:number;lastFrameAt?:number;lastDataAt?:number;lastReceivedSequence?:number;lastEventOccurredAt?:string;recoveryAt?:number;expiresAt?:number;pollFailed?:boolean;socketData?:boolean;closeReported?:boolean;route?:ThreadAccess['diagnosticRoute'];cause?:string};
   const monitorId=`stream-${++streamMonitors}`;let generation=0,current:Attempt|undefined,recoveringAt:number|undefined;
   const report=(state:Attempt|undefined,event:string,fields:Record<string,unknown>={},level:'info'|'warning'='info')=>{
     try{const now=Date.now();logEvent(event,{threadId,monitorId,streamId:state?.id,role:replay?.titleOnly?'title':'response',...replay?.diagnostics?.(),...state?.route,afterSequence:replay?.afterSequence(),lastReceivedSequence:state?.lastReceivedSequence,lastEventOccurredAt:state?.lastEventOccurredAt,authExpiresInMs:state?.expiresAt===undefined?undefined:state.expiresAt-now,openedMs:state?.openedAt===undefined?undefined:Math.max(0,now-state.openedAt),lastFrameAgeMs:state?.lastFrameAt===undefined?undefined:Math.max(0,now-state.lastFrameAt),lastDataAgeMs:state?.lastDataAt===undefined?undefined:Math.max(0,now-state.lastDataAt),...fields},level);}catch{/* Diagnostics cannot alter stream delivery. */}
   };
   const pollEnabled=()=>!snapshotBlocked&&(typeof replay?.pollSnapshots==='function'?replay.pollSnapshots():replay?.pollSnapshots!==false);
-  const closeAccess=(reason:ThreadAccessCloseReason)=>{if(pollTimer)clearTimeout(pollTimer);pollTimer=undefined;const old=access;access=undefined;if(old?.close)void Promise.resolve(old.close(reason)).catch(()=>{});};
+  const closeAccess=(reason:ThreadAccessCloseReason)=>{if(pollTimer)clearTimeout(pollTimer);pollTimer=undefined;readNow=undefined;const old=access;access=undefined;if(old?.close)void Promise.resolve(old.close(reason)).catch(()=>{});};
   const retry=(error:Error,state:Attempt,cause:string,fields:Record<string,unknown>={})=>{
     if(stopped)return;
     const base=Math.min(30_000,1000*2**Math.min(attempt++,5)),delay=base+(replay?.jitter?Math.floor(Math.random()*Math.min(1000,base/4)):0);state.cause=cause;recoveringAt??=Date.now();
     report(state,'stream.reconnecting',{cause,error,attempt,retryDelayMs:delay,...fields},'warning');
     callbacks.reconnecting(error);closeAccess('stream-reconnect');
-    timer=setTimeout(()=>{void connect();},delay);
+    timer=setTimeout(()=>{timer=undefined;void connect();},delay);
   };
   const connect=async()=>{
     if(stopped)return;
@@ -103,7 +118,7 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
       if(stopped){await ready.close?.('late-access');return;}
       access=ready;
       state.route=ready.diagnosticRoute;state.expiresAt=ready.expiresAt;
-      let ws:WebSocket|undefined,ended=false,polling=false,pollDue=0,pollDelay=1200,activityVersion=0,lastSnapshotHash:string|undefined;
+      let ws:WebSocket|undefined,ended=false,polling=false,pollAgain=false,pollDue=0,pollDelay=1200,activityVersion=0,lastSnapshotHash:string|undefined;
       let setupSubscribed=false,setupWanted=false,socketOpen=false;
       const subscribeSetup=()=>{if(setupWanted&&!setupSubscribed&&socketOpen&&ws){setupSubscribed=true;ws.send(JSON.stringify({_tag:'Request',id:'2',tag:'subscribeWorktreeSetup',payload:{threadId},headers:[]}));}};
       const deliver=(item:ThreadStreamItem,source:'socket'|'snapshot'='socket')=>{
@@ -125,11 +140,12 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
         if(pollTimer)clearTimeout(pollTimer);
         pollDue=due;pollTimer=setTimeout(()=>{pollTimer=undefined;void poll();},delay);
       };
-      const poll=async()=>{
-        if(stopped||ended||access!==ready||polling||!pollEnabled())return;
+      const poll=async(force=false)=>{
+        if(stopped||ended||access!==ready||snapshotBlocked||!force&&!pollEnabled())return;
+        if(polling){if(force)pollAgain=true;return;}
         polling=true;const beforeActivity=activityVersion;
         try{
-          const snapshot=historyTargets?await readInlineSnapshot(ready,threadId,undefined,historyTargets()):readThreadSnapshot(normalizeV2Snapshot(await ready.api(`/api/orchestration/threads/${encodeURIComponent(threadId)}?reasoningMessages=true&turnLimit=20`)));
+          const snapshot=await readInlineSnapshot(ready,threadId,undefined,historyTargets);
           if(!stopped&&!ended&&access===ready&&snapshot?.thread){
             // The global snapshot cursor can advance for unrelated threads.
             // Keep only a small digest; still deliver every canonical snapshot
@@ -140,8 +156,9 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
             if(state.pollFailed){state.pollFailed=false;report(state,'stream.poll.recovered',{cause:'snapshot-read'});}
           }else pollDelay=1200;
         }catch(error){pollDelay=1200;if(!stopped&&!ended&&access===ready){if(!state.pollFailed)report(state,'stream.poll.failed',{cause:'snapshot-read',error,socketOpen},'warning');state.pollFailed=true;if(responseTooLarge(error)){snapshotBlocked=true;callbacks.failure?.(error as Error);}else callbacks.reconnecting(error instanceof Error?error:Error('Cannot read the T3 response.'));}}
-        finally{polling=false;schedulePoll(pollDelay);}
+        finally{polling=false;if(pollAgain){pollAgain=false;void poll(true);}else schedulePoll(pollDelay);}
       };
+      readNow=force=>{if(pollTimer)clearTimeout(pollTimer);pollTimer=undefined;void poll(force);};
       // A browser timer can delay even a zero-delay read after app suspension.
       // Current text does not depend on a socket ticket or socket opening.
       if(replay?.pollImmediately&&pollEnabled())void poll();
@@ -209,5 +226,9 @@ export function watchThread(threadId:string,accessFactory:ThreadAccessFactory,ca
     }catch(error){retry(error instanceof Error?error:Error('Cannot open T3 thread stream.'),state,stage);}
   };
   void connect();
-  return {stop(){if(stopped)return;report(current,'stream.stopped',{cause:'caller-stopped'});stopped=true;if(timer)clearTimeout(timer);if(socket){try{socket.send(JSON.stringify({_tag:'Interrupt',requestId:'1'}));}catch{/* Connection is already gone. */}socket.close();}closeAccess('stream-stopped');}};
+  return {refresh(read=true){
+    if(stopped)return;
+    if(timer){clearTimeout(timer);timer=undefined;attempt=0;void connect();}
+    else if(read)readNow?.(true);
+  },stop(){if(stopped)return;report(current,'stream.stopped',{cause:'caller-stopped'});stopped=true;if(timer)clearTimeout(timer);if(socket){try{socket.send(JSON.stringify({_tag:'Interrupt',requestId:'1'}));}catch{/* Connection is already gone. */}socket.close();}closeAccess('stream-stopped');}};
 }

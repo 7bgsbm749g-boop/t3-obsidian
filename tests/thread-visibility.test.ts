@@ -48,3 +48,52 @@ test('failed settings and disabling never tag threads, and concurrent configurat
   h.failConfig(false);await Promise.all([h.visibility.apply(h.access,'one',false,'credential'),h.visibility.apply(h.access,'one',false,'credential')]);assert.equal(h.commands.length,0);assert.deepEqual(h.stored(),[]);
   h.visibility.dispose();await h.visibility.apply(h.access,'one',true,'credential');assert.equal(h.settings.hiddenThreadTags.includes('t3-obsidian'),false);
 });
+
+test('rapid forced refreshes share one in-flight rerun and keep the latest preference and credential',async t=>{
+  const h=fixture(t);let release!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;}),tickets:string[]=[];
+  const access=(name:string)=>({...h.access,api:async()=>{tickets.push(name);if(tickets.length===1)await gate;return {ticket:'fixture'};}});
+  const first=h.visibility.apply(access('old'),'one',false,'old',true),waiting:Promise<void>[]=[];
+  for(let i=0;i<40;i++)waiting.push(h.visibility.apply(access('latest'),'one',i%2===1,'latest',true));
+  assert.ok(waiting.every(work=>work===first),'callers share completion rather than queueing individual continuations');
+  release();await Promise.all([first,...waiting]);
+  assert.deepEqual(tickets,['old','latest']);assert.equal(h.reads(),3);
+  assert.deepEqual(h.settings.hiddenThreadTags,['private','t3-obsidian']);assert.equal(h.settings.hideTaggedThreads,true);
+  const reads=h.reads();await h.visibility.apply(h.access,'one',true,'latest');assert.equal(h.reads(),reads);
+  await h.visibility.apply(h.access,'one',true,'new-credential');assert.equal(h.reads(),reads+1,'a fresh credential still verifies the setting');
+});
+
+test('jobs queued during a visibility pass are handled by the shared rerun',async t=>{
+  const h=fixture(t);let release!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const first=h.visibility.apply({...h.access,api:async()=>{await gate;return {ticket:'fixture'};}},'one',true,'credential');
+  h.visibility.queue(job);const rerun=h.visibility.apply(h.access,'one',true,'credential');
+  release();await Promise.all([first,rerun]);assert.equal(h.commands.length,1);assert.deepEqual(h.stored(),[]);
+});
+
+test('disposing visibility work fences the coalesced rerun',async t=>{
+  const h=fixture(t);let release!:()=>void,tickets=0;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const access={...h.access,api:async()=>{tickets++;await gate;return {ticket:'fixture'};}};
+  const first=h.visibility.apply(access,'one',false,'credential');h.visibility.apply(access,'one',true,'credential',true);
+  h.visibility.dispose();release();await first;assert.equal(tickets,1);assert.equal(h.reads(),0);assert.deepEqual(h.writes,[]);
+});
+
+test('a failed coalesced pass retains tag jobs and rejects all shared waiters for a later retry',async t=>{
+  const h=fixture(t);h.visibility.queue(job);h.failTag(true);let release!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const access={...h.access,api:async()=>{await gate;return {ticket:'fixture'};}};
+  const first=h.visibility.apply(access,'one',true,'credential',true);
+  const second=h.visibility.apply(h.access,'one',true,'credential',true);assert.equal(first,second);
+  const result=assert.rejects(first,/remain pending/);release();await result;
+  assert.equal((h.stored() as any[]).length,1);assert.equal(h.commands.length,2,'only one in-flight rerun retries the durable command');
+  h.failTag(false);await h.visibility.apply(h.access,'one',true,'credential');assert.deepEqual(h.stored(),[]);assert.ok(h.commands.every(command=>command.commandId===job.id));
+});
+
+test('an older disable pass cannot drop a tag queued for the latest enabled preference',async t=>{
+  const h=fixture(t);let release!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const first=h.visibility.apply({...h.access,api:async()=>{await gate;return {ticket:'fixture'};}},'one',false,'credential',true);
+  h.visibility.queue(job);const enabled=h.visibility.apply(h.access,'one',true,'credential',true);
+  release();await Promise.all([first,enabled]);assert.equal(h.commands.length,1);assert.deepEqual(h.stored(),[]);assert.ok(h.settings.hiddenThreadTags.includes('t3-obsidian'));
+});

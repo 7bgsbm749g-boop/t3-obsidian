@@ -6,12 +6,14 @@ export const OBSIDIAN_THREAD_TAG='t3-obsidian';
 export const threadHiding=(value:unknown):boolean|undefined=>typeof value==='boolean'?value:undefined;
 export interface ThreadTagJob {id:string;threadId:string;projectId:string;environmentId:string}
 interface VisibilityStore {load():unknown;save(jobs:ThreadTagJob[]):void}
+interface VisibilityRequest {access:ThreadAccess;enabled:boolean;credentialKey:string;force:boolean}
+interface VisibilityWork {promise:Promise<void>;next?:VisibilityRequest}
 
 /** Optional server metadata changes never dispatch prompts or edit local files. */
 export class ThreadVisibility {
   private jobs:ThreadTagJob[]=[];
   private configured=new Map<string,boolean>();
-  private work=new Map<string,Promise<void>>();
+  private work=new Map<string,VisibilityWork>();
   private stopped=false;
   constructor(private store:VisibilityStore){
     const saved=store.load();
@@ -24,13 +26,29 @@ export class ThreadVisibility {
   }
   apply(access:ThreadAccess,environmentId:string,enabled:boolean,credentialKey:string,force=false):Promise<void>{
     if(this.stopped)return Promise.resolve();
-    const pending=this.work.get(environmentId);if(pending)return pending.catch(()=>{}).then(()=>this.apply(access,environmentId,enabled,credentialKey,force));
+    const pending=this.work.get(environmentId);
+    if(pending){
+      // Keep the latest preference/access, but retain any queued reconnect repair.
+      pending.next={access,enabled,credentialKey,force:force||pending.next?.force===true};return pending.promise;
+    }
     const key=JSON.stringify([environmentId,credentialKey]);
     if(!force&&this.configured.get(key)===enabled&&!this.jobs.some(job=>job.environmentId===environmentId))return Promise.resolve();
-    const work=this.update(access,environmentId,enabled,key,force).finally(()=>{if(this.work.get(environmentId)===work)this.work.delete(environmentId);});
-    this.work.set(environmentId,work);return work;
+    const work:VisibilityWork={promise:Promise.resolve(),next:{access,enabled,credentialKey,force}};
+    work.promise=this.flush(environmentId,work).finally(()=>{if(this.work.get(environmentId)===work)this.work.delete(environmentId);});
+    this.work.set(environmentId,work);return work.promise;
+  }
+  private async flush(environmentId:string,work:VisibilityWork){
+    let failure:Error|undefined;
+    while(work.next&&!this.stopped){
+      const {access,enabled,credentialKey,force}=work.next;work.next=undefined;
+      const key=JSON.stringify([environmentId,credentialKey]);
+      if(!force&&this.configured.get(key)===enabled&&!this.jobs.some(job=>job.environmentId===environmentId))continue;
+      try{await this.update(access,environmentId,enabled,key,force);failure=undefined;}catch(error){failure=toError(error);}
+    }
+    if(failure)throw failure;
   }
   private async update(access:ThreadAccess,environmentId:string,enabled:boolean,key:string,force:boolean){
+    const discarded=!enabled?new Set(this.jobs.filter(job=>job.environmentId===environmentId)):undefined;
     const rpc=await connectT3Rpc(access.api,access.origin);
     try{
       if(this.stopped)return;
@@ -46,7 +64,7 @@ export class ThreadVisibility {
         this.configured.set(key,enabled);while(this.configured.size>32)this.configured.delete(this.configured.keys().next().value!);
       }
       if(this.stopped)return;
-      if(!enabled){this.jobs=this.jobs.filter(job=>job.environmentId!==environmentId);this.store.save(this.jobs);return;}
+      if(!enabled){this.jobs=this.jobs.filter(job=>!discarded!.has(job));this.store.save(this.jobs);return;}
       const failures:Error[]=[];
       for(const job of this.jobs.filter(job=>job.environmentId===environmentId)){
         if(this.stopped)return;

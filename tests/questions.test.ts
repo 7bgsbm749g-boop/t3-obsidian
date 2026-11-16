@@ -45,16 +45,17 @@ test('synced targets round trip punctuation and final responses retain async que
 });
 
 function harness(){
-  let saved:QuestionRecord[]=[],activities:any[]=[opened()],offline=false,throwDispatch=false,resolveDispatch=false,failSave=false,id=0;
+  let saved:QuestionRecord[]=[],activities:any[]=[opened()],offline=false,throwDispatch=false,resolveDispatch=false,failSave=false,failReads=false,reads=0,id=0;
   const dispatches:any[]=[],accesses:string[]=[],order:string[]=[];
   const store={load:()=>structuredClone(saved),save:(records:QuestionRecord[])=>{if(failSave)throw Error('Storage unavailable');saved=structuredClone(records);order.push('save');}};
   const access=async(environmentId:string)=>{accesses.push(environmentId);return {origin:'https://t3.example',api:async(path:string,payload?:any)=>{
     if(offline)throw Error('Disconnected');
     if(payload){order.push('dispatch');dispatches.push(structuredClone(payload));assert.equal(saved[0].command?.commandId,payload.commandId);if(resolveDispatch)activities.push(resolved());if(throwDispatch)throw Error('Lost acknowledgement');return {};}
+    reads++;if(failReads)throw Error('History read must not block submission');
     assert.equal(path,'/api/orchestration/threads/original-thread?controlOnly=true');return {thread:{id:target.threadId,activities}};
   },close:()=>{}};};
   const create=()=>new QuestionController(access,store,()=>`command-${++id}`,()=> '2026-09-30T01:00:00Z');
-  return {create,dispatches,accesses,order,activities,get saved(){return saved;},offline:(v:boolean)=>{offline=v;},throwDispatch:(v:boolean)=>{throwDispatch=v;},resolveDispatch:(v:boolean)=>{resolveDispatch=v;},failSave:(v:boolean)=>{failSave=v;}};
+  return {create,dispatches,accesses,order,activities,get saved(){return saved;},get reads(){return reads;},offline:(v:boolean)=>{offline=v;},throwDispatch:(v:boolean)=>{throwDispatch=v;},resolveDispatch:(v:boolean)=>{resolveDispatch=v;},failSave:(v:boolean)=>{failSave=v;},failReads:(v:boolean)=>{failReads=v;}};
 }
 
 test('opening and refreshing never submits; write-ahead submission stays pending until resolution',async()=>{
@@ -70,14 +71,17 @@ test('lost acknowledgement survives restart and explicit retry reuses byte-ident
   await assert.rejects(first.submit(target),/Lost acknowledgement/);assert.equal(first.view(target).status,'error');
   const bytes=JSON.stringify(h.dispatches[0]);first.dispose();const next=h.create();await next.refresh([target]);assert.equal(next.view(target).status,'error');
   assert.equal(next.record(target).drafts[' exact id '].text,'draft');assert.throws(()=>next.draft(target,' exact id ',{text:'different'}),/saved submission/);
-  h.throwDispatch(false);h.resolveDispatch(true);await next.submit(target);assert.equal(JSON.stringify(h.dispatches[1]),bytes);assert.equal(next.view(target).status,'resolved');
+  h.throwDispatch(false);h.resolveDispatch(true);await next.submit(target);assert.equal(JSON.stringify(h.dispatches[1]),bytes);
+  assert.equal(next.view(target).accepted,true);await next.refresh([target]);assert.equal(next.view(target).status,'resolved');next.dispose();
 });
 
-test('refresh before submission prevents another-client answer and storage failures prevent dispatch',async()=>{
-  const h=harness(),controller=h.create();await controller.refresh([target]);controller.draft(target,' exact id ',{text:'draft'});h.activities.push(resolved());
+test('observed resolution and write-ahead storage failures prevent dispatch',async()=>{
+  const h=harness(),controller=h.create(),untrack=controller.track(target);await controller.refresh([target]);controller.draft(target,' exact id ',{text:'draft'});h.activities.push(resolved());
+  controller.observe(target.environmentId,target.threadId,h.activities,10);
   await controller.submit(target);assert.equal(h.dispatches.length,0);assert.equal(controller.view(target).status,'resolved');
   const other=harness(),c=other.create();await c.refresh([target]);c.draft(target,' exact id ',{text:'draft'});other.failSave(true);
   await assert.rejects(c.submit(target),/Storage unavailable/);assert.equal(other.dispatches.length,0);
+  untrack();controller.dispose();c.dispose();
 });
 
 test('a failed provider response retains draft and permits a new command; old failures do not poison retries',async()=>{
@@ -93,9 +97,20 @@ test('async requests remain answerable after completion; only message-mode reque
   const blocking=harness(),c=blocking.create();await c.refresh([target]);await assert.rejects(c.submit(target,true),/cannot be dismissed/);assert.equal(blocking.dispatches.length,0);
 });
 
-test('failed refresh never submits stale state or clears a question merely absent from a snapshot',async()=>{
-  const h=harness(),controller=h.create();await controller.refresh([target]);controller.draft(target,' exact id ',{text:'draft'});h.offline(true);await assert.rejects(controller.submit(target),/Disconnected/);assert.equal(h.dispatches.length,0);
-  h.offline(false);h.activities.splice(0);await controller.refresh([target]);assert.equal(controller.view(target).status,'unavailable');
+test('a failed history refresh does not force loaded answers through that read again',async()=>{
+  const h=harness(),controller=h.create();await controller.refresh([target]);controller.draft(target,' exact id ',{text:'draft'});h.failReads(true);await controller.refresh([target]);
+  assert.equal(controller.view(target).fresh,false);assert.equal(h.reads,2);
+  await controller.submit(target);assert.equal(h.dispatches.length,1);assert.equal(controller.view(target).accepted,true);assert.equal(h.reads,2);
+  h.failReads(false);h.activities.splice(0);await controller.refresh([target]);assert.equal(controller.view(target).status,'unavailable');
+  assert.equal(controller.record(target).resolved,undefined,'absence is not resolution');
+  controller.dispose();
+});
+
+test('an offline loaded answer keeps its saved command without an automatic retry',async()=>{
+  const h=harness(),controller=h.create();await controller.refresh([target]);controller.draft(target,' exact id ',{text:'Keep this answer'});h.offline(true);
+  await assert.rejects(controller.submit(target),/Disconnected/);assert.equal(h.dispatches.length,0);assert.equal(h.reads,1);
+  assert.ok(h.saved[0].command);assert.equal(h.saved[0].drafts[' exact id '].text,'Keep this answer');assert.equal(h.saved[0].uncertain,true);
+  h.offline(false);await controller.recoverAnswerStreams();assert.equal(h.dispatches.length,0);controller.dispose();
 });
 
 test('dismissal is saved and observable before any remote refresh, survives offline reload and safely retries',async()=>{
@@ -138,16 +153,62 @@ test('dismissed section cleanup preserves answers, other questions, code example
   assert.equal(clearResolvedQuestion(example,target),example);
 });
 
-test('one submission uses two control reads and shows feedback before access begins',async()=>{
+test('a loaded question submits without preflight or confirmation history reads',async()=>{
   const h=harness(),controller=h.create();await controller.refresh([target]);controller.draft(target,' exact id ',{text:'draft'});
-  h.accesses.length=0;
+  h.accesses.length=0;h.failReads(true);
   const work=controller.submit(target);
   assert.equal(controller.view(target).status,'submitting');assert.equal(h.accesses.length,0);
   await work;
-  assert.equal(h.accesses.length,3,'one preflight, one dispatch, one confirmation; no duplicate preflight');
+  assert.equal(h.accesses.length,1,'only the answer dispatch acquires access');assert.equal(h.reads,1,'submission does not read history');
   assert.equal(h.dispatches.length,1);assert.equal(controller.view(target).accepted,true);
+  assert.equal(controller.view(target).status,'submitting','acknowledgement is not resolution');
+  assert.deepEqual(h.saved[0].command,h.dispatches[0],'retain the exact saved command until resolution');
   assert.deepEqual(controller.watchedTargets(),[target],'an accepted answer stays monitored without saved-note controls');
-  h.activities.push(resolved());await controller.refresh(controller.watchedTargets());assert.equal(controller.view(target).status,'resolved');controller.dispose();
+  controller.observe(target.environmentId,target.threadId,[opened(),resolved()],10);assert.equal(controller.view(target).status,'resolved');controller.dispose();
+});
+
+test('an unloaded question still needs a successful read before dispatch',async()=>{
+  const h=harness(),controller=h.create();controller.draft(target,' exact id ',{text:'draft'});h.failReads(true);
+  await assert.rejects(controller.submit(target),/History read/);assert.equal(h.dispatches.length,0);assert.equal(h.reads,1);
+  h.failReads(false);await controller.submit(target);assert.equal(h.dispatches.length,1);assert.equal(h.reads,2);controller.dispose();
+});
+
+test('a server rejection of a stale loaded request retains its exact saved answer without replay',async()=>{
+  let saved:QuestionRecord[]=[],reads=0,dispatches=0;
+  const controller=new QuestionController(async()=>({origin:'test',api:async(_path,payload)=>{
+    if(payload){dispatches++;assert.equal((payload as any).requestId,target.requestId);throw Error('Runtime request is resolved.');}
+    reads++;return {thread:{id:target.threadId,activities:[opened()]}};
+  }}),{load:()=>saved,save:value=>{saved=structuredClone(value);}},()=> 'same-command');
+  await controller.refresh([target]);controller.draft(target,' exact id ',{text:'Keep this answer'});
+  await assert.rejects(controller.submit(target),/Runtime request is resolved/);
+  assert.equal(reads,1);assert.equal(dispatches,1);assert.notEqual(controller.view(target).accepted,true);
+  assert.equal(saved[0].command?.commandId,'same-command');assert.equal(saved[0].drafts[' exact id '].text,'Keep this answer');assert.equal(saved[0].uncertain,true);
+  await controller.recoverAnswerStreams();assert.equal(dispatches,1);
+  controller.observe(target.environmentId,target.threadId,[opened(),resolved()],10);assert.equal(controller.view(target).status,'resolved');assert.equal(saved[0].command,undefined);controller.dispose();
+});
+
+test('a slow answer-stream attachment cannot delay accepted submission', {timeout:2000},async()=>{
+  let saved:QuestionRecord[]=[],entered!:()=>void,release!:(value:boolean)=>void;
+  const started=new Promise<void>(resolve=>{entered=resolve;});
+  const controller=new QuestionController(async()=>({origin:'test',api:async(_path,payload)=>payload?{}:{thread:{id:target.threadId,activities:[opened(target.requestId,'message')]}}}),
+    {load:()=>saved,save:value=>{saved=structuredClone(value);}},()=> 'command',undefined,async()=>{entered();return new Promise(resolve=>{release=resolve;});});
+  await controller.refresh([target]);controller.draft(target,' exact id ',{text:'Yes'});await controller.submit(target,false,'Synthetic.md');await started;
+  assert.equal(controller.view(target).accepted,true);assert.equal(saved[0].answerFollow?.accepted,true);assert.ok(saved[0].command);
+  const recovery=controller.recoverAnswerStreams();release(true);await recovery;assert.equal(saved[0].answerFollow,undefined);controller.dispose();
+});
+
+test('an in-flight background history read cannot delay a loaded answer', {timeout:2000},async()=>{
+  let reads=0,dispatches=0,entered!:()=>void,release!:(value:any)=>void;
+  const started=new Promise<void>(resolve=>{entered=resolve;}),snapshot={thread:{id:target.threadId,activities:[opened()]}};
+  const controller=new QuestionController(async()=>({origin:'test',api:async(_path,payload)=>{
+    if(payload){dispatches++;return {};}
+    if(++reads===1)return snapshot;
+    entered();return new Promise(resolve=>{release=resolve;});
+  }}),{load:()=>[],save:()=>{}},()=> 'command');
+  await controller.refresh([target]);controller.draft(target,' exact id ',{text:'Yes'});
+  const background=controller.refresh([target]);await started;await controller.submit(target);
+  assert.equal(dispatches,1);assert.equal(reads,2);assert.equal(controller.view(target).accepted,true);
+  release(snapshot);await background;assert.equal(controller.view(target).accepted,true);controller.dispose();
 });
 
 test('concurrent refreshes share one snapshot, including a target added during the read',async()=>{
@@ -204,7 +265,7 @@ test('resolution or disposal while acquiring dispatch access prevents a stale mu
   for(const stop of [false,true]){
     let accesses=0,dispatches=0,entered!:()=>void,release!:(value:any)=>void;const started=new Promise<void>(resolve=>{entered=resolve;});
     const connection={origin:'test',api:async(_path:string,payload?:any)=>{if(payload){dispatches++;return {};}return {thread:{id:target.threadId,activities:[opened()]}};}};
-    const controller=new QuestionController(async()=>{if(++accesses===3)return new Promise(resolve=>{release=resolve;entered();});return connection;},{load:()=>[],save:()=>{}},()=> 'command');
+    const controller=new QuestionController(async()=>{if(++accesses===2)return new Promise(resolve=>{release=resolve;entered();});return connection;},{load:()=>[],save:()=>{}},()=> 'command');
     await controller.refresh([target]);controller.draft(target,' exact id ',{text:'Draft'});const submission=controller.submit(target);await started;
     if(stop)controller.dispose();else controller.observe(target.environmentId,target.threadId,[opened(),resolved()],20);
     release(connection);await submission;assert.equal(dispatches,0);controller.dispose();

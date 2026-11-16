@@ -2,13 +2,13 @@ import {outgoingMessage,type OutgoingMessage} from './send-contracts';
 import {readRawSnapshot,readHistory,readThreadList} from './wire-readers';
 import type {WireSnapshot,WireMessage,WireTurnItem} from './wire-types';
 import {toError,isRecord} from '../shared/values';
-import {connectT3Rpc,type T3Api,type SocketFactory} from './t3-rpc';
+import {T3UnaryRpcPool,type T3UnaryRpcOwner,connectT3Rpc,type T3Api,type SocketFactory} from './t3-rpc';
 import {normalizeV2Snapshot,restoreCompactSnapshot,v2Command} from './orchestration-v2';
 import {htmlRenderFromToolItem} from '../responses/html-results';
 
 interface Attachment {id:string;dataUrl?:string;type?:string;name?:string;mimeType?:string;sizeBytes?:number}
 
-export interface T3RequestOptions {beforeThreadCreate?:()=>void|Promise<void>;signal?:AbortSignal;compactImport?:boolean;onImportSnapshot?:(snapshot:import('./wire-types').ThreadSnapshot)=>void}
+export interface T3RequestOptions {beforeThreadCreate?:()=>void|Promise<void>;signal?:AbortSignal;compactImport?:boolean;deferHistoricalDetails?:{messageIds:string[];turnIds:string[]};continueHistory?:()=>boolean;onImportSnapshot?:(snapshot:import('./wire-types').ThreadSnapshot)=>void}
 export type AbortableT3Api=(path:string,payload?:unknown,options?:T3RequestOptions)=>Promise<unknown>;
 
 export function cancelledRequest(message='Request cancelled.'):Error{return typeof DOMException==='function'?new DOMException(message,'AbortError'):Object.assign(Error(message),{name:'AbortError'});}
@@ -26,7 +26,8 @@ export function abortableRead<T>(work:Promise<T>,signal?:AbortSignal):Promise<T>
 
 /** All wire mutations use v2 RPC (projects have their own HTTP API). The old
  * path is an internal routing key for durable plugin commands, never sent. */
-export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory):AbortableT3Api {
+export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory,validUntil=Infinity,sharedUnary?:T3UnaryRpcOwner):T3Api {
+  const unary=sharedUnary?.connection(raw,origin,makeSocket,validUntil)??new T3UnaryRpcPool(raw,origin,makeSocket,undefined,validUntil);
   const outputs=new Map<string,WireTurnItem>();
   const outputSizes=new Map<string,number>();let outputCharacters=0;
   const senderTitles=new Map<string,string|undefined>();let senderRefresh=-Infinity;
@@ -42,15 +43,15 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
     return {...message,attachments:message.attachments.map(a=>typeof a.dataUrl==='string'?attachments[index++]:a),
       ...(message.context?.records?{context:{...message.context,records:message.context.records.map(r=>({...r,...(typeof r.attachmentId==='string'&&ids.has(r.attachmentId)?{attachmentId:ids.get(r.attachmentId)}:{})}))}}:{})};
   }
-  async function senderMessages(snapshot:WireSnapshot){
+  async function senderMessages(snapshot:WireSnapshot,refresh=true,signal?:AbortSignal){
     const messages=snapshot.projection.messages;
     const ids=[...new Set<string>(messages.filter(m=>m.createdBy==='agent'&&uuid.test(m.senderThreadId??'')).map(m=>m.senderThreadId!))].slice(-256);
     const age=Date.now()-senderRefresh;
-    if(ids.length&&(age>=30_000||age>=1000&&ids.some(id=>!senderTitles.has(id)))){
+    if(refresh&&ids.length&&(age>=30_000||age>=1000&&ids.some(id=>!senderTitles.has(id)))){
       senderRefresh=Date.now();
       try{
         // Shell metadata resolves exact IDs without reading other conversations.
-        const shell:unknown=await raw('/api/orchestration/shell');
+        const shell:unknown=await abortableRead(raw('/api/orchestration/shell',undefined,{signal}),signal);
         if(isRecord(shell)&&Array.isArray(shell.threads)){
           const threads=readThreadList({threads:[...(shell.threads as unknown[]),...(Array.isArray(shell.archivedThreads)?shell.archivedThreads as unknown[]:[])]});
           for(const id of ids){
@@ -60,36 +61,52 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
           }
           while(senderTitles.size>256)senderTitles.delete(senderTitles.keys().next().value!);
         }
-      }catch{/* Missing sender metadata must not block reply recovery. */}
+      }catch{requestAborted(signal);/* Missing sender metadata must not block reply recovery. */}
     }
-    return messages.map(m=>m.createdBy==='agent'&&uuid.test(m.senderThreadId??'')?{...m,senderThreadTitle:senderTitles.get(m.senderThreadId!)}:m);
+    return messages.map(m=>m.createdBy==='agent'&&uuid.test(m.senderThreadId??'')?{...m,senderThreadTitle:senderTitles.get(m.senderThreadId!)??m.senderThreadTitle}:m);
   }
-  async function hydrate(snapshot:WireSnapshot|import('./wire-readers').MetadataSnapshot){
+  async function hydrate(snapshot:WireSnapshot|import('./wire-readers').MetadataSnapshot,deferred?:T3RequestOptions['deferHistoricalDetails'],signal?:AbortSignal){
     if(!('projection' in snapshot)||!snapshot.projection)return snapshot;
-    const messages=await senderMessages(snapshot);
+    const messages=await senderMessages(snapshot,!deferred,signal);requestAborted(signal);
     const items=snapshot.projection.turnItems??[];
     const omitted=items.filter(i=>i.outputOmitted===true);
     // Handoff results can precede a long resumed run. Retain their lifecycle
     // proof independently of the recent tool-detail window.
-    const needed=[...new Map([...omitted.slice(-40),...omitted.filter(item=>/(?:^|[._])t3_worktree_handoff$/.test(item.toolName??'')).slice(-32)].map(item=>[item.id,item])).values()];
+    // Only known terminal historical runs have optional display output. Keep
+    // current/queued/unknown runs and exact response targets authoritative,
+    // including an old binding recovered beyond the bounded polling window.
+    const p=snapshot.projection,runs=[...p.runs].sort((a,b)=>a.ordinal-b.ordinal);
+    const current=runs.filter(run=>run.status!=='queued').at(-1)??runs.at(-1);
+    const required=new Set([current?.id,p.thread.activeRunId,p.thread.latestRunId,...deferred?.turnIds??[]]);
+    for(const run of runs)if(run.userMessageId&&deferred?.messageIds.includes(run.userMessageId))required.add(run.id);
+    for(const message of p.messages)if(deferred?.messageIds.includes(message.id)&&message.runId)required.add(message.runId);
+    const historical=new Set(deferred?runs.filter(run=>!required.has(run.id)&&['completed','failed','interrupted','cancelled','rolled_back','expired'].includes(run.status)).map(run=>run.id):[]);
+    // HTML references contribute to saved replies. Handoff output supplies
+    // continuation ownership. Neither is optional historical display detail.
+    const needed=[...new Map([...omitted.slice(-40).filter(item=>!historical.has(item.runId??'')||/^(?:(?:mcp__t3[-_]code__|t3[-_]code[.]))?html_render$/.test(item.toolName??'')),...omitted.filter(item=>/(?:^|[._])t3_worktree_handoff$/.test(item.toolName??'')).slice(-32)].map(item=>[item.id,item])).values()];
     const hydrated=new Map<string,WireTurnItem>();let rpc:Awaited<ReturnType<typeof connectT3Rpc>>|undefined;
     try{
       for(const item of needed){
+        requestAborted(signal);
         const key=JSON.stringify([snapshot.projection.thread.id,item.id,item.updatedAt]);
         if(outputs.has(key)){hydrated.set(key,outputs.get(key)!);continue;}
-        rpc??=await connectT3Rpc(raw,origin,makeSocket);
+        rpc??=await unary.acquire(signal);
         const result=await rpc.call('orchestration.getTurnItem',{threadId:snapshot.projection.thread.id,itemId:item.id,revision:item.updatedAt});
+        requestAborted(signal);
         if(isRecord(result)&&isRecord(result.item)&&result.item.id===item.id&&result.item.updatedAt===item.updatedAt){
           const full=result.item as unknown as WireTurnItem;hydrated.set(key,full);const characters=JSON.stringify(full).length;
           if(characters<=2_000_000){outputCharacters+=characters-(outputSizes.get(key)??0);outputs.set(key,full);outputSizes.set(key,characters);}
         }
       }
-    }catch{/* A missing tool detail must not block canonical reply recovery. */}
-    finally{rpc?.close();}
-    while(outputs.size>256||outputCharacters>2_000_000){const key=outputs.keys().next().value!;outputs.delete(key);outputCharacters-=outputSizes.get(key)??0;outputSizes.delete(key);}
+    }catch{requestAborted(signal);/* A missing tool detail must not block canonical reply recovery. */}
+    finally{
+      rpc?.close();
+      // Cancellation must leave the shared cache bounded too.
+      while(outputs.size>256||outputCharacters>2_000_000){const key=outputs.keys().next().value!;outputs.delete(key);outputCharacters-=outputSizes.get(key)??0;outputSizes.delete(key);}
+    }
     return {...snapshot,projection:{...snapshot.projection,messages,turnItems:items.map(i=>hydrated.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??outputs.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??i)}};
   }
-  return async(path,payload,options)=>{
+  const api:T3Api=async(path,payload,options)=>{
     requestAborted(options?.signal);
     const request:T3Api=(target,body)=>raw(target,body,options);
     // Internal read key, fulfilled by the stock authenticated RPC. No custom
@@ -109,21 +126,21 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       }finally{signal?.removeEventListener('abort',close);close();}
     }
     if(path==='/api/orchestration/no-project'){
-      const rpc=await connectT3Rpc(raw,origin,makeSocket);
+      const rpc=await unary.acquire(options?.signal);
       try{return await rpc.call('projects.ensureScratch',{});}finally{rpc.close();}
     }
     if(path==='/api/assets/create-url'){
-      const rpc=await connectT3Rpc(raw,origin,makeSocket);
+      const rpc=await unary.acquire(options?.signal);
       try{return await rpc.call('assets.createUrl',payload);}finally{rpc.close();}
     }
     // Internal adapter route: the server provides this read over RPC only.
     if(path==='/api/orchestration/turn-item'){
-      const rpc=await connectT3Rpc(raw,origin,makeSocket);
+      const rpc=await unary.acquire(options?.signal);
       try{const result=await rpc.call('orchestration.getTurnItem',payload);return isRecord(result)?result.item:undefined;}finally{rpc.close();}
     }
     // Internal route for a new auto-titled thread and its immutable first send.
     if(path==='/api/orchestration/launch'){
-      const rpc=await connectT3Rpc(raw,origin,makeSocket);
+      const rpc=await unary.acquire(options?.signal);
       try{
         if(!isRecord(payload)||typeof payload.threadId!=='string')throw Error('Invalid T3 launch identity.');
         const initialMessage=await persistAttachments(rpc,payload.threadId,outgoingMessage(payload.initialMessage));
@@ -167,7 +184,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
           }
         }
       }
-      const rpc=await connectT3Rpc(raw,origin,makeSocket);
+      const rpc=await unary.acquire(options?.signal);
       try{
         if(command.type==='message.dispatch'){if(typeof command.threadId!=='string')throw Error('Invalid saved T3 thread identity.');command={...command,...await persistAttachments(rpc,command.threadId,outgoingMessage(command))};}
         if(command.type==='thread.create'){await options?.beforeThreadCreate?.();requestAborted(options?.signal);}
@@ -195,7 +212,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
         normalized.thread.hasPendingApprovals||=pending.some(item=>!['user_input','user-input'].includes(item.kind));
         return normalized;
       }
-      if(!snapshot?.projection||path.includes('turnLimit=')&&!importRunId)return normalizeV2Snapshot(await hydrate(snapshot));
+      if(!snapshot?.projection||path.includes('turnLimit=')&&!importRunId)return normalizeV2Snapshot(await hydrate(snapshot,options?.deferHistoricalDetails,options?.signal));
       // Full recovery follows opaque cursors rather than asking for one
       // unbounded HTTP body. Keep the initial control-plane watermark so live
       // events committed during pagination still replay after this snapshot.
@@ -213,7 +230,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       };
       const importedSnapshot=()=>{const recovered=recoveredSnapshot();return normalizeV2Snapshot({...recovered,projection:{...recovered.projection,turnItems:recovered.projection.turnItems.map(item=>htmlRenderFromToolItem(item)?{...item,input:undefined}:item),visibleTurnItems:[]}});};
       if(importOnly&&options?.onImportSnapshot)options.onImportSnapshot(importedSnapshot());
-      while(more){
+      while(more&&options?.continueHistory?.()!==false){
         if(!cursor||cursors.has(cursor))throw Error('T3 returned an invalid or repeated history cursor.');
         cursors.add(cursor);
         const page=readHistory(await raw(root+'/history?cursor='+encodeURIComponent(cursor)+(importOnly?'&view=conversation&deferWork=1':''),undefined,{...options,...(importOnly?{compactImport:true}:{})}));
@@ -224,8 +241,11 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
         if(importOnly&&options?.onImportSnapshot&&more&&page.items.some(row=>row.item.type==='user_message'))options.onImportSnapshot(importedSnapshot());
       }
       if(importOnly)return importedSnapshot();
-      return normalizeV2Snapshot(await hydrate(recoveredSnapshot()));
+      return normalizeV2Snapshot(await hydrate(recoveredSnapshot(),options?.deferHistoricalDetails,options?.signal));
     }
     return normalizeV2Snapshot(await request(path,payload));
   };
+  api.acquireUnaryRpc=signal=>unary.acquire(signal);
+  api.disposeUnaryRpc=()=>unary.dispose();
+  return api;
 }

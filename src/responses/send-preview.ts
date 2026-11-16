@@ -57,6 +57,14 @@ export function sendPreviewElement(document:Document,preview:SendPreview,measure
 interface PendingPreview {users:number;clear:()=>void;file:MarkdownView['file']}
 export class SendPreviews {
   private pending=new Map<MarkdownView,PendingPreview>();
+  private preparation?:{users:number;notice:{hide():void}};
+  constructor(private showPreparation:()=>{hide():void}=()=>new obsidianRuntime.Notice('Preparing send…',0)){}
+  /** Separate from Sending: machine/workspace selection can still be pending. */
+  preparing():()=>void {
+    const entry=this.preparation??={users:0,notice:this.showPreparation()};
+    entry.users++;let released=false;
+    return ()=>{if(released)return;released=true;if(--entry.users===0&&this.preparation===entry){this.preparation=undefined;entry.notice.hide();}};
+  }
   begin(view:MarkdownView,offset:number):()=>void {
     if(!view.file)return ()=>{};
     let current=this.pending.get(view);
@@ -80,5 +88,5 @@ export class SendPreviews {
     return ()=>{if(released)return;released=true;if(--entry.users===0&&this.pending.get(view)===entry)this.hide(view);};
   }
   hide(view:MarkdownView){const pending=this.pending.get(view);if(!pending)return;this.pending.delete(view);pending.clear();}
-  dispose(){for(const view of this.pending.keys())this.hide(view);}
+  dispose(){for(const view of this.pending.keys())this.hide(view);this.preparation?.notice.hide();this.preparation=undefined;}
 }

@@ -1,5 +1,5 @@
 import {isRecord,records} from '../shared/values';
-import {connectT3Rpc,type T3Api,type SocketFactory} from '../connection/t3-rpc';
+import {acquireT3UnaryRpc,type T3Api,type SocketFactory} from '../connection/t3-rpc';
 
 export interface ModelSelection {instanceId:string;model:string;options?:{id:string;value:unknown}[]}
 export type RuntimeMode='approval-required'|'auto-accept-edits'|'auto'|'full-access';
@@ -54,7 +54,7 @@ export function resolveNewThreadDefaults(config:unknown,project:Project):NewThre
 }
 
 export async function readNewThreadDefaults(api:T3Api,origin:string,project:Project,makeSocket?:SocketFactory):Promise<NewThreadDefaults>{
-  const rpc=await connectT3Rpc(api,origin,makeSocket);
+  const rpc=await acquireT3UnaryRpc(api,origin,makeSocket);
   try{
     const defaults=resolveNewThreadDefaults(await rpc.call('server.getConfig',{}),project);
     if(defaults.workspaceStrategy?.type==='worktree'&&project.workspaceRoot){
@@ -70,7 +70,7 @@ export async function readNewThreadDefaults(api:T3Api,origin:string,project:Proj
 }
 
 export async function readNewThreadModel(api:T3Api,origin:string,project:Project,makeSocket?:SocketFactory):Promise<ModelSelection>{
-  const rpc=await connectT3Rpc(api,origin,makeSocket);
+  const rpc=await acquireT3UnaryRpc(api,origin,makeSocket);
   try{return resolveNewThreadModel(await rpc.call('server.getConfig',{}),project);}
   finally{rpc.close();}
 }
