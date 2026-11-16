@@ -43,9 +43,8 @@ regression coverage for behavior changes. Preserve and run existing affected che
 Complete all required behavior, integration, native-client and Sync checks in
 the developing agent run. Do not defer testing to a queue, release worker, or
 later publication step. Use the isolated Sync lab when Sync behavior changes.
-Run GUI checks only when the user requests them on this machine; if a required
-check is unavailable, report it and keep the PR in draft. Retain source identity,
-results and fixture cleanup proof in the external evidence directory.
+If a required check is unavailable, report it and keep the PR in draft. Retain
+source identity, results and fixture cleanup proof in the external evidence directory.
 
 `npm run lint` must pass with zero errors or warnings. Preserve platform
 boundaries: guard deferred Node runtime imports with `Platform.isDesktop`,

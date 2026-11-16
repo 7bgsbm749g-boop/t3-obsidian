@@ -134,13 +134,13 @@ export class SendComposer extends NoteTabPanel {
     this.field.addEventListener('input',()=>{this.capture();this.refreshAvailability?.();});
     this.field.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();void this.choose();}});
     const controls=composer.createDiv({cls:'t3-send-controls'});
-    const model=this.button(controls,'Choose model','sparkles',()=>{void this.chooseModel();},'t3-send-model');
-    model.createSpan({text:this.overrides.modelSelection?composerModelLabel(this.overrides.modelSelection,this.models):this.target==='new'?'T3 default':'Thread model'});setIcon(model.createSpan(),'chevron-down');
     const options=controls.createDiv({cls:'t3-send-options'});
     const resolved=()=>resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},this.overrides);
     const streaming=this.button(options,'Stream replies into the editor','text-cursor-input',()=>{this.overrides.inline={...this.overrides.inline,enabled:!resolved().inline.enabled};this.refreshAvailability?.();});streaming.setAttribute('role','switch');
     const format=this.button(options,'Final answer format','pilcrow',()=>{this.overrides.inline={...this.overrides.inline,finalAnswerFormat:resolved().inline.finalAnswerFormat==='formatted'?'raw-markdown':'formatted'};this.refreshAvailability?.();},'t3-send-format');format.createSpan();
     const actions=controls.createDiv({cls:'t3-send-actions'});
+    const model=this.button(actions,'Choose model','sparkles',()=>{void this.chooseModel();},'t3-send-model');
+    model.createSpan({text:this.overrides.modelSelection?composerModelLabel(this.overrides.modelSelection,this.models):this.target==='new'?'T3 default':'Thread model'});setIcon(model.createSpan(),'chevron-down');
     const thread=this.button(actions,'Choose thread','message-circle',()=>{
       const menu=new Menu();
       menu.addItem(item=>item.setTitle('New thread').setIcon('plus').setChecked(this.target==='new').onClick(()=>this.select('new')));

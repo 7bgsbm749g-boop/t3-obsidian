@@ -660,7 +660,7 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 .t3-send-control:hover { background: var(--background-modifier-hover); }
 .t3-send-control:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
 .t3-send-project { margin-left: auto; max-width: 55%; }
-.t3-send-model { max-width: 45%; color: var(--text-normal); }
+.t3-send-model { max-width: 220px; color: var(--text-normal); }
 .t3-send-options, .t3-send-actions { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .t3-send-actions { margin-left: auto; max-width: 100%; }
 .t3-send-thread { min-width: 0; max-width: 230px; color: var(--text-normal); }
@@ -671,7 +671,7 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 .t3-send-detail { margin: 0; padding: 8px 14px; color: var(--text-muted); font-size: var(--font-ui-smaller); border-top: 1px solid var(--background-modifier-border); }
 .t3-send-detail[hidden] { display: none; }
 @media (max-width: 520px) {
-  .t3-send-options { margin-left: auto; }
+  .t3-send-options { margin-left: 0; }
   .t3-send-actions { flex-basis: 100%; justify-content: flex-end; }
   .t3-send-thread { max-width: calc(100% - 40px); }
   .t3-send-model { max-width: 50%; }
