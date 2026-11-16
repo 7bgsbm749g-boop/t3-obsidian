@@ -199,7 +199,7 @@ test('a genuine interruption finalizes after canonical confirmation even when an
  const h=fixture(false,async()=>canonical);h.record.request.localOnly=true;h.record.request.threadTitle='Original title';h.preview.tick(true);h.item({kind:'snapshot',snapshot:canonical});
  assert.equal(h.updates.at(-1)!.completionVerified,false);await settle();assert.equal(h.updates.at(-1)!.completionVerified,true);assert.equal(h.updates.at(-1)!.phase,'interrupted');assert.equal(h.updates.at(-1)!.turnId,'source');assert.match(h.updates.at(-1)!.body,/Renamed before stop/);assert.doesNotMatch(h.updates.at(-1)!.body,/Original title/);h.preview.dispose();
 });
-test('a local reply follows two exact delegated deliveries and verifies only the last parent result',async()=>{
+for(const deliveryState of ['acknowledged','delivered'] as const)test(`a local reply follows two exact ${deliveryState} deliveries and verifies only the last parent result`,async()=>{
  const reads:string[]=[],h=fixture(false,async(_path,payload)=>{reads.push(payload.itemId);return {...finalItem('Combined report'),id:'final-item',runId:'resume-two',messageId:'combined'};});
  h.record.request.localOnly=true;h.record.request.intermediateMode='collapse';h.preview.tick(true);
  const source=completeV2(h,2,'Two agents are running') as any,thread=source.snapshot.thread;
@@ -215,7 +215,7 @@ test('a local reply follows two exact delegated deliveries and verifies only the
  assert.equal(h.updates.at(-1)!.completionVerified,false);
  event('run.created',resume('resume-one',2,'delivery-one'));
  event('message.updated',{id:'delivery-one',role:'user',runId:'resume-one',text:'First child finished',streaming:false,delegatedCompletion:{parentRunId:'turn',generation:1,taskIds:['one']}});
- event('subagent.updated',{...child('one'),status:'completed',completionDelivery:{state:'acknowledged',observedByRunId:'resume-one'}});
+ event('subagent.updated',{...child('one'),status:'completed',completionDelivery:{state:deliveryState,observedByRunId:deliveryState==='acknowledged'?'resume-one':null}});
  event('turn-item.updated',{id:'progress-item',messageId:'progress',runId:'resume-one',type:'assistant_message',text:'One report arrived',streaming:false,updatedAt:'2026-10-06T03:03:30Z'});
  event('run.updated',{...resume('resume-one',2,'delivery-one'),status:'completed',completedAt:'2026-10-06T03:04:00Z'});await settle();
  assert.equal(h.updates.at(-1)!.turnId,'resume-one');assert.match(h.updates.at(-1)!.body,/Waiting for 1 subagent</);assert.match(h.updates.at(-1)!.body,/One report arrived/);assert.deepEqual(reads,[]);
@@ -225,7 +225,8 @@ test('a local reply follows two exact delegated deliveries and verifies only the
  assert.equal(h.updates.at(-1)!.turnId,'resume-one');assert.doesNotMatch(h.updates.at(-1)!.body,/Unrelated answer/);
  event('message.updated',{id:'delivery-two',role:'user',runId:'resume-two',text:'Second child finished',streaming:false,delegatedCompletion:{parentRunId:'turn',generation:2,taskIds:['two']}});
  event('run.created',resume('resume-two',4,'delivery-two'));
- event('subagent.updated',{...child('two'),status:'completed',completionDelivery:{state:'acknowledged',observedByRunId:'resume-two'}});
+ event('subagent.updated',{...child('two'),status:'completed',completionDelivery:{state:deliveryState,observedByRunId:deliveryState==='acknowledged'?'resume-two':null}});
+ h.clock.advance(80);await settle();assert.equal(h.updates.at(-1)!.completionVerified,false);assert.deepEqual(reads,[]);
  event('turn-item.updated',{id:'final-item',messageId:'combined',threadId:'thread',runId:'resume-two',type:'assistant_message',status:'completed',text:'Combined report',streaming:false,updatedAt:'2026-10-06T03:01:00.000Z'});
  event('run.updated',{...resume('resume-two',4,'delivery-two'),status:'completed',completedAt:'2026-10-06T03:05:00Z'});await settle();
  const update=h.updates.at(-1)!;assert.equal(update.turnId,'resume-two');assert.equal(update.phase,'complete');assert.equal(update.completionVerified,true,JSON.stringify({reads,checkpoint:update.checkpoint,body:update.body}));assert.deepEqual(update.turnIds,['turn','resume-one','resume-two']);assert.deepEqual(reads,['final-item']);assert.match(update.body,/· Worked for/);assert.match(update.body,/Combined report/);assert.doesNotMatch(update.body,/Waiting for subagents|Unrelated answer/);
