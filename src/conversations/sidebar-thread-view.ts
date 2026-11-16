@@ -15,14 +15,15 @@ const LABELS:Record<SidebarKind,string>={thread:'T3 thread','side-chat':'Side ch
 type ProjectChoice=SidebarProject;
 function draftImages(value:unknown):OutgoingAttachment[]{
   if(!Array.isArray(value)||value.length>4)return [];
-  let total=0,encoded=0;
+  let total=0,encoded=0;const attachments:OutgoingAttachment[]=[];
   for(const item of value){
     if(!isRecord(item)||typeof item.id!=='string'||!item.id||typeof item.dataUrl!=='string'||item.dataUrl.length>14*1024*1024||
       typeof item.mimeType!=='string'||!['image/png','image/jpeg','image/gif','image/webp'].includes(item.mimeType)||!item.dataUrl.startsWith('data:'+item.mimeType+';base64,')||
       typeof item.sizeBytes!=='number'||!Number.isSafeInteger(item.sizeBytes)||item.sizeBytes<0)return [];
     total+=item.sizeBytes;encoded+=item.dataUrl.length;if(total>10*1024*1024||encoded>14*1024*1024)return [];
+    attachments.push({id:item.id,dataUrl:item.dataUrl,type:'image',mimeType:item.mimeType,sizeBytes:item.sizeBytes,...(typeof item.name==='string'?{name:item.name.slice(0,255)}:{})});
   }
-  return value.map(item=>({...item})) as OutgoingAttachment[];
+  return attachments;
 }
 export interface SidebarHost {
   watch?(target:SidebarTarget,callbacks:ThreadStreamCallbacks):{stop():void};
