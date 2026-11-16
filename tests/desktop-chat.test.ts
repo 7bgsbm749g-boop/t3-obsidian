@@ -140,7 +140,7 @@ test('desktop unlinked notes choose an external workspace and persist the link o
   try{
     await h.addFolder('Fresh/deep');
     const external=join(h.vaultRoot,'..','External project');await mkdir(external);
-    h.plugin.pickFolderProject=async(_folder:any,name:string)=>{const location=await h.plugin.projectLocation({id:'loopback',name:'This computer'});return location.create(external,name);};
+    h.plugin.pickFolderProject=async(folderPath:string,name:string)=>{const location=await h.plugin.projectLocation({id:'loopback',name:'This computer'});return {project:await location.create(external,name),folderPath};};
     await h.plugin.sendChat('Reply only OK',{path:'Fresh/deep/note.md',absolutePath:join(h.vaultRoot,'Fresh/deep/note.md')},{projectOverrideKey:'folder:new'});
     const link=h.plugin.settings.folderLinks.find((link:any)=>link.folderPath==='Fresh/deep');
     assert.equal(link.projectTitle,'deep');assert.equal(link.self,false);
