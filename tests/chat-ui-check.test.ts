@@ -200,3 +200,12 @@ test('a preview setup error also releases Preparing',async()=>{
  await h.exports.openNoteSendFlow({},h.host);
  assert.deepEqual(h.preparing,['show','clear']);assert.equal(h.sent.length,0);
 });
+
+test('only an immediate automatic send carries display metadata; a dialog drops it',async()=>{
+ const preparation={connectionId:'c',environmentId:'e',thread:{id:'thread',projectId:'project',title:'Display only'}};
+ const automatic=await fixture(undefined,false,false,true);
+ automatic.calls[0].resolve({label:'Continue',threadId:'thread',preparation});await automatic.opening;
+ assert.equal(automatic.sent[0].d.preparation,preparation);
+ const dialog=await fixture();dialog.calls[0].resolve({label:'Continue',threadId:'thread',preparation});await dialog.modal.ready;
+ await dialog.modal.choose('default');assert.equal(dialog.sent[0].d.threadId,'thread');assert.equal(dialog.sent[0].d.preparation,undefined);
+});

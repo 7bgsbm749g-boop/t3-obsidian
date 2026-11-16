@@ -9,6 +9,7 @@ import {responseAnchor} from '../src/responses/native-response-projection';
 import {applyThreadItem} from '../src/conversations/inline-thread';
 import {installPaletteChat} from '../src/conversations/palette-chat';
 import {loadSmartSend} from '../src/notes/smart-send';
+import {sendDirect} from '../src/connection/direct';
 
 const require=createRequire(import.meta.url);
 const compiled=build({stdin:{contents:"export {default} from './src/app/main'; export {nativeResponses} from './src/responses/native-response-manager'; export {InlineChatManager} from './src/conversations/inline-chat';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
@@ -226,4 +227,45 @@ test('a late No project result cannot repopulate another connection identity',as
   const pending=p.noProjectTarget('thread:no-project:machine',false);p.cloudGeneration++;
   release({id:'scratch',title:'No project',workspaceRoot:'/scratch'});
   await assert.rejects(pending,/connection changed/);assert.equal(p.noProjectProjects.size,0);assert.equal(p.settings.directProjects.length,0);
+});
+
+test('only matching per-send title metadata skips the duplicate read; other paths read fresh',async()=>{
+  const h=await fixture(),connection={connectionId:'c',environmentId:'e'},project={id:'p'};
+  const thread={id:'t',projectId:'p',title:'Current title',session:{status:'ready'}};
+  const preparation=h.plugin.titlePreparation(connection,thread);
+  let reads=0;h.plugin.readChatThread=async()=>{reads++;return {...thread,title:'Fresh title'};};
+  assert.equal(await h.plugin.requestTitle(connection,project,'t','Note.md',preparation),'Current title');
+  assert.equal(reads,0);
+  assert.equal(preparation.thread.session,undefined,'the context must not retain control authority');
+  thread.title='Changed after capture';assert.equal(preparation.thread.title,'Current title');
+  const invalids=[undefined,{...preparation,environmentId:'other'},{...preparation,connectionId:'other'},{...preparation,thread:{...thread,id:'other'}},{...preparation,thread:{...thread,projectId:'other'}},{...preparation,thread:{...thread,archivedAt:'now'}},{...preparation,thread:{...thread,deletedAt:'now'}}];
+  for(const invalid of invalids)assert.equal(await h.plugin.requestTitle(connection,project,'t','Note.md',invalid),'Fresh title');
+  assert.equal(reads,invalids.length);
+  h.plugin.readChatThread=async()=>{throw Error('Unavailable thread');};
+  await assert.rejects(h.plugin.requestTitle(connection,project,'t','Note.md'),/Unavailable thread/);
+});
+
+for(const race of ['unchanged','approval','stopped'])test(`a prepared title keeps fresh dispatch authority when ${race}`,async()=>{
+  const h=await fixture(),project={id:'p',title:'P',workspaceRoot:'/'},connection={connectionId:'c',environmentId:'e',host:'direct',executable:''};
+  const thread={id:'t',projectId:'p',title:'Selected title',session:{status:'ready'}};
+  const preparation=h.plugin.titlePreparation(connection,thread);
+  h.plugin.settings.pending=[];h.plugin.chatTarget=async()=>({project,link:{}});h.plugin.connection=()=>connection;
+  h.plugin.projectReadinessError=()=>undefined;h.plugin.assertNoteMode=async()=>{};h.plugin.folderLinkIntent=()=>({});
+  h.plugin.readChatThread=async()=>assert.fail('No second title-only read');
+  h.plugin.recordSendFailure=()=>{};h.plugin.failRequest=async()=>{};
+  let controls=0,mutations=0;const persisted:any[]=[];
+  h.plugin.save=async()=>{persisted.push(structuredClone(h.plugin.settings.pending));};
+  h.plugin.dispatch=async(request:any)=>{
+    assert.equal(request.title,'Selected title');assert.ok(persisted.length);
+    await sendDirect(request,undefined,h.plugin.save,undefined,{origin:'https://synthetic.example',api:async(path:string,payload?:unknown)=>{
+      if(path.includes('/threads/')){controls++;return {thread:{...thread,hasPendingApprovals:race==='approval'}};}
+      assert.equal(path,'/api/orchestration/dispatch');assert.ok(payload);
+      assert.ok(persisted.some(items=>items[0]?.directPlan?.phase==='created'),'the exact plan is durable before mutation');
+      mutations++;return {sequence:1};
+    }});
+  };
+  h.plugin.prepareImages=async(markdown:string)=>{if(race==='stopped')h.plugin.stopped=true;return {markdown,attachments:[]};};
+  const sending=h.plugin.sendChat('Question',undefined,{threadId:'t',preparation});
+  if(race==='unchanged')await sending;else await assert.rejects(sending,race==='approval'?/approval/:/disabled/);
+  assert.equal(controls,race==='stopped'?0:1);assert.equal(mutations,race==='unchanged'?1:0);assert.equal(h.plugin.busy,false);
 });

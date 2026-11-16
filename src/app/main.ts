@@ -105,7 +105,7 @@ import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,typ
 import {loadFolderLinkChanges,mergeFolderLinkChanges,applyFolderLinkChanges,changedFolderLinks,mergeLegacyFolderLinks,type FolderLinkChange} from '../projects/folder-link-sync';
 import {installPaletteChat,type PaletteChatController} from '../conversations/palette-chat';
 import {SendGesture} from '../responses/send-gesture';
-import {AskComposer,openChatFlow,openNoteSendFlow,type ChatHost,type ChatDestination} from '../conversations/chat-ui';
+import {AskComposer,openChatFlow,openNoteSendFlow,type ChatHost,type ChatDestination,type SendPreparation} from '../conversations/chat-ui';
 import {selectionRange} from '../conversations/inline-steering';
 import {projectThreads,type ThreadChoice} from '../conversations/thread-target';
 import {assertThreadNoteMode,oneToOneNoteThreads,threadNoteMode,type ThreadNoteMode,type ModeThread} from '../conversations/thread-note-mode';
@@ -1291,7 +1291,7 @@ export default class SendToT3 extends Plugin {
     const host:ChatHost=this.withSendAvailability({...this.destinationContext(this.noteContext(file)),
       beginSend:options=>this.previewSend(file.path,undefined,insertion,options.inline.enabled),
       hasNewContent:(destination)=>this.hasSmartContent(file,destination),
-      sendChat:(_text,key,resolve,_back,destination)=>this.sendNote(file,destination?.threadId,destination?.projectKey,false,key,resolve?.(),insertion),
+      sendChat:(_text,key,resolve,_back,destination)=>this.sendNote(file,destination?.threadId,destination?.projectKey,false,key,resolve?.(),insertion,destination?.preparation),
       sendToNew:(_text,key,resolve)=>this.sendNote(file,undefined,undefined,true,key,resolve?.(),insertion),
       sendToExisting:(_text,key,resolve,back)=>this.openNoteThreads(file,key,resolve,back,insertion),
     });
@@ -1485,7 +1485,7 @@ export default class SendToT3 extends Plugin {
     if(follow)await this.followImportedThread(history.source,notePath,messageId,history.state);
     return {duplicate,following:follow,...save};
   }
-  async sendNote(file:TFile,threadId?:string,expectedProjectKey?:string,newThread=false,overrideKey?:string,jobOptions?:ResolvedJobOptions,insertion=this.noteSendInsertion(file)){
+  async sendNote(file:TFile,threadId?:string,expectedProjectKey?:string,newThread=false,overrideKey?:string,jobOptions?:ResolvedJobOptions,insertion=this.noteSendInsertion(file),preparation?:SendPreparation){
     if(this.busy)return;
     jobOptions??=resolveJobOptions(this.settings.inlineStreaming);
     let finishPreview:(()=>void)|undefined;
@@ -1501,7 +1501,7 @@ export default class SendToT3 extends Plugin {
       if(expectedProjectKey&&projectKey(project)!==expectedProjectKey)throw Error('The folder’s linked project changed. Choose a thread again.');
       const readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
       finishPreview=this.previewSend(file.path,undefined,insertion,jobOptions.inline.enabled);
-      await this.send(file,project,{threadId,newThread,projectOverrideKey:overrideKey,folderPicker:Boolean(expectedProjectKey),folderLink:link,jobOptions,throwOnError:true,insertion});
+      await this.send(file,project,{threadId,newThread,projectOverrideKey:overrideKey,folderPicker:Boolean(expectedProjectKey),folderLink:link,jobOptions,throwOnError:true,insertion,preparation});
     }finally{finishPreview?.();finishPreparing();}
   }
   openChat(prompt?:string,showSelector=false){
@@ -1650,11 +1650,12 @@ export default class SendToT3 extends Plugin {
           if(isNoProjectKey(key)){const selected=await abortableRead(this.noProjectTarget(key),signal);if(projectKey(selected.project)!==projectKey(project))throw Error('This conversation belongs to another project. Choose New thread or Existing thread…');}
           else if(key&&canonicalKey(key)!==projectKey(project))throw Error('This conversation belongs to another project. Choose New thread or Existing thread…');
           await this.assertNoteMode(note?.path,{...this.connection(project),projectId:project.id,threadId});
-          const thread=await this.readChatThread(this.connection(project),project,threadId,signal);
+          const connection=this.connection(project);
+          const thread=await this.readChatThread(connection,project,threadId,signal);
           const active=threadIsActive(thread);
           if(thread.hasPendingApprovals||thread.hasPendingUserInput)throw Error('This conversation is waiting for approval or input. Resolve it in T3 before sending.');
           if(active&&responseId&&!responseOwnsActiveTurn(thread,hosted?.record.state??job)){throw Error('The selected response is not bound to the current active turn. Wait for its checkpoint or explicitly choose a thread.');}
-          return {threadId,projectKey:projectKey(project),...(active&&responseId?{responseId}:{}),label:active?'Send to running thread':'Continue thread',detail:`${typeof thread.title==='string'?thread.title:'T3 thread'} · ${threadId.slice(0,8)}${active&&responseId?' · Keeps this response’s streaming choices.':''}`} satisfies ChatDestination;
+          return {preparation:this.titlePreparation(connection,thread),threadId,projectKey:projectKey(project),...(active&&responseId?{responseId}:{}),label:active?'Send to running thread':'Continue thread',detail:`${typeof thread.title==='string'?thread.title:'T3 thread'} · ${threadId.slice(0,8)}${active&&responseId?' · Keeps this response’s streaming choices.':''}`} satisfies ChatDestination;
         }catch(error){return {label:'Thread unavailable',unavailable:true,detail:`${unsavedMessage(error)} No message was sent. Use New thread or Existing thread…`};}
       },
     };
@@ -1663,11 +1664,11 @@ export default class SendToT3 extends Plugin {
     // Generated text is captured context, never a source to move. Classify it
     // before the chooser/network waits: streaming may replace its surroundings.
     if(inline?.anchor)inline=this.canonicalChatContext(inline);
-    const send=(text:string,options:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions})=>this.sendResolvedChat(text,note,inline,answerOnly,options);
+    const send=(text:string,options:{preparation?:SendPreparation;threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions})=>this.sendResolvedChat(text,note,inline,answerOnly,options);
     const host:ChatHost=this.withSendAvailability({...this.destinationContext(note,inline),
       beginSend:options=>this.previewSend(note?.path,inline,undefined,options.inline.enabled),
       hasNewContent:note?(destination)=>this.hasSmartContent(this.app.vault.getFileByPath(note.path)!,destination,inline):undefined,
-      sendChat:(text,key,resolve,_back,destination)=>send(text,{threadId:destination?.threadId,responseId:destination?.responseId,expectedProjectKey:destination?.projectKey,projectOverrideKey:key,jobOptions:resolve?.()}),
+      sendChat:(text,key,resolve,_back,destination)=>send(text,{preparation:destination?.preparation,threadId:destination?.threadId,responseId:destination?.responseId,expectedProjectKey:destination?.projectKey,projectOverrideKey:key,jobOptions:resolve?.()}),
       sendToNew:(text,key,resolve)=>send(text,{newThread:true,projectOverrideKey:key??NO_PROJECT,jobOptions:resolve?.()}),
       sendToExisting:(text,key,resolve,back)=>this.openChatThreads(text,note,inline,answerOnly,key,resolve,back),
     });
@@ -1702,7 +1703,7 @@ export default class SendToT3 extends Plugin {
     if(this.stopped)return;
     new ExistingThreadModal(this.app,threads,thread=>this.sendResolvedChat(prompt,note,inline,answerOnly,{threadId:thread.id,expectedProjectKey:projectKey(project),projectOverrideKey:overrideKey,jobOptions:resolve?.()}),'Ask in an existing thread','No existing threads in this project. Use New thread.',back).open();
   }
-  private async sendResolvedChat(prompt:string,note:{path:string;absolutePath?:string}|undefined,context:EditorChatContext|undefined,answerOnly:boolean,options:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions}){
+  private async sendResolvedChat(prompt:string,note:{path:string;absolutePath?:string}|undefined,context:EditorChatContext|undefined,answerOnly:boolean,options:{preparation?:SendPreparation;threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions}){
     const jobOptions=options.jobOptions??resolveJobOptions(this.settings.inlineStreaming);
     // Steering extends the existing response, even when this draft says Off.
     const activeId=options.responseId??(!options.threadId&&context?inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId):undefined);
@@ -1713,7 +1714,7 @@ export default class SendToT3 extends Plugin {
     }
     return this.sendChat(prompt,note,{...options,jobOptions:{...jobOptions,inline:{...jobOptions.inline,enabled:false}},sourceContext:context});
   }
-  private async sendInlineChat(prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions}){
+  private async sendInlineChat(prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{preparation?:SendPreparation;threadId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions}){
     const manager=this.inlineChat;if(!manager)throw Error('Inline T3 response is unavailable. Reload the plugin.');
     if(context.view.file?.path!==note.path)throw Error('The original note is no longer open. Reopen it before asking T3.');
     const activeId=inlineSteeringTarget(context.editor.getValue(),context.editor.posToOffset(context.editor.getCursor()),context.responseId);
@@ -1741,7 +1742,7 @@ export default class SendToT3 extends Plugin {
     const request=responseBindingRequests(this.settings.responseBindings??{}).find(request=>request.id===id);if(!request)return;
     return {host:request.host,record:{request,owner:this.inlineActor,epoch:1,revision:1,expiresAt:0,coordinated:true,state:{requestHash:'',accepted:true,notePath:request.notePath,messageId:request.localMessageId??request.messageId,status:'waiting',hashes:[],updatedAt:request.createdAt}} as ResponseRecord};
   }
-  private async sendInlineSteering(id:string,prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{threadId?:string;expectedProjectKey?:string;projectOverrideKey?:string}){
+  private async sendInlineSteering(id:string,prompt:string,note:{path:string;absolutePath?:string},context:EditorChatContext,options?:{preparation?:SendPreparation;threadId?:string;expectedProjectKey?:string;projectOverrideKey?:string}){
     logEvent('steering.requested',{jobId:id,notePath:note.path,promptHash:contentHash(prompt),promptLength:prompt.length,selectionHash:context.anchor?contentHash(JSON.stringify(context.anchor)):undefined});
     const job=this.inlineChat?.find(id);let hosted=await this.steeringRecord(id);
     if(job?.hosted&&!hosted||!hosted&&!job)throw Error('The active response is unavailable. Reconnect its vault connection machine.');
@@ -1753,7 +1754,8 @@ export default class SendToT3 extends Plugin {
     await this.checkRecoveryBlock(id,note.path);
     const project=await this.recoveryProject(projectId,environmentId),key=projectKey(project);
     if(options?.expectedProjectKey&&options.expectedProjectKey!==key||options?.projectOverrideKey&&options.projectOverrideKey!==key)throw Error('Steering must use the running thread’s project.');
-    const current=await this.readChatThread(this.connection(project),project,threadId);
+    const connection=this.connection(project);
+    const current=await this.readChatThread(connection,project,threadId);
     if(!threadIsActive(current)||!responseOwnsActiveTurn(current,hosted?.record.state??job))throw Error('This response no longer owns the active turn. Reopen the chooser or explicitly choose a thread. No message was sent.');
     if(hosted&&responsePath!==note.path){
       if(!this.deviceInline)throw Error('Response ownership is unavailable. Reload the plugin.');
@@ -1762,7 +1764,7 @@ export default class SendToT3 extends Plugin {
     }
     const policy=hosted?.record.request??job!;
     const jobOptions=resolveJobOptions({enabled:true,intermediateMode:policy.intermediateMode,keepIntermediate:policy.keepIntermediate,finalAnswerFormat:policy.finalAnswerFormat});
-    await this.sendChat(prompt,note,{threadId,responseId:id,projectOverrideKey:key,jobOptions,sourceContext:context,onPrepared:(request,input)=>{
+    await this.sendChat(prompt,note,{preparation:this.titlePreparation(connection,current),threadId,responseId:id,projectOverrideKey:key,jobOptions,sourceContext:context,onPrepared:(request,input)=>{
       logEvent('steering.prepared',{jobId:id,requestId:request.id,messageId:commandId(request.id,'message'),threadId,projectId});
       if(request.inlineSteering?.jobId!==id)throw Error('This response no longer owns the active turn. Reopen the chooser before sending.');
     }});
@@ -2277,12 +2279,23 @@ export default class SendToT3 extends Plugin {
     if(thread?.id!==threadId||thread.projectId!==project.id||thread.archivedAt||thread.deletedAt)throw Error('The selected T3 thread is unavailable in this project.');
     return thread;
   }
-  private async requestTitle(connection:Connection,project:Project,threadId:string|undefined,notePath:string|undefined){
-    if(!threadId)return noteThreadTitle(notePath,this.settings.threadTitleGeneration);
-    const thread=await this.readChatThread(connection,project,threadId);
-    return typeof thread.title==='string'&&thread.title.trim()?thread.title.slice(0,160):'T3 thread';
+  // Reuse destination metadata only for a display title. Steering and dispatch
+  // must still read current canonical control state.
+  private titlePreparation(connection:Connection,thread:NormalizedThread):SendPreparation{
+    const {id,projectId,title,archivedAt,deletedAt}=thread;
+    return {connectionId:connection.connectionId,environmentId:connection.environmentId,thread:{id,projectId,title:title?.slice(0,160),archivedAt,deletedAt}};
   }
-  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;jobOptions?:ResolvedJobOptions;barePrompt?:boolean;sourceContext?:EditorChatContext;onTargetResolved?:()=>void;onPrepared?:(request:Request,input:string)=>void|Promise<void>}):Promise<void> {
+  private preparedThread(connection:Connection,project:Project,threadId:string|undefined,preparation?:SendPreparation){
+    const thread=preparation?.thread;
+    if(!threadId||!thread||thread.id!==threadId||thread.projectId!==project.id||thread.archivedAt||thread.deletedAt||preparation.connectionId!==connection.connectionId||preparation.environmentId!==connection.environmentId)return;
+    return thread;
+  }
+  private async requestTitle(connection:Connection,project:Project,threadId:string|undefined,notePath:string|undefined,preparation?:SendPreparation){
+    if(!threadId)return noteThreadTitle(notePath,this.settings.threadTitleGeneration);
+    const thread=this.preparedThread(connection,project,threadId,preparation)??await this.readChatThread(connection,project,threadId);
+    return typeof thread?.title==='string'&&thread.title.trim()?thread.title.slice(0,160):'T3 thread';
+  }
+  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{preparation?:SendPreparation;threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;jobOptions?:ResolvedJobOptions;barePrompt?:boolean;sourceContext?:EditorChatContext;onTargetResolved?:()=>void;onPrepared?:(request:Request,input:string)=>void|Promise<void>}):Promise<void> {
     if(this.busy)throw Error('Another send is in progress. Wait for it to finish.');
     if(!prompt.trim())throw Error('Enter a message before sending.');
     if(this.stopped)throw Error('The plugin has been disabled. Re-enable it before sending.');
@@ -2339,7 +2352,7 @@ export default class SendToT3 extends Plugin {
         }
       }
       if(this.stopped)throw Error('The plugin was disabled before sending.');
-      const title=await this.requestTitle(connection,project,threadId,note?.path);
+      const title=await this.requestTitle(connection,project,threadId,note?.path,options?.preparation);
       request={...(this.settings.hideObsidianThreads===true&&!threadId?{hideObsidianThread:true}:{}),...(smartCapture?{smartSend:smartCapture}:{}),...(options?.jobOptions?{jobOptions:options.jobOptions}:{}),id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
       if(note&&!options?.barePrompt)await this.prepareNoteSteering(request,note.path,preparedInput,options?.sourceContext,options?.responseId,steeringSource);
       await options?.onPrepared?.(request,preparedInput);
@@ -2805,7 +2818,7 @@ export default class SendToT3 extends Plugin {
     });
     const work=this.saving;void work.then(()=>{this.syncSettlementEvents();void this.syncThreadVisibility();}).catch(()=>{});void work.finally(()=>{if(this.saving===work)this.queuedSharedSnapshot=undefined;}).catch(()=>{});return work;
   }
-  async send(file:TFile, project:Project, options?:{id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;projectOverrideKey?:string;folderPicker?:boolean;folderLink?:FolderLink;prepared?:PreparedNote;streamReply?:boolean;jobOptions?:ResolvedJobOptions;destinations?:string[];destinationSection?:string;insertion?:CursorInsertion|null;onPrepared?:(request:Request)=>Promise<void>}) {
+  async send(file:TFile, project:Project, options?:{preparation?:SendPreparation;id?:string;quiet?:boolean;throwOnError?:boolean;threadId?:string;newThread?:boolean;projectOverrideKey?:string;folderPicker?:boolean;folderLink?:FolderLink;prepared?:PreparedNote;streamReply?:boolean;jobOptions?:ResolvedJobOptions;destinations?:string[];destinationSection?:string;insertion?:CursorInsertion|null;onPrepared?:(request:Request)=>Promise<void>}) {
     if (this.busy) {if(options?.throwOnError)throw Error('Obsidian is sending another request. Retry shortly.');return;}
     const finishPreview=this.previewSend(file.path,undefined,options?.destinationSection?null:options?.insertion,options?.jobOptions?.inline.enabled??options?.streamReply??(!options?.quiet&&this.settings.inlineStreaming.enabled));
     this.busy = true;
@@ -2833,7 +2846,7 @@ export default class SendToT3 extends Plugin {
       const images=await this.prepareImages(smart.text,file.path,true,content);
       if(inlineView&&this.notePromptDocument(inlineView)!==content)throw Error('The note changed while preparing the send. Try again with the current text.');
       const link=options?.folderLink??folderLinkForPath(this.settings.folderLinks,file.path)??{id:'manual',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:true};
-      request = {...(this.settings.hideObsidianThreads===true&&!threadId?{hideObsidianThread:true}:{}),smartSend:smart.capture,jobOptions,id:options?.id??randomId(),project:{...project},title:await this.requestTitle(connection,project,threadId,file.path),prompt:images.markdown+this.messageFooter(file.path),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:'keep'},connection,noteThread:this.noteThreadIntent(file.path,project,connection),...this.folderLinkIntent(link)};
+      request = {...(this.settings.hideObsidianThreads===true&&!threadId?{hideObsidianThread:true}:{}),smartSend:smart.capture,jobOptions,id:options?.id??randomId(),project:{...project},title:await this.requestTitle(connection,project,threadId,file.path,options?.preparation),prompt:images.markdown+this.messageFooter(file.path),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:'keep'},connection,noteThread:this.noteThreadIntent(file.path,project,connection),...this.folderLinkIntent(link)};
       if(request.prompt.length>120_000) throw new Error('The note and image context exceed T3’s 120,000-character limit. Split the note before sending.');
       const steeringSource={document:content,ranges:smart.ranges};
       if(streaming&&inlineView)await this.prepareStreamBindings(request,options?.destinations?.length?options.destinations:[file.path],undefined,options?.destinationSection,file.path,smart.text,options?.insertion,steeringSource);
@@ -2885,11 +2898,14 @@ export default class SendToT3 extends Plugin {
     const policy=target.hosted?.record.request??target.job!;
     request.jobOptions=resolveJobOptions({enabled:true,intermediateMode:policy.intermediateMode,keepIntermediate:policy.keepIntermediate,finalAnswerFormat:policy.finalAnswerFormat});
     const destination={jobId:target.id,...(target.hosted?{host:target.hosted.host}:{}),notePath:path};
+    const activeTurnId=thread.session?.activeTurnId??thread.latestTurn?.turnId;
+    if(!activeTurnId)throw Error('The active response has no exact turn binding. Wait before sending again.');
     const steering=request.inlineSteering;
     if(steering){
+      if(steering.activeTurnId!==activeTurnId)throw Error('The response active turn changed during preparation. Send again.');
       if(selections.length)steering.input={...steering.input,sourceResponseId:target.id,selection:selections[0],...(selections.length>1?{selections}:{})};
       if(!steering.targets?.some(item=>item.jobId===target.id))steering.targets=[...steering.targets??[{jobId:steering.jobId,host:steering.host,notePath:request.noteThread?.notePath??path}],destination];
-    }else request.inlineSteering={...destination,input:{messageId:commandId(request.id,'message'),text:input,...(selections.length?{sourceResponseId:target.id,selection:selections[0],...(selections.length>1?{selections}:{})}:{})},targets:[destination]};
+    }else request.inlineSteering={...destination,activeTurnId,input:{messageId:commandId(request.id,'message'),text:input,...(selections.length?{sourceResponseId:target.id,selection:selections[0],...(selections.length>1?{selections}:{})}:{})},targets:[destination]};
     return true;
   }
   private async prepareStreamBindings(request:Request,destinations:string[],startedAt?:string,destinationSection?:string,sourcePath?:string,input?:string,insertion?:CursorInsertion|null,steeringSource?:SteeringSource){

@@ -1,3 +1,4 @@
+import type {ThreadSummary} from './thread-target';
 import {clockForDocument} from '../shared/clock';
 import {resolveJobOptions,overrideCount,type JobOverrides,type ResolvedJobOptions,type InlineDefaults} from './job-options';
 import {logEvent,logFailure} from '../app/diagnostics';
@@ -8,7 +9,10 @@ import {ProjectCreationCancelled} from '../projects/project-create-ui';
 import {abortableRead,cancelledRequest} from '../connection/t3-api';
 
 
+/** Display/preparation evidence only. Dispatch always reads authoritative control. */
+export interface SendPreparation {connectionId?:string;environmentId?:string;thread:Pick<ThreadSummary,'id'|'projectId'|'title'|'archivedAt'|'deletedAt'>}
 export interface ChatDestination {
+  preparation?:SendPreparation;
   threadId?:string;
   responseId?:string;
   projectKey?:string;
@@ -210,7 +214,7 @@ class SendDestinationModal extends NoteTabPanel {
       this.close();
       if(target==='existing')await this.host.sendToExisting(prompt,this.projectKey,resolve,returnToDraft);
       else if(target==='new')await this.host.sendToNew(prompt,this.projectKey,resolve);
-      else await this.host.sendChat(prompt,this.projectKey,resolve,undefined,destination);
+      else await this.host.sendChat(prompt,this.projectKey,resolve,undefined,destination?{...destination,preparation:undefined}:undefined);
     }catch(error){
       if(error instanceof ProjectCreationCancelled)return;
       logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target});

@@ -230,3 +230,40 @@ test('a new MCP-enabled pairing requests agent configuration access and refuses 
  const result=await pair(url+'/pair#token=code','',fetcher as any,undefined,scopes);assert.equal(requested,scopes.join(' '));assert.ok(result.session.permissions?.includes('providers:manage'));
  for(const missing of ['settings:write','providers:manage']){grant=scopes.filter(permission=>permission!==missing).join(' ');await assert.rejects(pair(url+'/pair#token=code','',fetcher as any,undefined,scopes),/does not permit MCP setup/);}
 });
+
+test('dispatch rereads control and rejects stale steering ownership, approval, deletion and project evidence',async()=>{
+ for(const overrides of [{session:{status:'running',activeTurnId:'replacement'}},{session:{status:'ready',activeTurnId:null}},{hasPendingApprovals:true},{hasPendingUserInput:true},{deletedAt:'now'},{projectId:'other'}]){
+  const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',threadId:'existing',project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',connectionId:'c',environmentId:eid,url,host:'direct',executable:''},title:'Cached title',prompt:'Content',inlineSteering:{activeTurnId:'selected',jobId:'response',input:{messageId:'message',text:'Content'}}};
+  let reads=0,saves=0,mutations=0;
+  const api=async(path:string,payload?:unknown)=>{
+   if(path.includes('/threads/')){reads++;return {thread:{id:'existing',projectId:'p',session:{status:'running',activeTurnId:'selected'},...overrides}};}
+   if(payload)mutations++;throw Error('Unexpected mutation');
+  };
+  await assert.rejects(sendDirect(request,undefined,async()=>{saves++;},undefined,{api,origin:url}),/thread|approval|input|active turn/i);
+  assert.equal(reads,1);assert.equal(mutations,0);assert.equal(saves,0);assert.equal(request.directPlan,undefined);
+ }
+});
+
+test('matching exact steering ownership keeps the final read and durable immutable replay',async()=>{
+ const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',threadId:'existing',project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',connectionId:'c',environmentId:eid,url,host:'direct',executable:''},title:'Cached title',prompt:'Content',inlineSteering:{activeTurnId:'selected',jobId:'response',input:{messageId:'message',text:'Content'}}};
+ let reads=0,saves=0,dispatches=0;
+ const api=async(path:string,payload?:unknown)=>{
+  if(path.includes('/threads/')){reads++;return {thread:{id:'existing',projectId:'p',session:{status:'running',activeTurnId:'selected'}}};}
+  assert.equal(path,'/api/orchestration/dispatch');assert.ok(payload);assert.ok(saves>0);dispatches++;return {sequence:5};
+ };
+ await sendDirect(request,undefined,async()=>{saves++;},undefined,{api,origin:url});
+ assert.equal(reads,1);assert.equal(dispatches,1);assert.equal(request.directPlan?.delivery?.activeTurnId,'selected');
+ const restored=structuredClone(request);
+ await sendDirect(restored,undefined,async()=>{saves++;},undefined,{api,origin:url});
+ assert.equal(reads,1);assert.equal(dispatches,1,'an accepted immutable plan must not send twice');
+});
+
+test('a display title cannot bypass changed route or expired dispatch credentials',async()=>{
+ const connection={transport:'direct' as const,url,environmentId:eid,host:'direct',executable:''};
+ const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',threadId:'existing',project:{id:'p',title:'P',workspaceRoot:'/'},connection,title:'Previously checked title',prompt:'Content'};
+ let reads=0,saves=0;const fetcher:any=async()=>{reads++;throw Error('Must reject before HTTP');};
+ for(const [changed,credential] of [[connection,{...session,expiresAt:1}],[{...connection,url:'https://other.example'},session],[{...connection,environmentId:'other'},session]] as const){
+  await assert.rejects(sendDirect({...request,connection:changed},credential,async()=>{saves++;},fetcher),/expired|Pair this connection/);
+ }
+ assert.equal(reads,0);assert.equal(saves,0);assert.equal(request.directPlan,undefined);
+});
