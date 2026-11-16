@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from './obsidian-context';
 import {webcrypto} from 'node:crypto';
-async function fixture(mobile=false){
+async function fixture(mobile=false,intercept?:(url:string,options:any)=>Promise<Response|undefined>){
  const requests:Array<{url:string;method:string;token?:string}>=[],sessions:string[]=[];let rejectDispatch=false;
  class Base{}
  const module={exports:{} as any},api={Plugin:Base,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base,Platform:{isMobile:mobile}};
  runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian','No native connection module may load');return api;},
  fetch:async(url:string,options:any)=>{const origin=new URL(url).origin,token=options?.headers?.Authorization;requests.push({url,method:options?.method??'GET',token});
+  const intercepted=await intercept?.(url,options);if(intercepted)return intercepted;
   if(url.endsWith('/.well-known/t3/environment'))return new Response(JSON.stringify({environmentId:origin.includes('other')?'other':'target',label:'Synthetic',orchestrationProtocolVersion:2}));
   if(token==='Bearer revoked'||rejectDispatch&&options?.method==='POST')return new Response('{}',{status:401});
   if(url.endsWith('/shell'))return new Response(JSON.stringify({projects:[],threads:[]}));
@@ -41,4 +42,33 @@ test('an offline command host does not hold up polling a ready paired client',as
  f.plugin.commandHosts.set('offline',{host:{tick:()=>pending}});f.plugin.commandHosts.set('ready',{host:{tick:async()=>{readyTicks++;}}});
  f.plugin.tickCommandHosts();await Promise.resolve();f.plugin.tickCommandHosts();await Promise.resolve();f.plugin.tickCommandHosts();await Promise.resolve();
  assert.equal(readyTicks,3);release();f.plugin.commandHosts.clear();
+});
+
+test('stopped route waiter preserves shared authorization and does not mark the route offline',async()=>{
+ let reply!:(value:Response)=>void;
+ const f=await fixture(false,async url=>url.endsWith('/environment')?new Promise(resolve=>{reply=resolve;}):undefined);
+ const stop=new AbortController(),first=f.plugin.pairedThreadAccess(f.remote,false,stop.signal),second=f.plugin.pairedThreadAccess(f.remote);
+ await new Promise(resolve=>setImmediate(resolve));stop.abort(Error('Stopped'));
+ await assert.rejects(first,/Stopped/);assert.equal(f.plugin.unaryOwners.size,1);assert.equal(f.plugin.routeFailures.size,0);
+ reply(new Response(JSON.stringify({environmentId:'target',label:'Synthetic',orchestrationProtocolVersion:2})));
+ assert.equal((await second).origin,f.remote.url);assert.equal(f.requests.filter(r=>r.url.endsWith('/environment')).length,1);
+ f.plugin.disposeUnaryOwners();
+});
+
+test('safe read renewal stays shared when one reader stops, and verifies the fresh endpoint',async()=>{
+ let reply!:()=>void,renewals=0;
+ const f=await fixture(false,async(url,options)=>url.endsWith('/api/probe')&&options.headers.Authorization==='Bearer old'?new Response('{}',{status:401}):undefined);
+ Object.assign(f.remote,{managed:true});
+ let credential={token:'old',expiresAt:Date.now()+600_000,environmentId:'target',url:f.remote.url};
+ f.plugin.sessionFor=async(_id:string,force:boolean)=>{
+  if(force){renewals++;await new Promise<void>(resolve=>{reply=resolve;});credential={...credential,token:'new'};}
+  return credential;
+ };
+ const chosen=await f.plugin.pairedThreadAccess(f.remote),stop=new AbortController();
+ const first=chosen.api('/api/probe',undefined,{signal:stop.signal}),second=chosen.api('/api/probe');
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(renewals,1);
+ stop.abort(Error('Stopped'));await assert.rejects(first,/Stopped/);assert.equal(f.plugin.routeFailures.size,0);
+ reply();await second;assert.equal(renewals,1);assert.equal(f.requests.filter(r=>r.url.endsWith('/environment')).length,2);
+ assert.equal(f.requests.filter(r=>r.url.endsWith('/api/probe')&&r.token==='Bearer new').length,1);
+ f.plugin.disposeUnaryOwners();
 });

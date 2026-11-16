@@ -87,6 +87,8 @@ import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,
 import {pair,readDirect,commandId,environmentApi,endpoint,type PairedConnection,type PairedSession} from '../connection/direct';
 import {RouteAuthorizationCache,verifyOrchestrationRead} from '../connection/route-authorization';
 import {environmentAccess} from '../connection/environment-access';
+import {connectionDeadline,setupFetcher,ConnectionPreparation} from '../connection/connection-setup';
+import {browserFetch} from '../connection/browser-fetch';
 import {setIcon, App, FileSystemAdapter, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type SettingDefinition,type SettingDefinitionItem,type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, MarkdownRenderer,  requestUrl } from 'obsidian';
 import { Buffer } from 'buffer/';
 import { deviceState,retainDeviceState,writeDeviceStates } from '../storage/device-state';
@@ -177,6 +179,8 @@ export default class SendToT3 extends Plugin {
   private nativeToken:CloudAccount|undefined;
   private nativeRefreshing:Promise<CloudAccount>|undefined;
   private sessionRefreshing=new Map<string,Promise<PairedSession>>();
+  private connectionSetupOwner=new AbortController();
+  private renewalPreparation=new ConnectionPreparation();
   private machineRefreshing:Promise<void>|undefined;
   private projectDiscovery?:ProjectDiscovery;
   private catalogScope='';
@@ -648,7 +652,7 @@ export default class SendToT3 extends Plugin {
       this.refreshProjectsInBackground(true);
       this.settlementEvents=new ThreadSettlementEvents(async job=>this.inlineThreadAccess(job.connection.environmentId??await this.localInlineEnvironment()),job=>this.monitorSettlement(job),()=>this.stopped||this.busy,error=>logFailure('thread.settlement.failed',error));
       this.syncSettlementEvents();void this.syncThreadVisibility(true);
-      const recover=()=>{if(!this.stopped){this.settlementEvents?.reconnect();void this.syncThreadVisibility(true);}};
+      const recover=()=>{if(!this.stopped){this.prepareConnectionRenewal();this.settlementEvents?.reconnect();void this.syncThreadVisibility(true);}};
       if(typeof document.addEventListener==='function')this.registerDomEvent(document,'visibilitychange',()=>{if(!document.hidden)recover();});
       if(typeof window.addEventListener==='function'){this.registerDomEvent(window,'focus',recover);this.registerDomEvent(window,'online',recover);}
     });
@@ -693,7 +697,7 @@ export default class SendToT3 extends Plugin {
       };
       tick();this.registerInlineInterval(tick,150);
     });
-    this.registerEvent(this.app.workspace.on('file-open',()=>this.inlineChat?.flushAvailable()));
+    this.registerEvent(this.app.workspace.on('file-open',()=>{this.prepareConnectionRenewal();this.inlineChat?.flushAvailable();}));
     this.registerEvent(this.app.workspace.on('layout-change',()=>this.inlineChat?.flushAvailable()));
     if(typeof this.app.vault?.on==='function'){
       const changed=(file:TAbstractFile)=>{this.deviceInline?.changed(file.path);void nativeResponses(this.app).changed(file.path).catch(error=>logFailure('note.projection.file-update',error,{notePath:file.path}));};
@@ -1827,12 +1831,12 @@ export default class SendToT3 extends Plugin {
     new Notice('The latest T3 turn is attached to this response.');
   }
   private async inlineThreadAccess(environmentId:string,forceRefresh=false):Promise<ThreadAccess>{
-    return environmentAccess(environmentId,{paired:orderedRoutes(this.settings.paired,this.routeOrder,c=>this.connectionScore(c)),openPaired:async paired=>{try{const access=await this.pairedThreadAccess(paired,forceRefresh);this.routeFailures.delete(paired.id);return access;}catch(error){this.routeFailures.set(paired.id,message(error));throw error;}}});
+    return environmentAccess(environmentId,{paired:orderedRoutes(this.settings.paired,this.routeOrder,c=>this.connectionScore(c)),openPaired:async(paired,signal)=>{try{const access=await this.pairedThreadAccess(paired,forceRefresh,signal);this.routeFailures.delete(paired.id);return access;}catch(error){this.routeFailures.set(paired.id,message(error));throw error;}}});
   }
-  private async pairedThreadAccess(paired:PairedConnection,forceRefresh=false):Promise<ThreadAccess>{
+  private async pairedThreadAccess(paired:PairedConnection,forceRefresh=false,signal?:AbortSignal):Promise<ThreadAccess>{
     const environmentId=paired.environmentId;
     const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId,connectionId:paired.id};
-    let session=await this.sessionFor(paired.id,forceRefresh);
+    let session=await abortableRead(this.sessionFor(paired.id,forceRefresh),signal);requestAborted(signal);
     // Verify authorization before exposing a candidate to sends or writes.
     // A failed open can try another endpoint for the same machine; the caller
     // operation is never part of this fallback.
@@ -1842,10 +1846,12 @@ export default class SendToT3 extends Plugin {
     const pool=this.unaryOwners.get(paired.id)?.pool??new T3UnaryRpcOwner();
     this.unaryOwners.set(paired.id,{key,pool});
     while(this.unaryOwners.size>16)this.disposeUnaryOwner(this.unaryOwners.keys().next().value!);
-    let api:T3Api=await this.verifiedConnections.open(key,async()=>{
-      const candidate=await environmentApi(connection,session,undefined,undefined,undefined,pool);
-      await this.routeStatus.request(paired.id,()=>verifyOrchestrationRead(candidate));return candidate;
-    },forceRefresh,(session?.expiresAt??0)-5000).catch(error=>{if(this.unaryOwners.get(paired.id)?.pool===pool)this.disposeUnaryOwner(paired.id);throw error;});
+    const verified=(ownerKey:string,credential:PairedSession|undefined,owner:T3UnaryRpcOwner,force=false)=>this.verifiedConnections.open(ownerKey,async setupSignal=>{
+      const candidate=await environmentApi(connection,credential,undefined,undefined,setupSignal,owner);
+      await this.routeStatus.request(paired.id,()=>verifyOrchestrationRead((path,payload)=>candidate(path,payload,{signal:setupSignal})));return candidate;
+    },force,(credential?.expiresAt??0)-5000,this.connectionSetupOwner.signal);
+    const opening=verified(key,session,pool,forceRefresh).catch(error=>{if(this.unaryOwners.get(paired.id)?.pool===pool)this.disposeUnaryOwner(paired.id);throw error;});
+    let api:T3Api=await abortableRead(opening,signal);requestAborted(signal);
     if(this.stopped||this.unaryOwners.get(paired.id)?.pool!==pool){pool.dispose();throw Error('The connection owner changed.');}
     if(!Platform.isMobile&&localRoute(paired))this.eventLocalEnvironmentId=environmentId;
     let renewing:Promise<void>|undefined;
@@ -1860,7 +1866,7 @@ export default class SendToT3 extends Plugin {
           attemptedApi.disposeUnaryRpc?.();
           const freshPool=this.unaryOwners.get(paired.id)?.pool??new T3UnaryRpcOwner();
           this.unaryOwners.set(paired.id,{key:freshKey,pool:freshPool});
-          api=await environmentApi(connection,session,undefined,undefined,undefined,freshPool);
+          api=await verified(freshKey,session,freshPool);
           if(this.stopped||this.unaryOwners.get(paired.id)?.pool!==freshPool){freshPool.dispose();throw Error('The connection owner changed.');}
           logEvent('connection.auth.recovered',{...fields,elapsedMs:Date.now()-started});
         }catch(error){logEvent('connection.auth.failed',{...fields,elapsedMs:Date.now()-started,error},'warning');throw error;}
@@ -1875,10 +1881,10 @@ export default class SendToT3 extends Plugin {
           // never replayed; account expiry is handled by nativeCredential.
           const safe=payload===undefined||['/api/auth/websocket-ticket','/api/orchestration/turn-item','/api/assets/create-url'].includes(path);
           if(!(error instanceof T3HttpError)||error.status!==401||!paired.managed||!safe)throw error;
-          await renew(attemptedApi);
+          await abortableRead(renew(attemptedApi),options?.signal);requestAborted(options?.signal);
           return await api(path,payload,options);
         }
-      }catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403)){this.verifiedConnections.delete(key);this.disposeUnaryOwner(paired.id);api.disposeUnaryRpc?.();}this.routeFailures.set(paired.id,message(error));throw error;}
+      }catch(error){requestAborted(options?.signal);if(error instanceof T3HttpError&&(error.status===401||error.status===403)){this.verifiedConnections.delete(key);this.disposeUnaryOwner(paired.id);api.disposeUnaryRpc?.();}this.routeFailures.set(paired.id,message(error));throw error;}
     });
     routed.acquireUnaryRpc=signal=>this.routeStatus.request(paired.id,async()=>{
       const attemptedApi=api;
@@ -1887,7 +1893,7 @@ export default class SendToT3 extends Plugin {
         // Acquisition has sent no unary operation, so only ticket issuance can
         // be repeated. Calls on the returned lease are never replayed.
         if(!(error instanceof T3HttpError)||error.status!==401||!paired.managed)throw error;
-        await renew(attemptedApi);rpc=await api.acquireUnaryRpc!(signal);
+        await abortableRead(renew(attemptedApi),signal);requestAborted(signal);rpc=await api.acquireUnaryRpc!(signal);
       }
       this.routeStatus.track(paired.id,rpc);return rpc;
     });
@@ -2432,7 +2438,13 @@ export default class SendToT3 extends Plugin {
     if(this.nativeRefreshing)return this.nativeRefreshing;
     const generation=this.cloudGeneration;
     const active=()=>!this.stopped&&this.nativeAccount===account&&generation===this.cloudGeneration;
-    const work=(async()=>{try{const token=await nativeRelayAccount(account,async()=>{if(!active())throw Error('Sign-in cancelled.');await this.save();},nativeAccountFetch);if(!active())throw Error('Sign-in cancelled.');this.nativeToken=token;return token;}catch(error){if(active()&&signInRequired(error))await this.clearAccount(true);throw error;}})();
+    const work=connectionDeadline(async signal=>{
+      // A native request can finish after cancellation. Rotate a private copy
+      // and publish only while this account and setup owner are still current.
+      const state={...account};
+      const token=await nativeRelayAccount(state,async()=>{requestAborted(signal);if(!active())throw Error('Sign-in cancelled.');account.clientToken=state.clientToken;await this.save();},setupFetcher(nativeAccountFetch,signal));
+      requestAborted(signal);if(!active())throw Error('Sign-in cancelled.');this.nativeToken=token;return token;
+    },this.connectionSetupOwner.signal).catch(async error=>{if(active()&&signInRequired(error))await this.clearAccount(true);throw error;});
     this.nativeRefreshing=work;try{return await work;}finally{if(this.nativeRefreshing===work)this.nativeRefreshing=undefined;}
   }
   async sessionFor(id:string,forceRefresh=false,permissions:readonly string[]=PLUGIN_PERMISSIONS):Promise<PairedSession|undefined>{
@@ -2447,15 +2459,26 @@ export default class SendToT3 extends Plugin {
     if(session&&session.expiresAt>Date.now()+60000&&!forceRefresh&&(!c?.managed||hasPluginPermissions(session))&&permissions.every(scope=>session.permissions?.includes(scope)))return session;
     if(!c?.managed||!this.nativeAccount)return session;
     const existing=this.sessionRefreshing.get(id);if(existing){const value=await existing;if(permissions.every(scope=>value.permissions?.includes(scope)))return value;return this.sessionFor(id,true,permissions);}
-    const account=this.nativeAccount;const generation=this.cloudGeneration;
-    const work=(async()=>{
-      const credential=await this.nativeCredential();const machines=await discoverMachines(credential);
-      const m=machines.find(m=>m.environmentId===c.environmentId&&m.url===c.url);
+    const account=this.nativeAccount;const generation=this.cloudGeneration,url=c.url,environmentId=c.environmentId;
+    const work=connectionDeadline(async signal=>{
+      const fetcher=setupFetcher(browserFetch,signal),credential=await abortableRead(this.nativeCredential(),signal);
+      requestAborted(signal);const machines=await discoverMachines(credential,fetcher);
+      const m=machines.find(m=>m.environmentId===environmentId&&m.url===url);
       if(!m)throw Error('This T3 connection is no longer available to your account. Reconnect its machine.');
-      const next=await connectMachine(await this.nativeCredential(),m,this.deviceId+':'+account.userId,undefined,permissions);
-      if(this.stopped||this.nativeAccount!==account||generation!==this.cloudGeneration||!this.settings.paired.includes(c))throw Error('Connection cancelled.');
+      const next=await connectMachine(await abortableRead(this.nativeCredential(),signal),m,this.deviceId+':'+account.userId,fetcher,permissions);
+      requestAborted(signal);
+      if(this.stopped||this.nativeAccount!==account||generation!==this.cloudGeneration||!this.settings.paired.includes(c)||c.url!==url||c.environmentId!==environmentId||this.pairedSessions[id]!==session)throw Error('Connection cancelled.');
       next.accountId=account.userId;this.pairedSessions[id]=next;await this.save();return next;
-    })();this.sessionRefreshing.set(id,work);try{return await work;}finally{if(this.sessionRefreshing.get(id)===work)this.sessionRefreshing.delete(id);}
+    },this.connectionSetupOwner.signal);this.sessionRefreshing.set(id,work);try{return await work;}finally{if(this.sessionRefreshing.get(id)===work)this.sessionRefreshing.delete(id);}
+  }
+  private prepareConnectionRenewal(){
+    if(this.stopped||!this.nativeAccount)return;
+    void this.renewalPreparation.prepare(async()=>{
+      const account=this.nativeAccount,generation=this.cloudGeneration;
+      const due=this.settings.paired.filter(c=>{const session=this.pairedSessions[c.id];return c.managed&&(!session||session.accountId===account?.userId)&&(!session||session.expiresAt<=Date.now()+60_000||!hasPluginPermissions(session));}).slice(0,16);
+      if(!this.nativeToken||this.nativeToken.expiresAt<=Date.now()+10_000)await this.nativeCredential();
+      await forEachBounded(due,2,async c=>{if(this.stopped||account!==this.nativeAccount||generation!==this.cloudGeneration)return;try{await this.sessionFor(c.id);}catch{/* A foreground operation reports its current connection error. */}});
+    }).catch(()=>{/* Offline activity leaves credentials intact; a later event can prepare again. */});
   }
   async connectAccountMachine(m:CloudMachine,candidate?:PairedConnection){
     const account=this.nativeAccount;if(!account)throw Error('Sign in with your T3 email first.');const generation=this.cloudGeneration;
@@ -2475,7 +2498,7 @@ export default class SendToT3 extends Plugin {
     const login=await beginLogin();if(this.stopped||generation!==this.cloudGeneration)return;
     this.cloudLogin=login;this.cloudChanged?.();this.scheduleCloudPoll();
   }
-  cancelCloudLogin(){this.smartRecoveryEmpty.clear();for(const entry of this.smartRecovering.values())entry.controller.abort();this.projectDiscovery?.invalidate();this.cloudGeneration++;this.refreshRun++;this.connecting=false;if(this.cloudTimer)clearTimeout(this.cloudTimer);this.cloudLogin=null;this.emailLogin=null;this.cloudChanged?.();}
+  cancelCloudLogin(){this.connectionSetupOwner.abort();this.connectionSetupOwner=new AbortController();this.renewalPreparation=new ConnectionPreparation();this.smartRecoveryEmpty.clear();for(const entry of this.smartRecovering.values())entry.controller.abort();this.projectDiscovery?.invalidate();this.cloudGeneration++;this.refreshRun++;this.connecting=false;if(this.cloudTimer)clearTimeout(this.cloudTimer);this.cloudLogin=null;this.emailLogin=null;this.cloudChanged?.();}
   private scheduleCloudPoll(){
     const login=this.cloudLogin;if(!login||this.stopped)return;const generation=this.cloudGeneration;
     this.cloudTimer=setTimeout(()=>{void this.pollCloudLogin(login,generation).catch(error=>logFailure('connection.account.poll',error));},Math.max(1000,login.nextPollAt-Date.now()));
@@ -3073,7 +3096,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
-  onunload(){this.disposeUnaryOwners();if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void Promise.allSettled([this.saving,this.diagnostics?.close()]).then(()=>closeSharedStateDatabase());void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){this.connectionSetupOwner.abort();this.disposeUnaryOwners();if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void Promise.allSettled([this.saving,this.diagnostics?.close()]).then(()=>closeSharedStateDatabase());void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async setThreadHiding(enabled:boolean){this.settings.hideObsidianThreads=enabled;await this.save();await this.syncThreadVisibility();}
   private syncThreadVisibility(force=false):Promise<void>{
     if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve();
@@ -3102,10 +3125,10 @@ export default class SendToT3 extends Plugin {
         if(this.stopped||this.settings.hideObsidianThreads!==enabled)break;
         try{
           let credentialKey='';
-          const access=await environmentAccess(environmentId,{paired:orderedRoutes(this.settings.paired,this.routeOrder,c=>this.connectionScore(c)),openPaired:async paired=>{
-            const session=await this.sessionFor(paired.id,false,[...PLUGIN_PERMISSIONS,'settings:write']);
-            const api=await environmentApi({transport:'direct',host:'direct',executable:'',url:paired.url,environmentId:paired.environmentId,connectionId:paired.id},session);
-            await verifyOrchestrationRead(api);credentialKey=session?.token??paired.id;return {origin:endpoint(paired.url),api};
+          const access=await environmentAccess(environmentId,{paired:orderedRoutes(this.settings.paired,this.routeOrder,c=>this.connectionScore(c)),openPaired:async(paired,signal)=>{
+            const session=await abortableRead(this.sessionFor(paired.id,false,[...PLUGIN_PERMISSIONS,'settings:write']),signal);requestAborted(signal);
+            const api=await environmentApi({transport:'direct',host:'direct',executable:'',url:paired.url,environmentId:paired.environmentId,connectionId:paired.id},session,undefined,undefined,signal);
+            await verifyOrchestrationRead((path,payload)=>api(path,payload,{signal}));requestAborted(signal);credentialKey=session?.token??paired.id;return {origin:endpoint(paired.url),api};
           }});
           try{await this.threadVisibility!.apply(access,environmentId,enabled,credentialKey,force);}finally{await access.close?.();}
         }catch(error){failures.push(`${this.settings.paired.find(paired=>paired.environmentId===environmentId)?.name??environmentId}: ${message(error)}`);logFailure('thread.visibility.failed',error,{environmentId});}

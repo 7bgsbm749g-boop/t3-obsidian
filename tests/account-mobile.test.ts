@@ -73,6 +73,10 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
   assert.equal(await p.sessionFor(c.id),first);assert.equal(connects,before+1,'Complete grants reuse the same valid session');
  }
  await assert.rejects(p.sessionFor('manual',false,AGENT_SETUP_PERMISSIONS),/MCP setup/);assert.equal((await p.sessionFor('manual')).token,'manual-private','An unmanaged pairing must not use account credentials');assert.equal(dispatches.length,0,'Permission migration must not replay sends');
+ const activityConnects=connects;p.pairedSessions[c.id].expiresAt=0;
+ p.prepareConnectionRenewal();p.prepareConnectionRenewal();p.prepareConnectionRenewal();
+ await p.renewalPreparation.prepare(async()=>{});assert.equal(connects,activityConnects+1,'Activity prepares one supported renewal without replay');
+ assert.equal(p.pairedSessions.manual.token,'manual-private');assert.equal(dispatches.length,0);
  const previousConnects=connects;p.pairedSessions[c.id].expiresAt=0;await Promise.all([p.sessionFor(c.id),p.sessionFor(c.id)]);assert.equal(connects,previousConnects+1,'Renewal is coalesced');
  // A transport failure must not erase a valid device account.
  p.nativeToken=undefined;nativeOffline=true;await assert.rejects(p.nativeCredential(),/Cannot reach T3 sign-in/);assert.equal(p.nativeAccount.userId,'user-native');nativeOffline=false;
