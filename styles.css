@@ -676,3 +676,22 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
   .t3-send-thread { max-width: calc(100% - 40px); }
   .t3-send-model { max-width: 50%; }
 }
+
+/* Tool images use native Markdown processors in live and saved progress. */
+.send-to-t3-image-result .send-to-t3-image-open {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  height: auto;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  cursor: zoom-in;
+}
+.send-to-t3-image-open img,
+.send-to-t3-image-expanded {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-s);
+}
