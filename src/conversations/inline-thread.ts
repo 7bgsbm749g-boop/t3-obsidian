@@ -13,7 +13,7 @@ import {responseToolGroups,currentResponseToolGroup,renderResponseToolGroup} fro
 import {applyV2ControlEvent,responseRun} from '../connection/orchestration-v2';
 import {responseEmissions,renderProviderError} from '../responses/response-emissions';
 import {renderSubmittedAnswer,type SubmittedAnswer} from '../responses/response-answers';
-import {responseImageResults,renderImageResult} from '../responses/image-results';
+import {responseImageResults,renderImageResult,resultActivitySuperseded} from '../responses/image-results';
 import {responseHtmlResults,renderHtmlResult} from '../responses/html-results';
 import {containerStart,responseFrame,responseIds,responseBoundaries} from '../responses/response-container';
 import {delegatedWork} from './inline-delegation';
@@ -183,7 +183,7 @@ export function restoreInlineBindings(state:InlineThreadState,saved?:InlineBindi
   for(const [messageId,binding] of Object.entries(saved?.bindings??{}))if(state.legacyMessageIds?.includes(messageId)&&!state.turns?.[binding.turnId]&&turns[binding.turnId])turns[binding.turnId]=retiredV1Turn(turns[binding.turnId]);
   const latestTurn=state.latestTurn??saved?.latestTurn;
   const bindings={...saved?.bindings,...state.bindings};
-  const activities=state.historyComplete===true?state.activities:[...[...saved?.htmlResults??[],...saved?.imageResults??[]].filter(activity=>validActivity(activity)&&['response.html','response.image'].includes(activity.kind)&&!state.activities.some(current=>current.id===activity.id||activity.kind==='response.image'&&current.id===activity.id.replace(/:images$/,'')&&['failed','stopped'].includes(String(current.payload?.status)))),...state.activities];
+  const activities=state.historyComplete===true?state.activities:[...[...saved?.htmlResults??[],...saved?.imageResults??[]].filter(activity=>validActivity(activity)&&['response.html','response.image'].includes(activity.kind)&&!resultActivitySuperseded(activity,state.activities)),...state.activities];
   return establishBindings({...state,failedContinuations:{...saved?.failedContinuations,...state.failedContinuations},worktreeSetup:state.worktreeSetup??saved?.worktreeSetup,worktreeHandoffs:mergeWorktreeHandoffs(saved?.worktreeHandoffs,state.worktreeHandoffs),activities,messages:legacyMessages(state,turns,bindings),subagents:{...saved?.subagents,...state.subagents},session:state.session??saved?.session,inputBoundaries:{...saved?.inputBoundaries,...state.inputBoundaries},inputTurns:{...saved?.inputTurns,...state.inputTurns},sequence:state.sequence??saved?.sequence,latestTurn:latestTurn?turns[latestTurn.turnId]??latestTurn:undefined,turns,bindings,starts:{...saved?.starts,...state.starts}});
 }
 function establishBindings(state:InlineThreadState):InlineThreadState {
@@ -254,7 +254,7 @@ export function applyThreadItem(previous:InlineThreadState,input:unknown):{state
     }
     const messages=legacyMessages({...state,messages:thread.messages.filter(validMessage),legacyMessageIds:thread.legacyMessageIds},turns,state.bindings);
     const currentActivities:InlineActivity[]=Array.isArray(thread.activities)?thread.activities.filter(validActivity):[];
-    const activities=item.snapshot.page?.hasMore?[...state.activities.filter(activity=>['response.html','response.image'].includes(activity.kind)&&!currentActivities.some(current=>current.id===activity.id||activity.kind==='response.image'&&current.id===activity.id.replace(/:images$/,'')&&['failed','stopped'].includes(String(current.payload?.status)))),...currentActivities]:currentActivities;
+    const activities=item.snapshot.page?.hasMore?[...state.activities.filter(activity=>['response.html','response.image'].includes(activity.kind)&&!resultActivitySuperseded(activity,currentActivities)),...currentActivities]:currentActivities;
     return finish({...state,protocolVersion:thread.protocolVersion,legacyMessageIds:thread.legacyMessageIds,title:typeof thread.title==='string'?thread.title:state.title,messages,activities,session:thread.session??undefined,latestTurn,turns,subagents:{...state.subagents,...thread.subagents},worktreeHandoffs:mergeWorktreeHandoffs(state.worktreeHandoffs,thread.worktreeHandoffs),v2Requests:thread.v2Requests,v2Controls:thread.v2Controls,historyComplete:!item.snapshot.page?.hasMore,checkpoints:Array.isArray(thread.checkpoints)?thread.checkpoints:[]});
   }
   if(item?.kind!=='event')return {state:previous};

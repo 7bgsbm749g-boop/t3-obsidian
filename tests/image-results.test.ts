@@ -4,6 +4,7 @@ import {unified} from 'unified';
 import remarkParse from 'remark-parse';
 import {toolImageSources,parseImageResult,renderImageResult,responseImageResults,type ImageResultReference} from '../src/responses/image-results';
 import {itemActivities,normalizeV2Snapshot,normalizeV2StreamItem} from '../src/connection/orchestration-v2';
+import {readThreadSnapshot} from '../src/connection/wire-types';
 import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,renderInlineTurn,type InlineThreadState} from '../src/conversations/inline-thread';
 import {streamBlocks} from '../src/responses/stream-block';
 import {responseToolGroups} from '../src/responses/response-tools';
@@ -107,4 +108,23 @@ test('omitted live tool output keeps known images in progress and recovery until
  const viewed={...state(),activities:itemActivities(viewedTool),sequence:1};
  const omitted=applyThreadItem(viewed,update({...viewedTool,output:undefined,outputOmitted:true},2)).state;
  assert.deepEqual(inlineBindingCheckpoint(omitted).imageResults,inlineBindingCheckpoint(viewed).imageResults,'Omission must not replace an output image with the view_image file fallback');
+});
+
+test('partial reconnect and binding recovery retire images replaced by full output',()=>{
+ const imageTool=tool({toolName:'screenshot',input:{},output:[image]});
+ const previous:InlineThreadState={...state(),activities:itemActivities(imageTool),sequence:1};
+ const saved=inlineBindingCheckpoint(previous);
+ const snapshot=(item:any)=>readThreadSnapshot(normalizeV2Snapshot({snapshotSequence:2,hasMoreHistory:true,projection:{thread:{id:'thread',projectId:'project'},messages:previous.messages.map(({turnId,...message})=>({...message,runId:turnId})),runs:[],turnItems:[item],runtimeRequests:[]}}));
+ const check=(item:any,expected:number)=>{
+  const canonical=snapshot(item),reconnected=applyThreadItem(previous,{kind:'snapshot',snapshot:canonical}).state;
+  const recovered=restoreInlineBindings({...canonical.thread,historyComplete:false},saved);
+  for(const current of [reconnected,recovered]){
+   assert.equal(current.activities.filter(activity=>activity.kind==='response.image').length,expected);
+   assert.equal(inlineBindingCheckpoint(current).imageResults?.length??0,expected);
+   assert.equal(renderInlineTurn(current,'run','thread','running','collapse','env').includes('```t3-image'),expected>0);
+  }
+ };
+ for(const output of [[],[{type:'text',text:'Image removed.'}],'No image remains.',undefined])check({...imageTool,output,outputOmitted:false},0);
+ check({...imageTool,output:undefined,outputOmitted:true},1);
+ for(const status of ['failed','interrupted','cancelled','rolled_back','expired'])check({...imageTool,status,output:undefined,outputOmitted:true},0);
 });

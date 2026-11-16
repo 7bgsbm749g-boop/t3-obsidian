@@ -69,3 +69,15 @@ export function responseImageResults(activity:InlineActivity,environmentId:strin
   });
 }
 export {MAX_IMAGE_BYTES};
+
+/** Full output and unsuccessful tools supersede prior image evidence. */
+export function replacesToolImages(item:{outputOmitted?:boolean;status:string}):boolean {
+  return item.outputOmitted!==true||['failed','interrupted','cancelled','rolled_back','expired'].includes(item.status);
+}
+
+/** Use the same retirement proof for partial snapshots and saved recovery.
+ * Legacy activities without a replacement flag can still prove failure. */
+export function resultActivitySuperseded(activity:InlineActivity,current:InlineActivity[]):boolean {
+  return current.some(next=>next.id===activity.id||activity.kind==='response.image'&&next.id===activity.id.replace(/:images$/,'')&&
+    (next.payload?.replacesImages===true||['failed','stopped'].includes(String(next.payload?.status))));
+}
