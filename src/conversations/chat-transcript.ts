@@ -32,9 +32,9 @@ export class ChatTranscript extends Component {
       for(const node of Array.from(row.el.querySelectorAll<HTMLElement>('[data-t3-tool-icon]')))if(!node.firstChild)setIcon(node,node.dataset.t3ToolIcon??'wrench');
     }).catch(error=>{this.removeChild(component);this.failure(error);});
   }
-  update(state:InlineThreadState){
+  update(state:InlineThreadState,source?:{environmentId:string;threadId:string}){
     if(this.closed)return;let cursor=this.el.firstChild;const pinned=this.el.scrollHeight-this.el.scrollTop-this.el.clientHeight<64,seen=new Set<string>();
-    for(const segment of chatTimeline(state)){
+    for(const segment of chatTimeline(state,source)){
       seen.add(segment.id);let row=this.rows.get(segment.id);
       if(!row){
         const el=this.el.createEl('section',{cls:'t3-chat-turn'}),work=el.createEl('details',{cls:'t3-chat-work'}),summary=work.createEl('summary'),history=work.createDiv({cls:'t3-chat-work-content'});

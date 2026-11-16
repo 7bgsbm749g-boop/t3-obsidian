@@ -24,3 +24,26 @@ test('composer catalog exposes only available providers and their actual option 
  const models=composerModels({providers:[{instanceId:'off',enabled:false,models:[{slug:'hidden'}]},{instanceId:'codex',enabled:true,driver:'codex',displayName:'Codex',models:[{slug:'sol',name:'6.1 Sol',capabilities:{optionDescriptors:[{id:'reasoningEffort',label:'Reasoning',role:'reasoning',type:'select',options:[{id:'xhigh',label:'Extra High'}]}]}}],skills:[{name:'example',path:'/synthetic/SKILL.md',enabled:true}],slashCommands:[{name:'compact'}]}]});
  assert.equal(models.length,1);assert.equal(models[0].skills[0].name,'example');assert.equal(models[0].commands[0].name,'compact');assert.equal(composerModelLabel({instanceId:'codex',model:'sol',options:[{id:'reasoningEffort',value:'xhigh'}]},models),'6.1 Sol Extra High');
 });
+test('recovered commentary cannot replace the canonical final answer',()=>{
+ const state=thread();state.latestTurn={...state.turns!.run,assistantMessageId:'progress'};
+ state.messages.push({id:'recovered',role:'assistant',text:'Recovered commentary.',turnId:'run',streaming:false,createdAt:'2026-11-16T12:00:10Z'});
+ const [segment]=chatTimeline(state);
+ assert.equal(segment.final?.id,'answer');assert.deepEqual(segment.progress.map(message=>message.id),['progress','recovered']);
+ assert.ok(!segment.history!.some(row=>row.text==='The final answer.'));
+});
+test('same-message growth splits at the saved steering boundary and finishes below the input',()=>{
+ const state=thread(),growing={id:'growing',role:'assistant',text:'Before steering.\n\nAfter steering.',turnId:'run',streaming:true,createdAt:'2026-11-16T12:00:01Z'};
+ state.messages=[state.messages[0],growing,{id:'steer',role:'user',text:'Change direction',turnId:null,streaming:false,createdAt:'2026-11-16T12:00:10Z'}];
+ state.inputTurns={steer:'run'};state.inputBoundaries={steer:[{...growing,text:'Before steering.\n\n'}]};state.turns!.run.state='running';state.session={status:'running',activeTurnId:'run'};
+ const [before,after]=chatTimeline(state);
+ assert.equal(before.progress[0].text,'Before steering.\n\n');assert.equal(after.progress[0].text,'After steering.');assert.equal(after.input?.id,'steer');assert.equal(after.active,true);
+ state.turns!.run={...state.turns!.run,state:'completed',assistantMessageId:'growing'};state.session={status:'ready',activeTurnId:null};growing.streaming=false;
+ const completed=chatTimeline(state);assert.equal(completed[1].final?.text,'After steering.');assert.equal(completed[0].progress[0].text,'Before steering.\n\n');
+});
+test('sidebar tool results retain native image and HTML references with their source identity',()=>{
+ const state=thread(),createdAt='2026-11-16T12:00:10Z';
+ state.activities=[{id:'image',kind:'response.image',turnId:'run',summary:'Image',createdAt,payload:{itemId:'image-item',imageSources:[{kind:'file',path:'/synthetic/chart.png'}]}},{id:'html',kind:'response.html',turnId:'run',summary:'Chart',createdAt,payload:{itemId:'html-item',htmlRender:{attachmentId:'synthetic-chart',title:'Chart',height:200}}}];
+ const [segment]=chatTimeline(state,{environmentId:'env',threadId:'thread'});
+ assert.equal((segment.work.match(/```t3-image/g)??[]).length,1);assert.equal((segment.work.match(/```t3-html/g)??[]).length,1);assert.match(segment.work,/"environmentId":"env","threadId":"thread","runId":"run"/);
+ assert.doesNotMatch(chatTimeline(state)[0].work,/```t3-(?:image|html)/);
+});

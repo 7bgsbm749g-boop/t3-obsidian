@@ -4,23 +4,25 @@ import {parseHTML} from 'linkedom';
 import {build} from './build-fixture';
 import {runInNewContext} from './obsidian-context';
 const compiled=build({entryPoints:['src/conversations/sidebar-thread-view.ts'],bundle:true,platform:'browser',format:'cjs',write:false});
-async function fixture(kind='thread'){
+async function fixture(kind='thread',parentRunning=false){
  const {document,window}=parseHTML('<html><body></body></html>');
  const proto=window.HTMLElement.prototype as any;
  proto.createEl=function(tag:string,options:any={}){const el=document.createElement(tag);el.textContent=options.text??'';el.className=options.cls??'';for(const [key,value] of Object.entries(options.attr??{}))el.setAttribute(key,String(value));this.appendChild(el);return el;};
  proto.createDiv=function(options:any){return this.createEl('div',options);};proto.createSpan=function(options:any){return this.createEl('span',options);};proto.empty=function(){this.replaceChildren();};proto.addClass=function(value:string){this.classList.add(value);};proto.setText=function(value:string){this.textContent=value;};proto.toggleClass=function(value:string,on:boolean){this.classList.toggle(value,on);};
  class Component{load(){}unload(){}addChild(){}removeChild(){}register(){}registerDomEvent(){}}
  class ItemView extends Component{app:any;contentEl:any;constructor(leaf:any){super();this.app=app;this.contentEl=leaf.contentEl;}async setState(){}}
- const app:any={workspace:{requestSaveLayout(){},getActiveViewOfType(){},getLeavesOfType(){return [];}}},module={exports:{} as any},notices:string[]=[],watches:any[]=[],sent:any[]=[];
- runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:()=>({ItemView,Component,FuzzySuggestModal:class{},Modal:class{},Setting:class{},setIcon:()=>{},Notice:class{constructor(text:string){notices.push(text);}},MarkdownRenderer:{render:async(_app:any,text:string,el:any)=>{if(text.startsWith('<'))el.innerHTML=text;else el.textContent=text;}}}),console,setTimeout,clearTimeout,performance,URL,URLSearchParams,AbortController,document});
+ let saves=0;
+ const app:any={workspace:{requestSaveLayout(){saves++;},getActiveViewOfType(){},getLeavesOfType(){return [];}}},module={exports:{} as any},notices:string[]=[],watches:any[]=[],sent:any[]=[];
+ class FileReader {result='data:image/png;base64,YWJj';onload?:()=>void;onloadend?:()=>void;readAsDataURL(){this.onload?.();this.onloadend?.();}abort(){}}
+ runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:()=>({ItemView,Component,FuzzySuggestModal:class{},Modal:class{},Setting:class{},setIcon:()=>{},Notice:class{constructor(text:string){notices.push(text);}},MarkdownRenderer:{render:async(_app:any,text:string,el:any)=>{if(text.startsWith('<'))el.innerHTML=text;else el.textContent=text;}}}),console,setTimeout,clearTimeout,performance,URL,URLSearchParams,AbortController,document,FileReader,TextEncoder});
  const contentEl=document.createElement('div');document.body.appendChild(contentEl);
  let serial=0,fail=false;
- const owner:any={host:{uuid:()=>`id-${++serial}`,projects:()=>[]},watch:(_id:any,_access:any,callbacks:any)=>{const entry={callbacks,stopped:false};watches.push(entry);return {stop:()=>{entry.stopped=true;}};},transport:{snapshot:async(target:any)=>({thread:{id:target.threadId,projectId:'project',title:'Parent',messages:[],activities:[]}}),send:async(...args:any[])=>{sent.push(args);if(fail)throw Error('Unconfirmed');}},report:(error:Error)=>notices.push(error.message)};
+ const owner:any={host:{uuid:()=>`id-${++serial}`,projects:()=>[]},watch:(_id:any,_access:any,callbacks:any)=>{const entry={callbacks,stopped:false};watches.push(entry);return {stop:()=>{entry.stopped=true;}};},transport:{snapshot:async(target:any)=>({thread:{id:target.threadId,projectId:'project',title:'Parent',messages:[],activities:[],...(parentRunning?{session:{status:'running',activeTurnId:'parent-run'}}:{})}}),send:async(...args:any[])=>{sent.push(args);if(fail)throw Error('Unconfirmed');}},report:(error:Error)=>notices.push(error.message)};
  const view=new module.exports.SidebarThreadView({contentEl},owner,kind);await view.onOpen();
  const target={kind,threadId:'thread',projectId:'project',environmentId:'env',title:'Synthetic',...(kind==='thread'?{}:{parent:{threadId:'parent',projectId:'project',environmentId:'env'}})};
  await view.setState({target},{});
  const snapshot=async(extra:any={})=>{watches.at(-1).callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:5,thread:{id:'thread',projectId:'project',messages:[{id:'user',role:'user',text:'Question',turnId:'run',streaming:false},{id:'reply',role:'assistant',text:'Answer',turnId:'run',streaming:true}],activities:[],...extra}}});await Promise.resolve();await Promise.resolve();};
- return {exports:module.exports,app,window,view,contentEl,watches,snapshot,sent,notices,setFail:(value:boolean)=>{fail=value;},input:(text:string)=>{const field=contentEl.querySelector('textarea')!;field.value=text;field.dispatchEvent(new window.Event('input'));}};
+ return {exports:module.exports,app,window,view,contentEl,watches,snapshot,sent,notices,saves:()=>saves,owner,setFail:(value:boolean)=>{fail=value;},input:(text:string)=>{const field=contentEl.querySelector('textarea')!;field.value=text;field.dispatchEvent(new window.Event('input'));}};
 }
 test('native pages share transcript, preserve composer during updates, reject stale/wrong-source data and stop on close',async()=>{
  const f=await fixture();await f.snapshot();f.input('Retained draft');const field=f.contentEl.querySelector('textarea');assert.match(f.contentEl.textContent!,/Question.*Answer/s);
@@ -75,4 +77,24 @@ test('Enter sends; Shift+Enter and input composition do not send',async()=>{
  const f=await fixture();await f.snapshot();f.input('Keyboard send');const input=f.contentEl.querySelector('textarea')!;
  const key=(shiftKey:boolean,isComposing:boolean)=>{const event=new f.window.Event('keydown',{bubbles:true,cancelable:true});Object.assign(event,{key:'Enter',shiftKey,isComposing});input.dispatchEvent(event);};
  key(true,false);key(false,true);await Promise.resolve();assert.equal(f.sent.length,0);key(false,false);await Promise.resolve();await Promise.resolve();assert.equal(f.sent.length,1);
+});
+test('Bring back reaches the fresh transport check after the parent was initially busy',async()=>{
+ const f=await fixture('side-chat',true);await f.snapshot({latestTurn:{turnId:'run',state:'completed'},session:{status:'ready',activeTurnId:null}});
+ const button=f.contentEl.querySelector<HTMLButtonElement>('[aria-label="Bring back"]')!;assert.equal(button.disabled,false);
+ let calls=0;f.owner.transport.bringBack=async()=>{calls++;};button.click();await Promise.resolve();await Promise.resolve();assert.equal(calls,1);
+});
+test('unsent image drafts request a save, survive view restoration and clear on removal',async()=>{
+ const f=await fixture();await f.snapshot();f.input('Keep the image');const before=f.saves();
+ await f.view.composer.addFiles([{name:'draft.png',type:'image/png',size:3}]);assert.ok(f.saves()>before);
+ const saved=f.view.getState();assert.equal(saved.attachments.length,1);assert.equal(saved.pending,undefined);await f.view.onClose();
+ const restored=await fixture();await restored.view.setState(saved,{});await restored.snapshot();
+ assert.equal(restored.contentEl.querySelector('textarea')!.value,'Keep the image');assert.ok(restored.contentEl.querySelector('[alt="draft.png"]'));
+ restored.contentEl.querySelector<HTMLButtonElement>('[aria-label="Remove draft.png"]')!.click();assert.equal(restored.view.getState().attachments.length,0);
+ await restored.view.setState(saved,{});await restored.snapshot();await restored.view.send();assert.equal(restored.sent[0][4].attachments[0].dataUrl,'data:image/png;base64,YWJj');assert.equal(restored.view.getState().attachments.length,0);
+});
+test('every sidebar mode renders rich results for its validated environment and thread',async()=>{
+ for(const kind of ['thread','side-chat','subagent']){
+  const f=await fixture(kind);await f.snapshot({activities:[{id:'image',kind:'response.image',turnId:'run',summary:'Image',payload:{itemId:'image-item',imageSources:[{kind:'file',path:'/synthetic/result.png'}]}},{id:'html',kind:'response.html',turnId:'run',summary:'HTML',payload:{itemId:'html-item',htmlRender:{attachmentId:'synthetic',title:'Chart',height:200}}}]});
+  assert.match(f.contentEl.textContent!,/```t3-image/);assert.match(f.contentEl.textContent!,/```t3-html/);assert.match(f.contentEl.textContent!,/"environmentId":"env","threadId":"thread"/);
+ }
 });
