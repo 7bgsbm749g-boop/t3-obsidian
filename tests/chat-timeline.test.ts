@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {chatTimeline} from '../src/conversations/chat-timeline';
 import {responseWork} from '../src/responses/response-work';
+import {readChatObservations} from '../src/conversations/chat-observations';
 import {composerModels,composerModelLabel} from '../src/conversations/composer-models';
 import type {InlineThreadState} from '../src/conversations/inline-thread';
 const start='2026-11-16T12:00:00Z',end='2026-11-16T12:00:21Z';
@@ -46,4 +47,14 @@ test('sidebar tool results retain native image and HTML references with their so
  const [segment]=chatTimeline(state,{environmentId:'env',threadId:'thread'});
  assert.equal((segment.work.match(/```t3-image/g)??[]).length,1);assert.equal((segment.work.match(/```t3-html/g)??[]).length,1);assert.match(segment.work,/"environmentId":"env","threadId":"thread","runId":"run"/);
  assert.doesNotMatch(chatTimeline(state)[0].work,/```t3-(?:image|html)/);
+});
+test('cold detail snapshots associate null-turn steering and keep later final text below it',()=>{
+ const state=thread();state.turns!.run={...state.turns!.run,messageId:'input',requestedAt:start,assistantMessageId:'answer'};
+ state.messages=[state.messages[0],{...state.messages[2],createdAt:'2026-11-16T12:00:01Z',updatedAt:end},{id:'steer',role:'user',text:'Steering input',turnId:null,streaming:false,createdAt:'2026-11-16T12:00:10Z'}];
+ const [before,after]=chatTimeline(state);assert.equal(before.final,undefined);assert.equal(after.steer,true);assert.equal(after.turnId,'run');assert.equal(after.final?.text,'The final answer.');assert.equal(after.active,false);assert.equal(after.timing?.finishedAt,end);
+});
+test('saved steering observations are bounded, exact and scoped to one source',()=>{
+ const value={source:'env/project/thread',inputTurns:{steer:'run'},inputBoundaries:{steer:[{id:'reply',role:'assistant',turnId:'run',text:'Exact prefix.\n\n',streaming:true}]}};
+ assert.equal(readChatObservations(value,value.source).inputBoundaries.steer[0].text,'Exact prefix.\n\n');assert.deepEqual(readChatObservations(value,'other').inputTurns,{});
+ assert.deepEqual(readChatObservations({...value,inputBoundaries:{steer:[{...value.inputBoundaries.steer[0],text:'x'.repeat(1_000_001)}]}},value.source).inputBoundaries,{});
 });

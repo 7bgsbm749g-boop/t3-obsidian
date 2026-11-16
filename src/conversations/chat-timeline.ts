@@ -1,5 +1,5 @@
 import {inlineTurnMessages,turnForMessage,type InlineMessage,type InlineThreadState} from './inline-thread';
-import {observeIncoming,steeringSegments} from './inline-steering';
+import {incomingDisplayTurn,observeIncoming,steeringSegments} from './inline-steering';
 import {visibleInlineInput} from '../responses/input-presentation';
 import {responseWork} from '../responses/response-work';
 import {responseActivityLabel,responseActivityRow} from '../responses/response-activity';
@@ -14,13 +14,20 @@ export function chatTimeline(state:InlineThreadState,source?:{environmentId:stri
   const result:ChatSegment[]=[],groups=new Map<string,InlineMessage[]>();
   const messages=state.messages.filter(message=>['user','assistant'].includes(message.role)&&!message.delegatedCompletion).slice(-200)
     .sort((a,b)=>a.createdAt&&b.createdAt?a.createdAt.localeCompare(b.createdAt)||(a.sequence??0)-(b.sequence??0):0);
+  const turns=[...new Set([...Object.keys(state.turns??{}),...(state.latestTurn?[state.latestTurn.turnId]:[]),...messages.flatMap(message=>message.turnId?[message.turnId]:[])])];
   for(const message of messages){
-    const turnId=message.turnId??turnForMessage(state,message.id)??state.inputTurns?.[message.id]??`input:${message.id}`;
+    const turnId=message.turnId??turnForMessage(state,message.id)??incomingDisplayTurn(state,message,turns)??`input:${message.id}`;
     const group=groups.get(turnId)??[];group.push(message);groups.set(turnId,group);
   }
   for(const [turnId,group] of groups){
     const observed=observeIncoming({...state,messages},[turnId]);
-    const inputs=group.filter(message=>message.role==='user').map(message=>observed.find(input=>input.messageId===message.id)??{messageId:message.id,text:message.text,before:[],createdAt:message.createdAt});
+    const final=inlineTurnMessages(state,turnId).at(-1);
+    const inputs=group.filter(message=>message.role==='user').map(message=>{
+      const input=observed.find(input=>input.messageId===message.id)??{messageId:message.id,text:message.text,before:[],createdAt:message.createdAt};
+      // An unwitnessed snapshot has no exact prefix. Keep text updated after
+      // the input, including the completed final message, below that input.
+      return input.position==='recovered'?{...input,before:input.before.filter(before=>!before.streaming&&(!input.createdAt||(!before.updatedAt||before.updatedAt<=input.createdAt)&&before.id!==final?.id))}:input;
+    });
     let segment:ChatSegment|undefined;
     for(const piece of steeringSegments(group.filter(message=>message.role==='assistant'),inputs)){
       const original=group.find(message=>message.id===piece.messageId);if(!original)continue;

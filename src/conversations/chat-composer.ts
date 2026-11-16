@@ -34,6 +34,7 @@ export class ChatComposer extends Component {
  readonly input:HTMLTextAreaElement;private submit:HTMLButtonElement;private modelButton:HTMLButtonElement;private mic:HTMLButtonElement;private attach:HTMLButtonElement;private chips:HTMLElement;private suggestions:HTMLElement;private fileInput:HTMLInputElement;
  private catalog:ComposerModel[]=[];private settings:ComposerSettings={};private running=false;private busy=false;private available=false;private recognition?:Speech;private timer?:TimerHandle;private dead=false;private readers=new Set<FileReader>();private locked=false;private search=0;private references=new Map<string,Record<string,unknown>>();private candidates:string[]=[];private selection=0;private token?:RegExpMatchArray;
  attachments:OutgoingAttachment[]=[];
+ private resizer?:ResizeObserver;
  constructor(private app:App,readonly el:HTMLElement,private host:ComposerHost,draft:string){
   super();el.addClass('t3-chat-composer');this.chips=el.createDiv({cls:'t3-composer-attachments'});this.suggestions=el.createDiv({cls:'t3-composer-suggestions',attr:{role:'listbox','aria-label':'Prompt suggestions'}});this.suggestions.hidden=true;
   this.input=el.createEl('textarea',{cls:'t3-composer-input',attr:{'aria-label':'Message T3',placeholder:'Ask anything. @ files, $ skills, / commands',rows:'2'}});this.input.value=draft;
@@ -42,7 +43,7 @@ export class ChatComposer extends Component {
   this.modelButton=controls.createEl('button',{cls:'clickable-icon t3-composer-model',attr:{type:'button','aria-label':'Choose model and permissions'}});this.modelButton.addEventListener('click',()=>{void this.openSettings();});
   this.mic=this.icon(controls,'mic','Voice input',()=>this.speech());this.submit=this.icon(controls,'arrow-up','Send message',()=>{void (this.running&&!this.hasInput()?this.host.stop():this.host.send()).catch(error=>this.failure(error));});this.submit.addClass('t3-composer-submit');
   this.fileInput=el.createEl('input',{attr:{type:'file',accept:'image/png,image/jpeg,image/gif,image/webp',multiple:'','aria-label':'Choose images'}});this.fileInput.hidden=true;this.fileInput.addEventListener('change',()=>{void this.addFiles(Array.from(this.fileInput.files??[]));this.fileInput.value='';});
-  this.input.addEventListener('input',()=>{this.host.changed(this.input.value);this.controls();this.suggest();});
+  this.input.addEventListener('input',()=>{this.host.changed(this.input.value);this.resizeInput();this.controls();this.suggest();});
   this.input.addEventListener('keydown',event=>{
    if(event.isComposing)return;
    if(this.candidates.length&&!this.suggestions.hidden){if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();this.selection=(this.selection+(event.key==='ArrowDown'?1:this.candidates.length-1))%this.candidates.length;this.drawSuggestions();return;}if(event.key==='Escape'){this.hideSuggestions();return;}if(event.key==='Enter'){event.preventDefault();this.insertCandidate(this.candidates[this.selection]);return;}}
@@ -51,6 +52,12 @@ export class ChatComposer extends Component {
   el.addEventListener('dragover',event=>{if(event.dataTransfer?.types.includes('Files'))event.preventDefault();});el.addEventListener('drop',event=>{if(event.dataTransfer?.files.length){event.preventDefault();void this.addFiles(Array.from(event.dataTransfer.files));}});
   this.controls();
  }
+ onload(){
+  this.resizeInput();let width=this.el.clientWidth;
+  const Observer=this.el.ownerDocument.defaultView?.ResizeObserver;
+  if(Observer){this.resizer=new Observer(()=>{const next=this.el.clientWidth;if(next!==width){width=next;this.resizeInput();}});this.resizer.observe(this.el);}
+ }
+ private resizeInput(){this.input.style.height='auto';this.input.style.height=this.input.scrollHeight+'px';}
  private icon(parent:HTMLElement,icon:string,label:string,action:()=>void){const button=parent.createEl('button',{cls:'clickable-icon t3-chat-icon',attr:{type:'button','aria-label':label,title:label}});setIcon(button,icon);button.addEventListener('click',action);return button;}
  private failure(error:unknown){if(this.dead)return;new Notice(error instanceof Error?error.message:String(error),8000);}
  update(available:boolean,running:boolean,busy:boolean,settings?:ComposerSettings,locked=false){this.locked=locked;this.available=available;this.running=running;this.busy=busy;if(settings)this.settings={...settings};this.controls();}
@@ -60,7 +67,7 @@ export class ChatComposer extends Component {
  private speech(){
   if(this.recognition){this.recognition.abort();this.recognition=undefined;this.controls();return;}
   const Speech=this.speechConstructor();if(!Speech)return;const recognition=this.recognition=new Speech();recognition.interimResults=false;
-  recognition.onresult=event=>{const text=Array.from(event.results).map(result=>result[0]?.transcript??'').join(' ');this.input.value+=(this.input.value?' ':'')+text;this.host.changed(this.input.value);this.controls();};
+  recognition.onresult=event=>{const text=Array.from(event.results).map(result=>result[0]?.transcript??'').join(' ');this.input.value+=(this.input.value?' ':'')+text;this.host.changed(this.input.value);this.resizeInput();this.controls();};
   recognition.onend=()=>{this.recognition=undefined;this.controls();};recognition.onerror=()=>{this.recognition=undefined;this.controls();this.failure(Error('Voice input is unavailable. Check microphone access on this device.'));};
   try{recognition.start();this.controls();}catch(error){this.recognition=undefined;this.controls();this.failure(error);}
  }
@@ -85,7 +92,7 @@ export class ChatComposer extends Component {
  options(){const records=[...this.references.values()].filter(record=>this.input.value.includes(String(record.kind==='mention'?'@'+String(record.path):'$'+String(record.name)))||this.input.value.includes('/'+String(record.name)));for(const item of this.attachments)records.push({version:1,contextId:item.id,label:(item.name??'Image').slice(0,200),kind:'image',attachmentId:item.id,name:item.name,mimeType:item.mimeType,sizeBytes:item.sizeBytes});return {...this.settings,attachments:this.attachments.map(item=>({...item})),...(records.length?{context:{version:1,records}}:{})};}
  restoreContext(context?:OutgoingContext){for(const record of context?.records??[])if((record.kind==='mention'||record.kind==='skill')&&typeof record.contextId==='string')this.references.set(record.contextId,{...record});}
  restoreAttachments(attachments:OutgoingAttachment[]){this.attachments=attachments.map(item=>({...item}));this.drawAttachments();this.controls();}
- clear(){this.input.value='';this.attachments=[];this.references.clear();this.host.changed('');this.drawAttachments();this.hideSuggestions();this.controls();}
+ clear(){this.input.value='';this.attachments=[];this.references.clear();this.host.changed('');this.resizeInput();this.drawAttachments();this.hideSuggestions();this.controls();}
  private hideSuggestions(){this.search++;this.suggestions.hidden=true;this.candidates=[];}
  private suggest(){
   const token=this.input.value.slice(0,this.input.selectionStart??this.input.value.length).match(/(?:^|\s)([@$/])([^\s]*)$/);this.token=token??undefined;if(!token){this.hideSuggestions();return;}
@@ -97,6 +104,6 @@ export class ChatComposer extends Component {
   })().catch(error=>{this.hideSuggestions();this.failure(error);});},180);
  }
  private drawSuggestions(){this.suggestions.empty();this.suggestions.hidden=!this.candidates.length;for(const [index,text] of this.candidates.entries()){const button=this.suggestions.createEl('button',{cls:'suggestion-item',text:(this.token?.[1]??'')+text,attr:{type:'button',role:'option','aria-selected':String(index===this.selection)}});button.addEventListener('mousedown',event=>{event.preventDefault();this.insertCandidate(text);});}}
- private insertCandidate(text:string){const token=this.token;if(!token)return;if(token[1]==='@'||token[1]==='$'){const id=this.host.uuid();if(this.references.size<100)this.references.set(id,{version:1,contextId:id,label:text.slice(0,200),kind:token[1]==='@'?'mention':'skill',...(token[1]==='@'?{path:text}:{name:text})});}const end=this.input.selectionStart??this.input.value.length,start=end-token[2].length;this.input.setRangeText(text+' ',start,end,'end');this.host.changed(this.input.value);this.hideSuggestions();this.input.focus();this.controls();}
- onunload(){this.dead=true;for(const reader of this.readers)reader.abort();this.readers.clear();this.recognition?.abort();clockForDocument(this.el.ownerDocument).clearTimeout(this.timer);this.search++;}
+ private insertCandidate(text:string){const token=this.token;if(!token)return;if(token[1]==='@'||token[1]==='$'){const id=this.host.uuid();if(this.references.size<100)this.references.set(id,{version:1,contextId:id,label:text.slice(0,200),kind:token[1]==='@'?'mention':'skill',...(token[1]==='@'?{path:text}:{name:text})});}const end=this.input.selectionStart??this.input.value.length,start=end-token[2].length;this.input.setRangeText(text+' ',start,end,'end');this.host.changed(this.input.value);this.resizeInput();this.hideSuggestions();this.input.focus();this.controls();}
+ onunload(){this.dead=true;this.resizer?.disconnect();for(const reader of this.readers)reader.abort();this.readers.clear();this.recognition?.abort();clockForDocument(this.el.ownerDocument).clearTimeout(this.timer);this.search++;}
 }

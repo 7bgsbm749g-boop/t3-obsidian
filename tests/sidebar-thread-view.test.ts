@@ -98,3 +98,24 @@ test('every sidebar mode renders rich results for its validated environment and 
   assert.match(f.contentEl.textContent!,/```t3-image/);assert.match(f.contentEl.textContent!,/```t3-html/);assert.match(f.contentEl.textContent!,/"environmentId":"env","threadId":"thread"/);
  }
 });
+test('live steering boundaries survive canonical snapshots and workspace restoration',async()=>{
+ const f=await fixture(),createdAt='2026-11-16T12:00:00Z',steeredAt='2026-11-16T12:00:10Z',completedAt='2026-11-16T12:00:21Z';
+ const input={id:'user',role:'user',text:'Question',turnId:'run',streaming:false,createdAt};
+ const reply={id:'reply',role:'assistant',text:'Before steering.\n\n',turnId:'run',streaming:true,createdAt:'2026-11-16T12:00:01Z'};
+ const turn={turnId:'run',state:'running',messageId:'user',requestedAt:createdAt,startedAt:createdAt};
+ await f.snapshot({messages:[input,reply],session:{status:'running',activeTurnId:'run'},turns:{run:turn}});
+ const steer={messageId:'steer',role:'user',text:'Steer here',turnId:null,streaming:false,createdAt:steeredAt};
+ f.watches.at(-1).callbacks.item({kind:'event',event:{sequence:6,type:'thread.message-sent',payload:steer}});
+ const completed={...reply,text:'Before steering.\n\nAfter steering.',streaming:false,updatedAt:completedAt};
+ const snapshot={messages:[input,completed,{...steer,id:'steer'}],session:{status:'ready',activeTurnId:null},turns:{run:{...turn,state:'completed',assistantMessageId:'reply',completedAt}}};
+ f.watches.at(-1).callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:7,thread:{id:'thread',projectId:'project',activities:[],...snapshot}}});await Promise.resolve();await Promise.resolve();
+ const saved=f.view.getState();assert.equal(saved.observations.inputBoundaries.steer[0].text,'Before steering.\n\n');
+ assert.ok(f.contentEl.textContent!.indexOf('After steering.')>f.contentEl.textContent!.indexOf('Steer here'));
+ const restored=await fixture();await restored.view.setState(saved,{});await restored.snapshot(snapshot);
+ assert.ok(restored.contentEl.textContent!.indexOf('After steering.')>restored.contentEl.textContent!.indexOf('Steer here'));assert.match(restored.contentEl.querySelector('.t3-chat-turn')!.textContent!,/Before steering/);
+});
+test('model chooser shows the thread selected model and effort label',async()=>{
+ const f=await fixture();f.owner.host.catalog=async()=>[{selection:{instanceId:'codex',model:'gpt-6.1-sol'},label:'6.1 Sol',provider:'Codex',options:[{id:'reasoningEffort',role:'reasoning',label:'Reasoning',type:'select',options:[{id:'xhigh',label:'Extra High'}]}],runtimeModes:[],plan:false,commands:[],skills:[]}];
+ await f.snapshot({modelSelection:{instanceId:'codex',model:'gpt-6.1-sol',options:[{id:'reasoningEffort',value:'xhigh'}]}});await Promise.resolve();
+ assert.match(f.contentEl.querySelector('[aria-label="Choose model and permissions"]')!.textContent!,/6\.1 Sol Extra High/);
+});

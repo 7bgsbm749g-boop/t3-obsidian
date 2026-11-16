@@ -2,6 +2,7 @@ import type {OutgoingAttachment,OutgoingContext} from '../connection/send-contra
 import {FuzzySuggestModal,ItemView,Modal,Notice,Setting,setIcon,type App,type Plugin,type WorkspaceLeaf} from 'obsidian';
 import {ChatTranscript} from './chat-transcript';
 import {ChatComposer} from './chat-composer';
+import {readChatObservations,type ChatObservations} from './chat-observations';
 import {readComposerSettings,type ComposerModel,type ComposerSettings} from './composer-models';
 import type {SidebarSendOptions,SidebarProject} from './sidebar-thread-model';
 import {applyThreadItem,type InlineThreadState} from './inline-thread';
@@ -101,11 +102,14 @@ export class SidebarThreadView extends ItemView {
   private pending?:{text:string;commandId:string;messageId:string;threadId:string;options:SidebarSendOptions};
   private transcript?:ChatTranscript;private composer?:ChatComposer;private status?:HTMLElement;private title?:HTMLElement;private backButton?:HTMLButtonElement;private breadcrumb?:HTMLElement;
   private requests?:HTMLElement;private requestKey='';private disposeRequests?:()=>void;
+  private observations?:ChatObservations;
   constructor(leaf:WorkspaceLeaf,readonly owner:SidebarThreads,private kind:SidebarKind){super(leaf);}
   getViewType(){return TYPES[this.kind];}getDisplayText(){return this.target?.title??LABELS[this.kind];}getIcon(){return this.kind==='subagent'?'bot':this.kind==='side-chat'?'messages-square':'message-circle';}
-  getState(){return {target:this.target,project:this.project,draft:this.draft,pending:this.pending,settings:this.settings,context:this.composer?.options().context??this.draftContext,attachments:this.composer?.options().attachments??this.draftAttachments};}
+  private observationSource(){return JSON.stringify([this.target?.environmentId,this.target?.projectId,this.target?.threadId]);}
+  getState(){return {target:this.target,project:this.project,draft:this.draft,pending:this.pending,settings:this.settings,context:this.composer?.options().context??this.draftContext,attachments:this.composer?.options().attachments??this.draftAttachments,observations:this.target?readChatObservations({source:this.observationSource(),inputTurns:this.state.inputTurns,inputBoundaries:this.state.inputBoundaries},this.observationSource()):undefined};}
   async setState(state:Record<string,unknown>,result:import('obsidian').ViewStateResult){
     this.target=sidebarTarget(state.target);if(this.target?.kind!==this.kind)this.target=undefined;
+    this.observations=readChatObservations(state.observations,this.observationSource());
     const project=state.project;this.project=isRecord(project)?this.owner.host.projects().find(choice=>choice.key===project.key):undefined;
     this.draft=typeof state.draft==='string'?state.draft.slice(0,120_000):'';
     this.draftAttachments=draftImages(state.attachments);
@@ -143,7 +147,7 @@ export class SidebarThreadView extends ItemView {
   private draftTarget():SidebarTarget|undefined{return this.project?{kind:'thread',threadId:'draft',environmentId:this.project.environmentId,projectId:this.project.projectId,title:'New thread'}:undefined;}
   private setStatus(text?:string){if(this.status){this.status.hidden=!text;this.status.setText(text??'');}}
   private connect(){
-    this.monitor?.stop();this.monitor=undefined;const epoch=++this.epoch;this.state={messages:[],activities:[]};this.sequence=-1;this.online=false;
+    this.monitor?.stop();this.monitor=undefined;const epoch=++this.epoch;const observed=readChatObservations(this.observations,this.observationSource());this.state={messages:[],activities:[],inputTurns:observed.inputTurns,inputBoundaries:observed.inputBoundaries};this.sequence=-1;this.online=false;
     if(!this.target){this.root=this.project?.workspaceRoot;this.setStatus(this.project?undefined:'Choose a connected T3 thread.');if(this.project&&!this.settings.modelSelection)void this.owner.transport.defaults(this.project).then(defaults=>{if(this.closed||epoch!==this.epoch||this.settings.modelSelection)return;this.settings=defaults;this.updateControls();void this.composer?.refreshModels().catch(()=>{});}).catch(()=>{});this.updateControls();return;}
     this.setStatus('Connecting…');const target=this.target;
     const callbacks:ThreadStreamCallbacks={
@@ -158,7 +162,8 @@ export class SidebarThreadView extends ItemView {
           const first=!this.online;this.online=true;this.setStatus();if(first)void this.composer?.refreshModels().catch(()=>{});
         }
         if(item.kind==='event'&&item.event.type==='thread.metadata-updated')this.settings={...this.settings,...readComposerSettings(item.event.payload)};
-        this.state=applyThreadItem(this.state,item).state;this.transcript?.update(this.state,target);
+        const boundaries=this.state.inputBoundaries;this.state=applyThreadItem(this.state,item).state;this.transcript?.update(this.state,target);
+        if(boundaries!==this.state.inputBoundaries)this.app.workspace.requestSaveLayout();
         const key=JSON.stringify(this.state.activities.filter(activity=>/approval|user-input/.test(activity.kind)));if(key!==this.requestKey){this.requestKey=key;this.disposeRequests?.();this.requests?.empty();if(this.requests)this.disposeRequests=this.owner.host.renderRequests?.(this.requests,target,this.state);}
         this.updateControls();
       },
