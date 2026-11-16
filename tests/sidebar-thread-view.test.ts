@@ -20,7 +20,7 @@ async function fixture(kind='thread'){
  const target={kind,threadId:'thread',projectId:'project',environmentId:'env',title:'Synthetic',...(kind==='thread'?{}:{parent:{threadId:'parent',projectId:'project',environmentId:'env'}})};
  await view.setState({target},{});
  const snapshot=(extra:any={})=>watches.at(-1).callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:5,thread:{id:'thread',projectId:'project',messages:[{id:'user',role:'user',text:'Question',turnId:'run',streaming:false},{id:'reply',role:'assistant',text:'Answer',turnId:'run',streaming:true}],activities:[],...extra}}});
- return {view,contentEl,watches,snapshot,sent,notices,setFail:(value:boolean)=>{fail=value;},input:(text:string)=>{const field=contentEl.querySelector('textarea')!;field.value=text;field.dispatchEvent(new window.Event('input'));}};
+ return {exports:module.exports,app,view,contentEl,watches,snapshot,sent,notices,setFail:(value:boolean)=>{fail=value;},input:(text:string)=>{const field=contentEl.querySelector('textarea')!;field.value=text;field.dispatchEvent(new window.Event('input'));}};
 }
 test('native pages share transcript, preserve composer during updates, reject stale/wrong-source data and stop on close',async()=>{
  const f=await fixture();f.snapshot();f.input('Retained draft');const field=f.contentEl.querySelector('textarea');assert.match(f.contentEl.textContent!,/Question.*Answer/s);
@@ -40,4 +40,22 @@ test('wrong project snapshot disables sending and never renders its messages',as
 });
 test('native sidebar fixture bundles the product views without runtime Node imports',async()=>{
  const result=await build({entryPoints:['tests/native/sidebar-threads-lab.ts'],bundle:true,platform:'browser',format:'cjs',write:false,external:['node:*'],define:{SIDEBAR_LAB_REPORT:'"synthetic-report.json"'}});assert.ok(result.outputFiles[0].text.includes('t3-side-chat'));
+});
+
+test('all sidebar modes and a new-thread draft use tabs in the existing sidebar group',async()=>{
+ const f=await fixture(),created:any[]=[],revealed:any[]=[],splits:boolean[]=[];
+ f.app.workspace.getRightLeaf=(split:boolean)=>{splits.push(split);const leaf={async setViewState(state:any){created.push(state);}};return leaf;};
+ f.app.workspace.revealLeaf=async(leaf:any)=>{revealed.push(leaf);};
+ const owner=new f.exports.SidebarThreads(f.app,{},{});
+ const parent={threadId:'parent',projectId:'project',environmentId:'env'};
+ for(const kind of ['thread','side-chat','subagent'])await owner.open({...parent,threadId:kind,title:kind,kind,...(kind==='thread'?{}:{parent})});
+ await owner.openDraft({key:'project',label:'Project',projectId:'project',environmentId:'env'});
+ assert.deepEqual(splits,[false,false,false,false]);assert.equal(revealed.length,4);
+ assert.deepEqual(created.map(state=>state.type),['t3-thread','t3-side-chat','t3-subagent','t3-thread']);
+ assert.equal(created[3].state.project.key,'project');
+});
+test('opening an existing exact thread selects its tab without creating another sidebar leaf',async()=>{
+ const f=await fixture(),leaf={view:f.view},revealed:any[]=[];
+ f.app.workspace.getLeavesOfType=()=>[leaf];f.app.workspace.getRightLeaf=()=>assert.fail('must reuse existing tab');f.app.workspace.revealLeaf=async(value:any)=>{revealed.push(value);};
+ const owner=new f.exports.SidebarThreads(f.app,{},{});await owner.open(f.view.target);assert.deepEqual(revealed,[leaf]);
 });

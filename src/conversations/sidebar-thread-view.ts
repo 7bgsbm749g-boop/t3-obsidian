@@ -37,7 +37,7 @@ export class SidebarThreads {
   async open(target:SidebarTarget){
     const valid=sidebarTarget(target);if(!valid)throw Error('Choose an available T3 thread.');
     const existing=this.app.workspace.getLeavesOfType(TYPES[target.kind]).find(leaf=>{const view=leaf.view;return view instanceof SidebarThreadView&&view.target?.environmentId===target.environmentId&&view.target.threadId===target.threadId;});
-    const leaf=existing??this.app.workspace.getRightLeaf(true);if(!leaf)throw Error('The right sidebar is unavailable.');
+    const leaf=existing??this.app.workspace.getRightLeaf(false);if(!leaf)throw Error('The right sidebar is unavailable.');
     if(!existing)await leaf.setViewState({type:TYPES[target.kind],state:{target},active:true});
     await this.app.workspace.revealLeaf(leaf);
   }
@@ -50,7 +50,7 @@ export class SidebarThreads {
     },'Open a thread without note streaming').open();
   }
   private async openDraft(project:ProjectChoice){
-    const leaf=this.app.workspace.getRightLeaf(true);if(!leaf)return;
+    const leaf=this.app.workspace.getRightLeaf(false);if(!leaf)return;
     await leaf.setViewState({type:TYPES.thread,state:{project},active:true});await this.app.workspace.revealLeaf(leaf);
   }
   async startSideChat(source:SidebarTarget){
