@@ -46,7 +46,9 @@ export function chatTimeline(state:InlineThreadState,source?:{environmentId:stri
     const phase=segment.active?'running':turn?.state==='error'||turn?.state==='failed'?'error':'complete';
     if(last&&phase==='complete'&&(turn?.state==='completed'||!turn)){
       const selected=inlineTurnMessages(state,segment.turnId).at(-1);
-      const final=selected&&segment.progress.find(message=>message.id===selected.id);
+      // Provider child transcripts can contain completed prose without a run.
+      // Its display group has no canonical turn to select an answer from.
+      const final=selected?segment.progress.find(message=>message.id===selected.id):!turn?segment.progress.at(-1):undefined;
       if(final&&!final.streaming){segment.final=final;segment.progress=segment.progress.filter(message=>message.id!==final.id);}
     }
     const start=segment.input?.createdAt??turn?.startedAt??turn?.requestedAt,end=next?.input?.createdAt??(!segment.active?turn?.completedAt:undefined);

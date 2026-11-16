@@ -12,6 +12,13 @@ test('canonical input, work history and final answer have separate chronological
  state.turns!.run.state='running';state.session={status:'running',activeTurnId:'run'};state.messages.at(-1)!.streaming=true;
  const [live]=chatTimeline(state);assert.equal(live.active,true);assert.equal(live.final,undefined);assert.match(live.work,/Thinking/);assert.equal(live.progress.at(-1)?.id,'answer');
 });
+test('a provider subagent transcript without run metadata keeps its answer visible',()=>{
+ const state:InlineThreadState={messages:[{id:'child-answer',role:'assistant',text:'The theme check is complete.',turnId:null,streaming:false,createdAt:end}],activities:[],session:{status:'ready',activeTurnId:null}};
+ const [segment]=chatTimeline(state);
+ assert.equal(segment.final?.text,'The theme check is complete.');assert.equal(segment.progress.length,0);assert.equal(segment.active,false);
+ state.messages[0].streaming=true;
+ const [live]=chatTimeline(state);assert.equal(live.final,undefined);assert.equal(live.active,true);assert.equal(live.progress[0].text,'The theme check is complete.');
+});
 test('steering creates a continuation segment and keeps live work beside the latest input',()=>{
  const state=thread();state.turns!.run.state='running';state.session={status:'running',activeTurnId:'run'};state.messages.push({id:'steer',role:'user',text:'Change direction',turnId:'run',streaming:false,createdAt:end});
  const [before,after]=chatTimeline(state);assert.equal(before.active,false);assert.equal(after.active,true);assert.equal(after.steer,true);assert.equal(before.work,'');assert.match(after.work,/Thinking/);
