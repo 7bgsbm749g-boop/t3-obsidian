@@ -18,7 +18,9 @@ async function folderMenuHarness(initial?:any){
   let fileMenu:(...args:any[])=>void=()=>{},failSave=false,networkRequests=0;
   class Element {
     text='';cls='';tag='';settings:any[]=[];children:Element[]=[];disabled=false;onclick?:()=>any;oninput?:()=>any;value='';
-    addClass(){}setAttribute(){}
+    classList={add(){},remove(){},contains(){return false;}};attrs:Record<string,string>={};
+    focus(){}addClass(){}setAttribute(key:string,value:string){this.attrs[key]=value;}getAttribute(key:string){return this.attrs[key];}
+    get textContent():string{return this.text+this.children.map(child=>child.textContent).join('');}
     createDiv(options?:any){return this.createEl('div',options);}
     querySelector(tag:string):Element|undefined{return this.children.find(child=>child.tag===tag)??this.children.map(child=>child.querySelector(tag)).find(Boolean);}
     empty(){this.settings=[];this.children=[];}
@@ -26,7 +28,7 @@ async function folderMenuHarness(initial?:any){
     events:Record<string,Function>={};
     addEventListener(name:string,callback:Function){this.events[name]=callback;}
     click(){if(!this.disabled)return this.onclick?.()??this.events.click?.();}
-    createEl(_tag:string,options?:{text?:string;cls?:string}){const child=new Element();child.tag=_tag;child.text=options?.text??'';child.cls=options?.cls??'';this.children.push(child);return child;}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}
+    createEl(_tag:string,options?:{text?:string;cls?:string;attr?:Record<string,string>}){const child=new Element();child.attrs={...options?.attr};child.tag=_tag;child.text=options?.text??'';child.cls=options?.cls??'';this.children.push(child);return child;}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}
   }
   class Control {
     value:any;disabled=false;text='';handler:(value?:any)=>any=()=>{};
@@ -195,25 +197,25 @@ for(const mobile of [false,true])test(`note menu in a linked folder offers new a
     const item=menu.items.find(item=>item.title==='Send to agent');assert.ok(item);
     await item.callback({ctrlKey:true});
     const choices=h.modals.at(-1);assert.ok(choices);
-    assert.equal(choices.constructor.name,'SendDestinationModal');
-    assert.equal(choices.titleEl.text,'T3 Code');
-    assert.deepEqual(choices.contentEl.settings.flatMap((setting:any)=>setting.controls.map((control:any)=>control.text)),['New thread','Existing thread…']);
-    await h.button(choices,'New thread').click();
+    assert.equal(choices.constructor.name,'SendComposer');
+    assert.equal(choices.titleEl.text,'Send composer');
+    assert.equal(choices.target,'new');assert.equal(choices.field.value,'');assert.equal(sent.length,0);
+    await choices.choose();
     assert.equal(sent.length,1);assert.equal(sent[0].file,file);assert.equal(sent[0].project.id,'nested');assert.equal(sent[0].options.threadId,undefined);
     h.plugin.settings.noteThreads.push({notePath:'Notes/Inner/note.md',threadId:'previous-parent-thread',projectId:h.project.id,workspaceRoot:h.project.workspaceRoot,connectionId:'c',selectedAt:'2026-09-28T00:00:00Z'});
     h.setThreads([{id:'thread',projectId:'nested',title:'Existing',updatedAt:'2026-09-19',session:{status:'running',activeTurnId:'turn'},latestTurn:{state:'running'}},
       {id:'foreign',projectId:h.project.id,title:'Remembered project',updatedAt:'2026-09-20'},
       {id:'archived',projectId:'nested',title:'Archived',archivedAt:'2026-09-19'}]);
-    await h.plugin.openNoteSend(file,true);await h.button(h.modals.at(-1),'Existing thread…').click();
+    await h.plugin.openNoteSend(file,true);const composer=h.modals.at(-1);await composer.pickExisting();
     const picker=h.modals.at(-1);assert.equal(picker.getItems().length,1);
     assert.equal(picker.getItems()[0].id,'foreign');
     assert.match(picker.getItemText(picker.getItems()[0]),/Remembered project · Idle/);
     await picker.onChooseItem(picker.getItems()[0]);await idle();
-    assert.equal(sent.length,2);assert.equal(sent[1].options.threadId,'foreign');assert.equal(sent[1].project.id,h.project.id);
+    assert.equal(sent.length,1,'Choosing an existing thread must not send');assert.equal(composer.destination.threadId,'foreign');
     h.plugin.settings.folderLinks[1].projectId=h.project.id;
-    await picker.onChooseItem(picker.getItems()[0]);await idle();
-    assert.equal(sent.length,3,'Changing a folder link does not change the displayed project choice');
-    assert.equal(sent[2].project.id,h.project.id);
+    await composer.choose();
+    assert.equal(sent.length,2,'The explicit send keeps the displayed project choice after folder links change');
+    assert.equal(sent[1].options.threadId,'foreign');assert.equal(sent[1].project.id,h.project.id);
   }finally{h.plugin.onunload();}
 });
 
@@ -612,7 +614,7 @@ test('first-send selection waits for confirmation and follows the note identity 
   h.plugin.dispatch=async(request:any)=>{sent.push(request);h.plugin.rememberStarted(request,'confirmed-thread');await h.plugin.save();return 'confirmed-thread';};
   await h.plugin.openNoteSend(file);assert.equal(h.modals.length,1);assert.equal(sent.length,0);assert.equal(h.plugin.hasConfirmedNoteSend(file.path),false);
   h.modals[0].close();await h.plugin.openNoteSend(file);assert.equal(h.modals.length,2);assert.equal(sent.length,0);
-  await h.modals[1].choose('new');assert.equal(sent.length,1);assert.equal(h.plugin.hasConfirmedNoteSend(file.path),true);
+  await h.modals[1].choose();assert.equal(sent.length,1);assert.equal(h.plugin.hasConfirmedNoteSend(file.path),true);
   moveSmartNotes(h.plugin.smartData(),file.path,'Notes/Renamed.md');file.path='Notes/Renamed.md';document+='\nFollow-up.';
   assert.equal(h.plugin.hasConfirmedNoteSend('Notes/Fresh.md'),false);assert.equal(h.plugin.hasConfirmedNoteSend('Notes/Copy.md'),false);
   await h.plugin.openNoteSend(file);assert.equal(h.modals.length,2);assert.equal(sent.length,2);assert.equal(sent[1].threadId,'confirmed-thread');
@@ -683,7 +685,7 @@ for(const confirmed of [false,true])test(`import selects its source but only con
   if(confirmed)assert.equal(h.modals.length,modalCount,'confirmed continuation must not open the selector');
   else{
    assert.equal(h.modals.length,modalCount+1,'import alone must leave the first-send selector enabled');assert.equal(sent.length,before);
-   const chooser=h.modals.at(-1);await chooser.ready;await chooser.choose('default');
+   const chooser=h.modals.at(-1);chooser.select('default');await chooser.ready;await chooser.choose();
   }
   assert.equal(sent.length,before+1);
   assert.equal(sent.at(-1).threadId,threadId);assert.equal(sent.at(-1).project.id,h.project.id);
@@ -743,7 +745,7 @@ test('explicit selections always send in full while automatic note context keeps
    const start=document.indexOf(text),end=start+text.length,anchor={text,start,end,before:document.slice(Math.max(0,start-80),start),after:document.slice(end,end+80)};
    await h.plugin.openManualAction(file,question,text,{editor,view,anchor,canonicalAnchor:anchor,snapshot:document},false);
   };
-  await select(selected);assert.equal(sent.length,0);await h.modals.at(-1).choose('new');assert.equal(sent.length,1);
+  await select(selected);assert.equal(sent.length,0);await h.modals.at(-1).choose();assert.equal(sent.length,1);
   const modals=h.modals.length;
   await select(selected);assert.equal(sent.length,2);assert.equal(h.modals.length,modals,'Repeated selection must not be treated as an empty send');
   await select(selected,'Explain the final selected sentence.');assert.equal(sent.length,3);assert.equal(h.modals.length,modals);
