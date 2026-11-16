@@ -44,78 +44,14 @@ class TaggedPublicationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Align'):
                 release.version()
 
-    def test_merge_validation_requires_newer_version_but_development_validation_does_not(self):
+    def test_explicit_base_validation_requires_newer_but_development_validation_does_not(self):
         for previous in ['0.0.999', '0.0.1000']:
             with self.subTest(previous=previous), patch.object(release, 'base_version', return_value=previous):
-                with self.assertRaisesRegex(ValueError, 'Merge preparation'):
+                with self.assertRaisesRegex(ValueError, 'Explicit base validation'):
                     release.version('origin/main')
         with patch.object(release, 'base_version', return_value='0.0.998'):
             self.assertEqual(release.version('origin/main'), '0.0.999')
         self.assertEqual(release.version(), '0.0.999')
-
-    def inventory(self, *, base='0.0.999', claims=None, tags=None):
-        return {'base': base, 'claims': claims or {}, 'tags': tags or [],
-                'target': {'state': 'open', 'draft': False, 'head': {'sha': 'a' * 40}, 'base': {'sha': 'b' * 40, 'ref': 'main'}}}
-
-    def test_merge_allocation_skips_open_prs_tags_and_local_compatibility_history(self):
-        history = {'0.0.999': '1.13.0', '0.0.1004': '1.13.0'}
-        self.root.joinpath('versions.json').write_text(json.dumps(history))
-        state = self.inventory(claims={23: '0.0.1008', 24: '0.0.1002'}, tags=['0.0.1005'])
-        with patch.object(release, 'merge_inventory', return_value=state), patch.object(release, 'unchanged_merge_source') as guard:
-            self.assertEqual(release.merge_version('owner/repo', 22, 'origin/main'), '0.0.1009')
-        guard.assert_called_once()
-        self.assertEqual(release.version(), '0.0.1009')
-        self.assertEqual(json.loads(self.root.joinpath('versions.json').read_text()), {**history, '0.0.1009': '1.13.0'})
-
-    def test_merge_allocation_reuses_its_unclaimed_bump_and_changes_no_other_metadata(self):
-        state = self.inventory(base='0.0.998', claims={23: '0.0.1000'})
-        before = {name: json.loads(self.root.joinpath(name).read_text()) for name in release.VERSION_FILES}
-        with patch.object(release, 'merge_inventory', return_value=state), patch.object(release, 'unchanged_merge_source'):
-            self.assertEqual(release.merge_version('owner/repo', 22, 'origin/main'), '0.0.999')
-            self.assertEqual(release.merge_version('owner/repo', 22, 'origin/main', validate=True), '0.0.999')
-        self.assertEqual(before, {name: json.loads(self.root.joinpath(name).read_text()) for name in release.VERSION_FILES})
-
-    def test_final_merge_check_rejects_a_late_claim_tag_or_target_change_without_writing(self):
-        for state in [self.inventory(claims={23: '0.0.999'}), self.inventory(base='0.0.998', tags=['0.0.999']),
-                      self.inventory(base='0.0.1000')]:
-            before = {name: self.root.joinpath(name).read_bytes() for name in release.VERSION_FILES}
-            with patch.object(release, 'merge_inventory', return_value=state):
-                with self.assertRaisesRegex(ValueError, 'stale, published or used'):
-                    release.merge_version('owner/repo', 22, 'origin/main', validate=True)
-            self.assertEqual(before, {name: self.root.joinpath(name).read_bytes() for name in release.VERSION_FILES})
-
-    def test_moving_source_during_inventory_leaves_metadata_untouched(self):
-        before = {name: self.root.joinpath(name).read_bytes() for name in release.VERSION_FILES}
-        state = self.inventory()
-        for field in ['head', 'base']:
-            latest = copy.deepcopy(state['target']); latest[field]['sha'] = 'c' * 40
-            with patch.object(release, 'merge_inventory', return_value=state), patch.object(release, 'api', return_value=latest):
-                with self.assertRaisesRegex(ValueError, 'moved during'):
-                    release.merge_version('owner/repo', 22, 'origin/main')
-            self.assertEqual(before, {name: self.root.joinpath(name).read_bytes() for name in release.VERSION_FILES})
-
-    def test_agent_reallocates_a_late_collision_without_manual_version_selection(self):
-        state = self.inventory(claims={23: '0.0.1008'})
-        with patch.object(release, 'merge_inventory', return_value=state), patch.object(release, 'unchanged_merge_source'):
-            self.assertEqual(release.merge_version('owner/repo', 22, 'origin/main'), '0.0.1009')
-            state['claims'][23] = '0.0.1009'
-            with self.assertRaisesRegex(ValueError, 'used by another PR'):
-                release.merge_version('owner/repo', 22, 'origin/main', validate=True)
-            self.assertEqual(release.merge_version('owner/repo', 22, 'origin/main'), '0.0.1010')
-            self.assertEqual(release.merge_version('owner/repo', 22, 'origin/main', validate=True), '0.0.1010')
-
-    def test_inventory_failure_cannot_partially_allocate_a_version(self):
-        before = {name: self.root.joinpath(name).read_bytes() for name in release.VERSION_FILES}
-        with patch.object(release, 'merge_inventory', side_effect=RuntimeError('Cannot read another PR')):
-            with self.assertRaisesRegex(RuntimeError, 'another PR'):
-                release.merge_version('owner/repo', 22, 'origin/main')
-        self.assertEqual(before, {name: self.root.joinpath(name).read_bytes() for name in release.VERSION_FILES})
-
-    def test_final_check_reads_target_ref_even_when_pr_base_metadata_is_stale(self):
-        state = self.inventory(base='0.0.998')
-        with patch.object(release, 'api', return_value=state['target']), patch.object(release, 'target_head', return_value='f' * 40):
-            with self.assertRaisesRegex(ValueError, 'moved during'):
-                release.unchanged_merge_source('owner/repo', 22, state)
 
     def test_inventory_paginates_and_does_not_hide_read_failures(self):
         with patch.object(release, 'api', side_effect=[[{}] * 100, [{'number': 101}]]) as api:
@@ -125,55 +61,17 @@ class TaggedPublicationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'Forbidden'):
                 release.pages('repos/owner/repo/tags')
 
-    def test_remote_manifest_uses_immutable_fork_identity_and_rejects_invalid_inputs(self):
+    def test_remote_json_uses_immutable_fork_identity_and_rejects_invalid_inputs(self):
         value = {'type': 'file', 'encoding': 'base64', 'size': 24,
                  'content': base64.b64encode(b'{"version":"0.0.1002"}').decode()}
         with patch.object(release, 'api', return_value=value) as api:
-            self.assertEqual(release.remote_version('contributor/fork', 'c' * 40), '0.0.1002')
+            self.assertEqual(release.remote_json('contributor/fork', 'c' * 40, 'manifest.json')['version'], '0.0.1002')
             self.assertEqual(api.call_args.args[0], 'repos/contributor/fork/contents/manifest.json?ref=' + 'c' * 40)
             with self.assertRaisesRegex(ValueError, 'source identity'):
-                release.remote_version('owner/repo', 'moving-branch')
+                release.remote_json('owner/repo', 'moving-branch', 'manifest.json')
         for bad in [{**value, 'size': 1_000_001}, {**value, 'type': 'symlink'}, {**value, 'encoding': 'none'}]:
             with patch.object(release, 'api', return_value=bad), self.assertRaisesRegex(ValueError, 'exact source manifest'):
-                release.remote_version('owner/repo', 'c' * 40)
-
-    def test_real_checkout_preparation_and_recheck_read_other_prs_without_remote_mutations(self):
-        def git(*args):
-            return subprocess.check_output(['git', *args], cwd=self.root, text=True).strip()
-        git('init', '--quiet'); git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.invalid')
-        git('add', '.'); git('commit', '--quiet', '-m', 'Synthetic base')
-        base = git('rev-parse', 'HEAD')
-        target = {'number': 22, 'state': 'open', 'draft': False, 'head': {'sha': base},
-                  'base': {'sha': base, 'ref': 'main', 'repo': {'full_name': 'owner/repo'}}}
-        other = {'number': 23, 'head': {'sha': 'c' * 40, 'repo': {'full_name': 'contributor/fork'}}}
-        requests = []
-        def api(path, **kwargs):
-            requests.append((path, kwargs)); self.assertNotIn('payload', kwargs)
-            if path.endswith('/pulls/22'):return target
-            if path.endswith('/git/ref/heads/main'):return {'object': {'sha': base}}
-            if '/pulls?' in path:return [target, other]
-            if '/tags?' in path:return [{'name': '0.0.1005'}, {'name': '0.0.377-alpha'}]
-            if '/contents/manifest.json?' in path:
-                return {'type': 'file', 'encoding': 'base64', 'size': 24,
-                        'content': base64.b64encode(b'{"version":"0.0.1003"}').decode()}
-            self.fail(path)
-        with patch.object(release, 'api', side_effect=api):
-            self.assertEqual(release.merge_version('owner/repo', 22, base), '0.0.1006')
-            with self.assertRaisesRegex(ValueError, 'local changes'):
-                release.merge_version('owner/repo', 22, base, validate=True)
-            git('add', '.'); git('commit', '--quiet', '-m', 'Allocate merge version')
-            target['head']['sha'] = git('rev-parse', 'HEAD')
-            self.assertEqual(release.merge_version('owner/repo', 22, base, validate=True), '0.0.1006')
-            target['draft'] = True
-            with self.assertRaisesRegex(ValueError, 'ready PR'):
-                release.merge_version('owner/repo', 22, base)
-            target['draft'] = False; target['head']['sha'] = 'e' * 40
-            with self.assertRaisesRegex(ValueError, 'exact open'):
-                release.merge_version('owner/repo', 22, base)
-            target['head']['sha'] = git('rev-parse', 'HEAD'); target['base']['sha'] = 'f' * 40
-            with self.assertRaisesRegex(ValueError, 'target moved'):
-                release.merge_version('owner/repo', 22, base)
-        self.assertTrue(any('contributor/fork/contents/manifest.json?ref=' + 'c' * 40 in path for path, _ in requests))
+                release.remote_json('owner/repo', 'c' * 40, 'manifest.json')
 
     def test_development_workflow_keeps_version_check_without_early_bump_requirement(self):
         workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/release-provenance.yml').read_text()
@@ -243,21 +141,21 @@ class TaggedPublicationTests(unittest.TestCase):
         for event, ref, checkout in [('push', 'refs/heads/main', 'a' * 40),
                                      ('workflow_dispatch', 'refs/heads/main', 'a' * 40),
                                      ('schedule', 'refs/heads/feature', 'a' * 40),
-                                     ('schedule', 'refs/tags/0.0.999', 'a' * 40),
-                                     ('schedule', 'refs/heads/main', 'b' * 40)]:
+                                     ('schedule', 'refs/tags/0.0.999', 'a' * 40)]:
             with self.subTest(event=event, ref=ref, checkout=checkout), patch.dict(os.environ, {
                 'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_SHA': 'a' * 40,
                 'GITHUB_REF': ref, 'GITHUB_EVENT_NAME': event,
-            }), patch.object(sys, 'argv', ['github_release.py', 'prepare']), patch.object(release, 'command', return_value=checkout), patch.object(release, 'prepare') as prepare:
+            }), patch.object(sys, 'argv', ['github_release.py', 'prepare']), patch.object(release, 'command', return_value=checkout), patch.object(release, 'prepare') as prepare, patch('merge_versions.versioned_snapshot') as snapshot:
                 with self.assertRaises(ValueError):
                     release.main()
                 prepare.assert_not_called()
         with patch.dict(os.environ, {
             'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_SHA': 'a' * 40,
             'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'schedule',
-        }), patch.object(sys, 'argv', ['github_release.py', 'prepare']), patch.object(release, 'command', return_value='a' * 40), patch.object(release, 'prepare') as prepare:
+        }), patch.object(sys, 'argv', ['github_release.py', 'prepare']), patch.object(release, 'command', return_value='a' * 40), patch.object(release, 'prepare') as prepare, patch('merge_versions.versioned_snapshot') as snapshot:
             release.main()
             prepare.assert_called_once_with('owner/repo', '0.0.999', 'a' * 40)
+            snapshot.assert_called_once_with(self.root, 'a' * 40)
 
     def test_publish_rejects_main_and_mismatched_tags_without_api_calls(self):
         for ref in ['refs/heads/main', 'refs/tags/0.0.998']:
@@ -291,6 +189,13 @@ class TaggedPublicationTests(unittest.TestCase):
             run.return_value = subprocess.CompletedProcess([], 1, '', 'gh: Forbidden (HTTP 403)')
             with self.assertRaisesRegex(RuntimeError, 'Forbidden'):
                 release.api('unused', missing=True)
+
+    def test_atomic_ref_update_uses_patch_and_never_forces(self):
+        with patch.object(release.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{}', '')) as run:
+            release.api('repos/owner/repo/git/refs/heads/main', method='PATCH', payload={'sha': 'a' * 40, 'force': False})
+            args = run.call_args.args[0]
+            self.assertEqual(args[args.index('--method') + 1], 'PATCH')
+            self.assertEqual(json.loads(run.call_args.kwargs['input']), {'sha': 'a' * 40, 'force': False})
 
     def test_failed_upload_keeps_the_release_unpublished(self):
         draft = self.draft()
@@ -354,6 +259,41 @@ class TaggedPublicationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'no longer matches'):
                 release.publish('owner/repo', '0.0.999', 'a' * 40)
             api.assert_not_called()
+
+    def test_nightly_uses_completed_snapshot_instead_of_old_schedule_event_sha(self):
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_SHA': 'a' * 40,
+                                    'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'schedule'}), \
+                patch.object(sys, 'argv', ['github_release.py', 'prepare']), \
+                patch.object(release, 'command', return_value='b' * 40), \
+                patch('merge_versions.versioned_snapshot') as snapshot, patch.object(release, 'prepare') as prepare:
+            release.main()
+            snapshot.assert_called_once_with(self.root, 'b' * 40)
+            prepare.assert_called_once_with('owner/repo', '0.0.999', 'b' * 40)
+
+    def test_nightly_cannot_tag_snapshot_without_completed_assignment(self):
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_SHA': 'a' * 40,
+                                    'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'schedule'}), \
+                patch.object(sys, 'argv', ['github_release.py', 'prepare']), \
+                patch.object(release, 'command', return_value='a' * 40), \
+                patch('merge_versions.versioned_snapshot', side_effect=ValueError('Assignment pending')), \
+                patch.object(release, 'prepare') as prepare:
+            with self.assertRaisesRegex(ValueError, 'Assignment pending'):
+                release.main()
+            prepare.assert_not_called()
+
+    def test_nightly_rejects_version_snapshot_outside_main_history(self):
+        def command(*args):
+            if args[:2] == ('git', 'merge-base'):
+                raise subprocess.CalledProcessError(1, args)
+            return 'a' * 40
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_SHA': 'a' * 40,
+                                    'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'schedule'}), \
+                patch.object(sys, 'argv', ['github_release.py', 'prepare']), \
+                patch.object(release, 'command', side_effect=command), \
+                patch('merge_versions.versioned_snapshot'), patch.object(release, 'prepare') as prepare:
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.main()
+            prepare.assert_not_called()
         existing = self.draft(draft=False)
         existing['assets'].pop()
         with patch.object(release, 'tag_commit', return_value='a' * 40), patch.object(release, 'api', return_value=existing), patch.object(release, 'command') as command:

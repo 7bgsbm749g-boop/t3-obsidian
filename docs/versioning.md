@@ -16,49 +16,42 @@ PRs keep their numeric source version during development, including product,
 documentation and workflow changes. Test builds add a feature label to that base
 without reserving a public number. Keep test labels out of tracked metadata.
 
-Immediately before an explicitly authorized merge, the merging agent fetches
-and integrates the target, then runs this in the clean PR checkout:
+After any user or agent merges a PR, a push to `main` starts
+[Assign merged PR versions](../.github/workflows/pr-versions.yml). This runs on
+standard GitHub Actions with the repository's `GITHUB_TOKEN`; no Pro plan, PAT,
+local daemon or agent is required. It assigns versions after merge rather than
+changing development branches, so new PRs do not fight over version-only edits.
 
-```sh
-python3 scripts/github_release.py prepare-merge --repo OWNER/REPO --pr NUMBER --base origin/main
-```
+The workflow reconciles merged PRs after the cutover time in
+[`pr-versions.json`](../pr-versions.json). Existing historical versions remain
+unchanged. It reads the current main metadata, other open PR manifests at their
+exact heads (including forks), numeric release tags and recorded history. It
+selects the next unused number and atomically commits all four version files and
+a PR receipt. The receipt records the version and original merge commit.
+Each PR gets one receipt; reruns do not consume another number.
 
-The command reads the target version, every other open PR's manifest at its exact
-head (including forks), existing numeric release tags and local compatibility
-history. It selects an unused number above the known inventory and aligns
-`manifest.json`, `package.json`, both package-lock version fields and
-`versions.json`. A still-valid allocation for this PR is retained across retries.
-Reads that fail stop allocation without changing metadata. It never assigns a
-number merely because a PR was opened or marked ready.
+Assignments run one at a time in a shared concurrency group with `queue: max`.
+Each run reconciles all pending PRs in merge order, so delayed or missed events
+are recovered. A non-forced ref update protects merges that arrive during a
+write; a confirmed conflict rereads main and retries. An uncertain response or
+permission error stops the run. The next reconciliation checks the committed
+receipts before doing anything further. It never force-pushes or rewrites tags.
 
-The agent commits and pushes the metadata, finishes checks and reviews, then
-fetches and rechecks immediately before merging:
-
-```sh
-python3 scripts/github_release.py validate-merge --repo OWNER/REPO --pr NUMBER --base origin/main
-```
-
-If a version is now claimed, published or older than the target, the agent
-updates and prepares again. The final check also rejects a dirty checkout,
-changed PR head, draft PR or target that has not been integrated. Merge only the
-checked head with an expected-head guard. Serialize authorized merges; inventory
-reads are not remote reservations. The agent handles retries and version-only
-conflicts, without asking the user to choose numbers. Neither command merges,
-pushes, creates tags or publishes anything.
-
-The `Release / version` check tests the tooling and verifies aligned metadata
-for development PRs without requiring an early bump. Merge-time checks are the
-merging agent's responsibility, as specified in [AGENTS.md](../AGENTS.md).
+Development CI verifies aligned metadata without an early bump. Merging agents
+use normal reviewed-head checks and do not run version allocation themselves.
+Do not edit the generated ledger or bump metadata during development.
 
 At midnight UTC each night, GitHub schedules a release of the `main` commit
-selected by that scheduled event. Only that snapshot is tagged, built, attested
+selected after reconciling pending PR assignments. Only that completed version
+snapshot is tagged, built, attested
 and published; unmerged PRs are not included. Intermediate PR versions need not
 be published. An unchanged, already published snapshot is skipped. GitHub may
 delay the scheduled start; midnight is the requested start, not a guaranteed
 publication time.
 
-The schedule does not choose or bump versions. It uses the number already
-committed on `main` and refuses to reuse a tag for another commit or release a
+Nightly preparation shares the assignment queue and first reconciles pending
+merges. It then checks out the exact completed metadata commit returned by that
+step, even if another merge arrives meanwhile. It refuses to reuse a tag for another commit or release a
 version older than the latest release. An interrupted run can retry the same
 tag without replacing it. Explicit numeric tag pushes can still start a manual
 release; workflow dispatch at that tag can retry its build and publication.

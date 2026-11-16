@@ -71,8 +71,8 @@ notes, threads, apps, and helpers after retaining evidence.
 Documentation and skill-instruction changes use the same commit-and-PR flow,
 without local installation. Review the diff and relevant links. Keep numeric
 version metadata unchanged during development, PR creation and test builds.
-The merging agent assigns each PR its own unused version immediately before an
-explicitly authorized merge, using the merge procedure below. Never put
+GitHub assigns each merged PR its own unused version automatically after merge,
+including merges done by the user, using the workflow described below. Never put
 feature-labelled test versions into tracked metadata or public releases.
 
 The MCP editing skill and server are bundled product assets. Changes to
@@ -90,8 +90,8 @@ Do not merge the PR unless the user requests it.
 
 `push`, `push to GitHub`, and `push to main` authorize source uploads only.
 Feature-branch and main pushes do not immediately publish or create tags.
-At merge time each PR receives a newer numeric `0.0.BUILD`, aligned across all
-version files and checked against other open PRs and existing release tags.
+After merge, GitHub assigns each PR a newer numeric `0.0.BUILD`, aligned across
+all version files and checked against other open PRs and existing release tags.
 The GitHub nightly schedule tags and releases its selected `main` snapshot at
 midnight UTC, skipping an unchanged, already published commit. It never releases
 unmerged PRs or changes a version's existing tag. Explicit early releases remain
@@ -109,39 +109,32 @@ work. See [Review and release checks](docs/review-and-release.md).
 The project remains Alpha. Published versions use numeric `0.0.BUILD`; Alpha is
 the development stage, not a release-title label. Titles use
 `t3-obsidian VERSION`. Keep all version files aligned and preserve published
-history. Allocate versions at merge time, not during development. Feature-labelled
+history. GitHub allocates versions after merge, not during development. Feature-labelled
 test builds use the current numeric source base without reserving a number.
 A merge-time bump does not publish. Only explicit user direction can end Alpha.
 
-### Agent-managed merge versions
+### Automatic post-merge versions
 
-An instruction to create or update a PR is not merge authorization. After the
-user requests a merge, the merging agent handles version allocation and any
-version-only conflicts without asking the user to choose a number. Perform
-authorized merges one at a time, never with parallel merging agents.
+Do not bump numeric versions on PR branches. Both user and agent merges are
+handled by `.github/workflows/pr-versions.yml` after a push to `main`. It uses the
+repository's `GITHUB_TOKEN`, with no paid plan, PAT, local worker or agent required.
+The workflow reads current metadata, open PR manifests and release tags, then
+commits a distinct version and receipt for every unprocessed merged PR.
 
-1. Fetch the target and integrate it into the PR branch, preserving source and
-   non-version metadata changes. Resolve legacy version-only conflicts here;
-   keep compatibility history and meaningful package/dependency changes.
-2. On the clean, committed head of the ready PR, run
-   `python3 scripts/github_release.py prepare-merge --repo OWNER/REPO --pr NUMBER --base origin/main`.
-   This reads the latest target, immutable manifests from every other open PR
-   (including forks), release tags and local compatibility history. It assigns
-   the next unused number, or keeps this PR's still-valid existing allocation.
-   An inventory failure stops allocation; never guess or use a local-only bump.
-3. Commit the generated version metadata, validate affected changes, and push
-   the exact PR head. Finish required checks and reviews on that head.
-4. Fetch again immediately before merging. If the target or another version
-   claim changed, integrate it and repeat preparation, validation and push as
-   needed. Run
-   `python3 scripts/github_release.py validate-merge --repo OWNER/REPO --pr NUMBER --base origin/main`.
-   Merge only that checked head with an expected-head guard. Do not bypass
-   reviews or repository protection rules.
+`pr-versions.json` is generated history. Preserve its receipts and cutover time;
+do not edit it or version metadata on development branches. Each assignment is
+one atomic, non-forced update of all metadata and the receipt. Workflow runs and
+nightly preparation share one queued concurrency group. Confirmed concurrent
+updates are retried; uncertain writes stop and reconcile from receipts on rerun.
+The workflow reconciles missed events, so delayed runs do not lose merged PRs.
 
-These commands make no remote writes and do not grant merge permission. The
-agent owns serialization, fresh rechecks and any retry after concurrent changes;
-the user must not need to manage version numbers. See
-[Review and release checks](docs/review-and-release.md).
+Normal merge authorization, source review, checks and exact-head guards still
+apply. Do not merge merely to test this workflow. If a run fails after merge,
+inspect it and rerun the assignment workflow on `main`; never ask the user to
+pick a version or manually replay a bump. Nightly release preparation also
+reconciles assignments, then releases only a completed version snapshot.
+An assigned version is not an immediate release or personal-vault installation.
+See [Review and release checks](docs/review-and-release.md).
 
 Personal-vault delivery is separate from development validation, PRs, merges
 and GitHub releases. Deliver only when the user explicitly asks to try a build.

@@ -29,7 +29,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Test release tooling
-        run: python3 -m unittest scripts.test_github_release scripts.test_release_policy
+        run: python3 -m unittest scripts.test_github_release scripts.test_merge_versions scripts.test_release_policy
       - name: Verify aligned source metadata
         run: python3 scripts/github_release.py validate
 
@@ -38,17 +38,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
-      group: nightly-release-preparation
+      group: main-version-metadata
+      queue: max
       cancel-in-progress: false
     permissions:
       contents: write
       actions: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: main
+          fetch-depth: 0
           persist-credentials: false
       - name: Test release tooling
-        run: python3 -m unittest scripts.test_github_release scripts.test_release_policy
+        run: python3 -m unittest scripts.test_github_release scripts.test_merge_versions scripts.test_release_policy
+      - name: Reconcile merged PRs and select a completed version snapshot
+        id: versioning
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/merge_versions.py
+      - name: Check out the completed version snapshot
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.versioning.outputs.source }}
+          fetch-depth: 0
+          persist-credentials: false
       - name: Tag the nightly snapshot and start its release build
         env:
           GH_TOKEN: ${{ github.token }}

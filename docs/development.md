@@ -69,12 +69,10 @@ Do not cherry-pick into a shared integration checkout or install into a real
 vault as a completion step. See [Review and release checks](review-and-release.md).
 
 Every PR needs validation and aligned numeric metadata. Keep its source version
-unchanged during development and test builds. Immediately before an explicitly
-authorized merge, the merging agent uses `prepare-merge` to select an unused
-version after checking the target, other open PRs and release tags. The agent
-commits and validates the metadata, then fetches and runs `validate-merge` before
-merging the checked head. Follow the complete
-[merge procedure](review-and-release.md#agent-managed-version-allocation-at-merge-time).
+unchanged during development and test builds. GitHub Actions assigns an unused
+version and PR receipt automatically after merge, including merges performed by
+the user. Agents do not run a pre-merge bump. See
+[automatic version assignment](review-and-release.md#automatic-post-merge-version-assignment).
 Branch pushes do not immediately publish. GitHub schedules a release of its selected main
 snapshot each night at midnight UTC, skipping an unchanged published commit.
 An explicitly pushed numeric tag can still start an early release; dispatch
