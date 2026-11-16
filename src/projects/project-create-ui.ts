@@ -23,12 +23,13 @@ export interface ProjectLocation {
   close():void;
 }
 export interface ProjectCreateHost {
+  folderPath?:string;
   configure?(el:HTMLElement):void;
-  validateConfiguration?():void;
+  validateConfiguration?(folderPath?:string):void;
   machines():VaultMachine[];
   defaults?(machineId?:string):{machineId:string;parentPath:string};
   connect(machine:VaultMachine):Promise<ProjectLocation>;
-  link(project:Project):Promise<void>;
+  link(project:Project,folderPath?:string):Promise<void>;
   closed?():void;
 }
 export class ProjectCreateModal extends Modal {
@@ -38,7 +39,8 @@ export class ProjectCreateModal extends Modal {
   private query='';private folderName='';private customFolderName=false;private useNewFolder=true;private showHidden=false;
   private preview?:HTMLElement;
   private created?:{key:string;project:Project};
-  constructor(app:App,private name:string,private host:ProjectCreateHost){super(app);this.folderName=name;}
+  private linkFolder:boolean;private folderPath?:string;
+  constructor(app:App,private name:string,private host:ProjectCreateHost){super(app);this.folderName=name;this.folderPath=host.folderPath;this.linkFolder=!!host.folderPath;}
   onOpen(){
     const defaults=this.host.defaults?.();
     this.machineId=defaults?.machineId??this.host.machines()[0]?.id??'';this.folder=defaults?.parentPath??'~';
@@ -49,7 +51,7 @@ export class ProjectCreateModal extends Modal {
     if(this.ended)return;
     this.modalEl.addClass('send-to-t3-project-create');this.titleEl.setText('Create T3 project');this.contentEl.empty();
     const body=this.contentEl.createDiv({cls:'send-to-t3-project-body'});
-    body.createEl('p',{cls:'send-to-t3-project-intro',text:'Choose where the project files will live, then link this Obsidian folder.'});
+    body.createEl('p',{cls:'send-to-t3-project-intro',text:'Choose a project name and workspace. You can also link an Obsidian folder.'});
     const machines=this.host.machines();
     const paired=machines.find(machine=>machine.environmentId&&'environment:'+machine.environmentId===this.machineId);
     if(paired)this.machineId=paired.id;
@@ -64,6 +66,10 @@ export class ProjectCreateModal extends Modal {
     new Setting(fields).setName('Project name').addText(t=>t.setValue(this.name).setDisabled(this.working).onChange(value=>{
       this.name=value;if(!this.customFolderName)this.folderName=value;this.updatePreview();
     }));
+    new Setting(fields).setName('Link an Obsidian folder').setDesc('Linked folders and their notes use this project by default. Existing links are kept.')
+      .addToggle(t=>t.setValue(this.linkFolder).setDisabled(this.working).onChange(value=>{this.linkFolder=value;this.draw();}));
+    if(this.linkFolder)new Setting(fields).setName('Obsidian folder').setDesc('Path inside this vault. Use a parent path to link a higher folder.')
+      .addText(t=>t.setValue(this.folderPath??'').setPlaceholder('Projects/My project').setDisabled(this.working).onChange(value=>{this.folderPath=value.trim()||undefined;}));
     const workspace=body.createDiv({cls:'send-to-t3-project-workspace'});
     const modes=workspace.createDiv({cls:'send-to-t3-workspace-modes',attr:{role:'group','aria-label':'Workspace folder'}});
     for(const [isNew,label] of [[true,'New folder'],[false,'Existing folder']] as const){
@@ -89,7 +95,7 @@ export class ProjectCreateModal extends Modal {
     status.hidden=!this.status;
     new Setting(this.contentEl).setClass('send-to-t3-project-actions')
       .addButton(b=>b.setButtonText('Cancel').setDisabled(this.creating).onClick(()=>this.close()))
-      .addButton(b=>b.setButtonText(this.creating?'Creating…':'Create and link').setCta().setDisabled(this.working||!this.machineId).onClick(()=>this.create()));
+      .addButton(b=>b.setButtonText(this.creating?'Creating…':this.linkFolder?'Create and link':'Create project').setCta().setDisabled(this.working||!this.machineId).onClick(()=>this.create()));
     if(!machines.length)body.createEl('p',{text:'Sign in or pair a machine in connection settings first.'});
   }
   private updatePreview(){
@@ -135,7 +141,9 @@ export class ProjectCreateModal extends Modal {
   async create(){
     if(this.working||this.ended)return;this.creating=true;
     await this.work(async()=>{
-      this.host.validateConfiguration?.();
+      const folderPath=this.linkFolder?this.folderPath:undefined;
+      if(this.linkFolder&&!folderPath)throw Error('Choose an Obsidian folder or turn off folder linking.');
+      this.host.validateConfiguration?.(folderPath);
       if(!this.name.trim())throw Error('Enter a project name.');
       if(!this.folder.trim()||this.folder==='~')throw Error('Choose a workspace folder first.');
       const location=await this.connect();if(!location||this.ended)return;
@@ -148,7 +156,7 @@ export class ProjectCreateModal extends Modal {
       if(newFolder&&this.created?.key!==key&&list.entries.some(entry=>sameWorkspacePath(entry.fullPath,root)))throw Error('A folder with this name already exists. Choose Existing folder to use it, or enter another folder name.');
       const project=this.created?.key===key?this.created.project:await location.create(root,this.name.trim(),newFolder);if(this.ended)return;
       this.created={key,project};
-      await this.host.link(project);this.close();
+      await this.host.link(project,folderPath);this.close();
     });
   }
 }
