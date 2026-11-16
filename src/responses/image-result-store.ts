@@ -11,8 +11,8 @@ interface CachedImage extends ImageResultBytes {version:1;identity:string;hash:s
 const hash=(bytes:ArrayBuffer)=>Buffer.from(sha256(new Uint8Array(bytes))).toString('hex');
 export const IMAGE_CACHE_MAX_ENTRIES=64,IMAGE_CACHE_MAX_BYTES=100*1024*1024;
 export class ImageResultError extends Error {
-  constructor(readonly code:'unavailable'|'connection'|'verification'|'invalid-url'|'download'|'image'|'closed'){
-    super({unavailable:'This T3 image reference is invalid.',connection:'Cannot load the image. Check your T3 connection and sign-in, then retry.',verification:'T3 could not verify this image.', 'invalid-url':'T3 returned an invalid image URL.',download:'The image could not be downloaded.',image:'The image is invalid, unsupported, or larger than 10 MiB.',closed:'The image viewer closed.'}[code]);
+  constructor(readonly code:'unavailable'|'connection'|'verification'|'invalid-url'|'download'|'image'|'decode'|'closed'){
+    super({unavailable:'This T3 image reference is invalid.',connection:'Cannot load the image. Check your T3 connection and sign-in, then retry.',verification:'T3 could not verify this image.', 'invalid-url':'T3 returned an invalid image URL.',download:'The image could not be downloaded.',image:'The image is invalid, unsupported, or larger than 10 MiB.',decode:'The image could not be displayed. Retry to download it again.',closed:'The image viewer closed.'}[code]);
   }
 }
 
@@ -20,6 +20,7 @@ export class ImageResultError extends Error {
  * concurrent note panes share the same pending fill. */
 export class ImageResultStore {
   private pending=new Map<string,Promise<ImageResultBytes>>();
+  private rejected=new Set<string>();
   private active=0;private queue:Array<()=>void>=[];
   private writes=Promise.resolve();private stopped=false;
   constructor(private storage:ImageResultStorage,private access:(environmentId:string)=>Promise<ThreadAccess>,private download:(url:string)=>Promise<ImageResultBytes&{status:number}> ){}
@@ -35,7 +36,7 @@ export class ImageResultStore {
   }
   private async load(reference:ImageResultReference,key:string):Promise<ImageResultBytes>{
     const cached=await this.storage.read(key).catch(()=>undefined) as CachedImage|undefined;
-    if(cached?.version===1&&cached.identity===key&&this.valid(cached.bytes,cached.mimeType)&&cached.hash===hash(cached.bytes))return {bytes:cached.bytes,mimeType:cached.mimeType};
+    if(!this.rejected.has(key)&&cached?.version===1&&cached.identity===key&&this.valid(cached.bytes,cached.mimeType)&&cached.hash===hash(cached.bytes))return {bytes:cached.bytes,mimeType:cached.mimeType};
     if(this.active>=2)await new Promise<void>(resolve=>this.queue.push(resolve));
     else this.active++;
     if(this.stopped){this.release();throw new ImageResultError('closed');}
@@ -65,15 +66,29 @@ export class ImageResultStore {
     }
   }
   private release(){const next=this.queue.shift();if(next)next();else this.active--;}
+  /** A valid header cannot prove that a browser can decode all image bytes.
+   * Serialize eviction after pending writes; retry waits for this operation. */
+  invalidate(value:ImageResultReference):Promise<void>{
+    const reference=readImageResult(value);if(!reference||this.stopped)return Promise.resolve();
+    const key=imageResultKey(reference);this.rejected.add(key);
+    while(this.rejected.size>IMAGE_CACHE_MAX_ENTRIES)this.rejected.delete(this.rejected.values().next().value!);
+    const work=this.writes.catch(()=>{}).then(async()=>{
+      if(this.stopped)return;
+      await this.storage.write(key,null);
+      const raw=await this.storage.read('index');
+      if(Array.isArray(raw))await this.storage.write('index',(raw as unknown[]).filter(entry=>isRecord(entry)&&entry.key!==key));
+    });
+    this.writes=work;return work;
+  }
   private save(key:string,page:CachedImage){
     const work=this.writes.catch(()=>{}).then(async()=>{
       if(this.stopped)return;
       const raw=await this.storage.read('index'),entries=Array.isArray(raw)?raw.filter((entry):entry is {key:string;bytes:number}=>isRecord(entry)&&typeof entry.key==='string'&&/^[a-f0-9]{64}$/.test(entry.key)&&entry.key!==key&&Number.isSafeInteger(entry.bytes)&&Number(entry.bytes)>0&&Number(entry.bytes)<=MAX_IMAGE_BYTES).slice(-IMAGE_CACHE_MAX_ENTRIES):[];
       entries.push({key,bytes:page.bytes.byteLength});let total=entries.reduce((sum,entry)=>sum+entry.bytes,0);
       const retired:string[]=[];while(entries.length>IMAGE_CACHE_MAX_ENTRIES||total>IMAGE_CACHE_MAX_BYTES){const first=entries.shift()!;total-=first.bytes;retired.push(first.key);}
-      await this.storage.write(key,page);await this.storage.write('index',entries);for(const old of retired)await this.storage.write(old,null);
+      await this.storage.write(key,page);this.rejected.delete(key);await this.storage.write('index',entries);for(const old of retired)await this.storage.write(old,null);
     });
     this.writes=work;return work;
   }
-  dispose(){this.stopped=true;for(const resume of this.queue.splice(0))resume();}
+  dispose(){this.stopped=true;this.rejected.clear();for(const resume of this.queue.splice(0))resume();}
 }

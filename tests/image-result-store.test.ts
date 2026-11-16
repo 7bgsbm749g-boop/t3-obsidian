@@ -54,6 +54,20 @@ test('dispose prevents downloads and late cache writes',async()=>{
  const f=fixture(),store=f.create();store.dispose();await assert.rejects(store.get(reference),/invalid/);assert.equal(f.downloads,0);
 });
 
+test('browser decode rejection evicts the image and index so retry downloads fresh bytes',async()=>{
+ const f=fixture(),store=f.create();await store.get(reference);
+ assert.equal(f.downloads,1);await store.invalidate(reference);
+ assert.equal(f.values.get(imageResultKey(reference)),null);assert.deepEqual(f.values.get('index'),[]);
+ await store.get(reference);assert.equal(f.downloads,2);assert.equal(f.values.get('index').length,1);
+});
+
+test('retry bypasses rejected cached bytes even if persistent eviction fails',async()=>{
+ const values=new Map<string,unknown>();let failWrites=false,downloads=0;
+ const store=new ImageResultStore({read:async key=>values.get(key),write:async(key,value)=>{if(failWrites)throw Error('disk unavailable');values.set(key,value);}},async()=>({origin:'https://t3.example',api:async path=>path.endsWith('/turn-item')?{id:'tool',threadId:'thread',runId:'run',updatedAt:'revision',type:'dynamic_tool',status:'completed',output:[{type:'image',mimeType:'image/png'}]}:{relativeUrl:'/api/assets/image',expiresAt:Date.now()+60000}}),async()=>{downloads++;return {bytes:png,mimeType:'image/png',status:200};});
+ await store.get(reference);failWrites=true;await assert.rejects(store.invalidate(reference),/disk unavailable/);
+ await store.get(reference);assert.equal(downloads,2);store.dispose();
+});
+
 test('network fills are limited to two and unload retires queued and in-flight work',async()=>{
  const gates:Array<()=>void>=[],values=new Map<string,unknown>();let active=0,maximum=0,opens=0;
  const store=new ImageResultStore({read:async key=>values.get(key),write:async(key,value)=>{values.set(key,value);}},async()=>{

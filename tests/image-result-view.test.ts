@@ -13,17 +13,17 @@ class Element {
  addClass(){}empty(){this.children=[];}createEl(tag:string,options:any={}){const element=new Element(tag,this.ownerDocument);element.text=options.text??'';element.attrs=options.attr??{};this.children.push(element);return element;}
  addEventListener(event:string,callback:()=>void){this.events[event]=callback;}
 }
-async function fixture(get:(value:any)=>Promise<any>){
- const cleanups:Array<()=>void>=[],children:any[]=[],revoked:string[]=[],created:string[]=[],modals:any[]=[];
+async function fixture(get:(value:any)=>Promise<any>,invalidate:(value:any)=>Promise<void>=async()=>{}){
+ const cleanups:Array<()=>void>=[],children:any[]=[],revoked:string[]=[],created:string[]=[],modals:any[]=[],invalidated:any[]=[];
  let processor:any;
  class Child {callbacks:Array<()=>void>=[];register(callback:()=>void){this.callbacks.push(callback);}unload(){for(const callback of this.callbacks)callback();}}
  class Modal {contentEl=new Element();opened=false;closed=false;constructor(){modals.push(this);}setTitle(){}open(){this.opened=true;}close(){this.closed=true;}}
  const module={exports:{} as any};runInNewContext((await bundled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{MarkdownRenderChild:Child,Modal}:runtime(id),URL,Blob,TextEncoder,TextDecoder});
  const document={defaultView:{URL:{createObjectURL:()=>{const url='blob:image-'+created.length;created.push(url);return url;},revokeObjectURL:(url:string)=>revoked.push(url)}}};
  const root=new Element('div',document);let disposed=false;
- module.exports.installImageResults({}, {register:(callback:()=>void)=>cleanups.push(callback),registerMarkdownCodeBlockProcessor:(language:string,callback:any)=>{assert.equal(language,'t3-image');processor=callback;}},{get,dispose:()=>{disposed=true;}});
+ module.exports.installImageResults({}, {register:(callback:()=>void)=>cleanups.push(callback),registerMarkdownCodeBlockProcessor:(language:string,callback:any)=>{assert.equal(language,'t3-image');processor=callback;}},{get,invalidate:(value:any)=>{invalidated.push(value);return invalidate(value);},dispose:()=>{disposed=true;}});
  processor(JSON.stringify(reference),root,{addChild:(child:any)=>children.push(child)});
- return {root,children,revoked,created,modals,unload:()=>{children.forEach(child=>child.unload());cleanups.forEach(cleanup=>cleanup());},get disposed(){return disposed;}};
+ return {root,children,revoked,created,modals,invalidated,unload:()=>{children.forEach(child=>child.unload());cleanups.forEach(cleanup=>cleanup());},get disposed(){return disposed;}};
 }
 const flush=()=>new Promise<void>(resolve=>setImmediate(resolve));
 test('native processor displays a tool image, opens it, and releases its modal and URL',async()=>{
@@ -38,4 +38,16 @@ test('a failed image offers retry without rendering private errors',async()=>{
 });
 test('a render disposed during download never creates a URL or changes the removed view',async()=>{
  let resolve!:(result:any)=>void;const pending=new Promise(done=>{resolve=done;});const f=await fixture(()=>pending);f.unload();resolve({bytes:new ArrayBuffer(8),mimeType:'image/png'});await flush();assert.equal(f.created.length,0);assert.equal(f.root.children[0].text,'Loading image…');
+});
+
+test('decode failures show retry, evict cached bytes before reloading, and ignore stale image events',async()=>{
+ let attempts=0,finishEviction!:()=>void;const eviction=new Promise<void>(resolve=>{finishEviction=resolve;});
+ const f=await fixture(async()=>{attempts++;return {bytes:new ArrayBuffer(8),mimeType:'image/png'};},()=>eviction);await flush();
+ const image=f.root.children[0].children[0];image.events.error();
+ assert.equal(f.invalidated.length,1);assert.deepEqual(JSON.parse(JSON.stringify(f.invalidated[0])),reference);
+ assert.deepEqual(f.revoked,['blob:image-0']);assert.match(f.root.children[0].text,/could not be displayed/);assert.equal(f.root.children[1].text,'Retry image');
+ f.root.children[1].events.click();await flush();assert.equal(attempts,1,'Retry waits for eviction');
+ finishEviction();await flush();assert.equal(attempts,2);assert.equal(f.root.children[0].children[0].attrs.src,'blob:image-1');
+ image.events.error();assert.equal(f.invalidated.length,1);assert.deepEqual(f.revoked,['blob:image-0']);
+ const newImage=f.root.children[0].children[0];f.unload();newImage.events.error();assert.equal(f.invalidated.length,1);assert.deepEqual(f.revoked,['blob:image-0','blob:image-1']);
 });
