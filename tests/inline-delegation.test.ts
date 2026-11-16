@@ -29,6 +29,46 @@ test('terminal child before acknowledgement cannot finalize the parent; acknowle
  assert.equal(inlineQuestionPhase(state,'source'),'complete');assert.ok(finalResponseKey(state,'source'));
 });
 
+test('delivered results without acknowledgement release a completed parent',()=>{
+ const state=initial({subagents:Array.from({length:4},(_,index)=>({...child(`child-${index}`),status:'completed',completionDelivery:{state:'delivered',observedByRunId:null}}))});
+ assert.equal(delegatedWork(state,['source']).waiting,false);
+ assert.equal(inlineQuestionPhase(state,'source'),'complete');assert.ok(finalResponseKey(state,'source'));
+ const restored=restoreInlineBindings({messages:[],activities:[]},JSON.parse(JSON.stringify(inlineBindingCheckpoint(state))));
+ assert.equal(delegatedWork(restored,['source']).waiting,false);
+});
+
+test('disposed results cannot leave completed work waiting for a future acknowledgement',()=>{
+ const state=initial({subagents:[{...child(),status:'cancelled',completionDelivery:{state:'disposed',observedByRunId:null}}]});
+ assert.equal(inlineQuestionPhase(state,'source'),'complete');assert.ok(finalResponseKey(state,'source'));
+});
+
+test('pending, claimed and unknown result deliveries and live children still block completion',()=>{
+ for(const status of [undefined,'pending','claimed','unknown']){
+  const state=initial({subagents:[{...child(),status:'completed',...(status?{completionDelivery:{state:status}}:{})}]});
+  assert.equal(inlineQuestionPhase(state,'source'),'running',String(status));assert.equal(finalResponseKey(state,'source'),undefined);
+ }
+ const state=initial({subagents:[{...child(),completionDelivery:{state:'delivered'}}]});
+ assert.equal(inlineQuestionPhase(state,'source'),'running');assert.equal(finalResponseKey(state,'source'),undefined);
+});
+
+test('delivered results do not skip missing, queued or running parent continuations',()=>{
+ const delivery={messageId:'delivery',generation:1,taskIds:['child']};
+ const source={...run,delegatedCompletion:{disposition:'open',delivery}};
+ const subagents=[{...child(),status:'completed',completionDelivery:{state:'delivered',observedByRunId:null}}];
+ const missing=initial({runs:[source],subagents});
+ assert.equal(inlineQuestionPhase(missing,'source'),'running');assert.equal(finalResponseKey(missing,'source'),undefined);
+ for(const status of ['queued','running','completed']){
+  const state=initial({runs:[source,{id:'resume',ordinal:2,status,userMessageId:'delivery',requestedAt:at,completedAt:status==='completed'?at:null}],subagents,
+   messages:[{id:'prompt',role:'user',runId:'source',text:'Research',streaming:false},
+    {id:'delivery',role:'user',runId:'resume',text:'Child completed',streaming:false,createdBy:'agent',delegatedCompletion:{parentRunId:'source',generation:1,taskIds:['child']}},
+    {id:'answer',role:'assistant',runId:'resume',text:'Combined report',streaming:false}],
+   turnItems:[{id:'final-item',type:'assistant_message',messageId:'answer',runId:'resume',updatedAt:at}]});
+  assert.deepEqual(delegatedTurnIds(state,['source']),['source','resume']);
+  assert.equal(inlineQuestionPhase(state,'resume'),status==='completed'?'complete':'running',status);
+  assert.equal(!!finalResponseKey(state,'resume'),status==='completed',status);
+ }
+});
+
 test('exact delivery identity covers the gap before its run and follows that run in either event order',()=>{
  for(const messageFirst of [false,true]){
   let state=initial({subagents:[{...child(),status:'completed',completionDelivery:{state:'acknowledged'}}]});

@@ -52,7 +52,10 @@ export function delegatedWork(state:InlineThreadState,tracked:string[]){
   const sources=new Set(turnIds.filter(id=>!turns[id]?.delegatedCompletion||turns[id].delegatedCompletion?.disposition==='open'));
   const children=Object.values(state.subagents??{}).filter(child=>sources.has(child.runId)&&child.origin==='app_owned'&&child.completionWake==='always');
   const active=children.filter(child=>!terminal(child.status));
-  const unobserved=children.some(child=>terminal(child.status)&&!['acknowledged','suppressed'].includes(child.completionDelivery?.state??''));
+  // T3 marks results delivered when their parent delivery run finishes; an
+  // acknowledgement/observer is not required. Disposed results no longer wake
+  // the parent. The run and delivery checks below still guard continuations.
+  const pendingResults=children.some(child=>terminal(child.status)&&!['acknowledged','delivered','disposed','suppressed'].includes(child.completionDelivery?.state??''));
   const delivery=turnIds.some(id=>{
     const source=turns[id];if(!sources.has(id)||!source?.delegatedCompletion?.delivery)return false;
     const next=Object.values(turns).find(turn=>turn.messageId===source.delegatedCompletion!.delivery!.messageId);
@@ -60,7 +63,7 @@ export function delegatedWork(state:InlineThreadState,tracked:string[]){
   });
   const running=turnIds.some(id=>turns[id]?.state==='running'||turns[id]?.state==='queued');
   const worktree=worktreeWork(state,turnIds);
-  const waiting=active.length>0||unobserved||delivery||worktree.waiting;
+  const waiting=active.length>0||pendingResults||delivery||worktree.waiting;
   const turnId=turnIds.at(-1);
   return {turnIds,turnId,waiting,running,moving:worktree.waiting,handoffFailed:worktree.failed,label:worktree.waiting?'Moving to worktree':active.length?`Waiting for ${active.length} subagent${active.length===1?'':'s'}`:'Waiting for subagent results',
     paused:waiting&&!running&&!!turnId&&['completed','interrupted'].includes(turns[turnId]?.state)};
