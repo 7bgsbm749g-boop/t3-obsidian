@@ -659,11 +659,11 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 .t3-send-control > span { display: inline-flex; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t3-send-control:hover { background: var(--background-modifier-hover); }
 .t3-send-control:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
-.t3-send-project { margin-left: auto; max-width: 55%; }
+.t3-send-project { margin-left: auto; max-width: 55%; flex-shrink: 0; }
 .t3-send-model { max-width: 220px; color: var(--text-normal); }
 .t3-send-options, .t3-send-actions { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .t3-send-actions { margin-left: auto; max-width: 100%; }
-.t3-send-thread { min-width: 0; max-width: 230px; color: var(--text-normal); }
+.t3-send-thread { min-width: 0; max-width: min(230px, 50%); flex-shrink: 0; color: var(--text-normal); }
 .t3-send-thread > span, .t3-send-model > span, .t3-send-project > span { display: block; }
 .t3-send-control[aria-checked="true"] { color: var(--text-normal); background: var(--background-modifier-hover); }
 .t3-send-controls .t3-send-submit { flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%; background: var(--background-modifier-hover); color: var(--text-normal); }
@@ -673,7 +673,7 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 @media (max-width: 520px) {
   .t3-send-options { margin-left: 0; }
   .t3-send-actions { flex-basis: 100%; justify-content: flex-end; }
-  .t3-send-thread { max-width: calc(100% - 40px); }
+  .t3-send-thread { max-width: 50%; }
   .t3-send-model { max-width: 50%; }
 }
 
