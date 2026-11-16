@@ -267,3 +267,14 @@ test('a display title cannot bypass changed route or expired dispatch credential
  }
  assert.equal(reads,0);assert.equal(saves,0);assert.equal(request.directPlan,undefined);
 });
+
+test('composer models reach new and existing messages, and retry refuses a changed model',async t=>{
+ const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});const commands:any[]=[];
+ globalThis.WebSocket=settingsSocket(modelConfig,undefined,async(_tag,payload)=>{commands.push(payload);return {};}) as any;
+ const fetcher:any=async(u:string)=>response(u.endsWith('/environment')?descriptor:u.endsWith('/shell')?{projects:[{id:'p'}]}:u.includes('/threads/')?{thread:{id:'existing',projectId:'p'}}:{ticket:'test'});
+ for(const threadId of [undefined,'existing']){
+  const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',threadId,project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',url,environmentId:eid,host:'direct',executable:''},title:'Named',prompt:'Prompt',jobOptions:{version:1,inline:{enabled:true,intermediateMode:'collapse',finalAnswerFormat:'formatted'},modelSelection:{instanceId:'codex',model:'chosen',options:[{id:'reasoningEffort',value:'high'}]}}};
+  commands.length=0;await sendDirect(request,session,async()=>{},fetcher);assert.ok(commands.length);assert.equal(commands.at(-1).modelSelection.model,'chosen');assert.equal(commands.at(-1).modelSelection.options[0].value,'high');
+  request.jobOptions!.modelSelection!.model='changed';await assert.rejects(sendDirect(request,session,async()=>{},fetcher),/no longer matches/);
+ }
+});

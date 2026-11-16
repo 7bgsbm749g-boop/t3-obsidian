@@ -151,19 +151,20 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
  const environment=access?.api??await environmentApi(r.connection,s,fetcher);
  const requestOptions=beforeThreadCreate?{beforeThreadCreate}:undefined;
  const api=(path:string,payload?:unknown)=>environment('/api/orchestration/'+path,payload,requestOptions);
- const hash=Buffer.from(sha256(Buffer.from(JSON.stringify({project:r.project.id,title:r.title,prompt:r.prompt,attachments:r.attachments??[],context:r.context??null,...(r.threadId?{threadId:r.threadId}:{})})))).toString('hex');
+ const hash=Buffer.from(sha256(Buffer.from(JSON.stringify({project:r.project.id,title:r.title,prompt:r.prompt,attachments:r.attachments??[],context:r.context??null,...(r.threadId?{threadId:r.threadId}:{}),...(r.jobOptions?.modelSelection?{modelSelection:r.jobOptions.modelSelection}:{})})))).toString('hex');
  if(r.directPlan&&(r.directPlan.hash!==hash||r.directPlan.environmentId!==r.connection.environmentId))throw Error('Saved request no longer matches its original content or environment.');
  if(!r.directPlan){
   if(r.threadId){
    const thread=readMetadataSnapshot(await api('threads/'+encodeURIComponent(r.threadId)+'?controlOnly=true')).thread;
    const turn=existingThreadTurn(thread,{threadId:r.threadId,projectId:r.project.id},commandId(r.id,'turn'),{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})});
    if(r.inlineSteering?.activeTurnId&&!responseOwnsActiveTurn(thread,{turnId:r.inlineSteering.activeTurnId}))throw Error('This response no longer owns the active turn. Reopen the chooser before sending.');
+   if(r.jobOptions?.modelSelection)turn.modelSelection=structuredClone(r.jobOptions.modelSelection);
    r.directPlan={protocolVersion:2,hash,environmentId:r.connection.environmentId!,phase:'created',create:null,turn,...(thread.session?.status==='running'&&thread.session.activeTurnId?{observedActiveTurnId:thread.session.activeTurnId}:{})};
   }else{
   const projects=readWireProjects(await api('shell'));const project=projects.find(p=>p.id===r.project.id);if(!project)throw Error('Project no longer exists. Scan this connection again.');
   const defaults=await readNewThreadDefaults(environment,access?.origin??endpoint(r.connection.url||''),project);
   const {workspaceStrategy,...accessDefaults}=defaults;
-  const common={threadId:commandId(r.id,'thread'),...accessDefaults,interactionMode:'default',createdAt:new Date().toISOString()};
+  const common={threadId:commandId(r.id,'thread'),...accessDefaults,...(r.jobOptions?.modelSelection?{modelSelection:structuredClone(r.jobOptions.modelSelection)}:{}),interactionMode:'default',createdAt:new Date().toISOString()};
   const generateTitle=r.title===AUTO_THREAD_TITLE,title=generateTitle?promptThreadTitle(r.prompt,r.attachments):r.title;
   r.directPlan={protocolVersion:2,...(generateTitle||workspaceStrategy?.type==='worktree'?{launch:true,generateTitle,workspaceStrategy}:{}),hash,environmentId:r.connection.environmentId!,phase:'prepared',create:{...common,type:'thread.create',commandId:commandId(r.id,'create'),projectId:project.id,title,branch:null,worktreePath:null},turn:{...common,type:'thread.turn.start',commandId:commandId(r.id,'turn'),message:{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})}}};
   }

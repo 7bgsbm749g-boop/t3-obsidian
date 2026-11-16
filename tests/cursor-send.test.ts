@@ -269,3 +269,24 @@ for(const race of ['unchanged','approval','stopped'])test(`a prepared title keep
   if(race==='unchanged')await sending;else await assert.rejects(sending,race==='approval'?/approval/:/disabled/);
   assert.equal(controls,race==='stopped'?0:1);assert.equal(mutations,race==='unchanged'?1:0);assert.equal(h.plugin.busy,false);
 });
+
+for(const selected of [false,true])for(const ask of ['', 'Explain this.'])test(`unified composer routes ${selected?'selection':'note'} with ${ask?'an ask':'an empty ask'} and preserves its captured location`,async()=>{
+ const h=await fixture(),calls:any[]=[],original=h.value(),options={version:1,inline:{enabled:false,intermediateMode:'collapse',finalAnswerFormat:'raw-markdown'},modelSelection:{instanceId:'p',model:'chosen'}};
+ h.plugin.destinationContext=()=>({});h.plugin.withSendAvailability=(host:any)=>host;
+ h.plugin.sendNote=async(...args:any[])=>{calls.push({kind:'note',args});};
+ h.plugin.sendResolvedChat=async(...args:any[])=>{calls.push({kind:'chat',args});};
+ h.plugin.recoverSmartReplies=async()=>{};h.plugin.smartData=()=>loadSmartSend(undefined);
+ if(selected)h.select(0,'First paragraph.'.length);
+ const host=h.plugin.noteComposerHost(h.file,selected?'First paragraph.':'',{view:h.view,editor:h.editor});
+ if(selected){h.plugin.hasSmartContent=()=>assert.fail('An explicit selection must stay sendable when the note is unchanged');assert.equal(await host.hasNewContent({}),true);}
+ h.cursor(original.length);
+ const destination={threadId:'chosen-thread',projectKey:'project',label:'Chosen'};
+ await host.sendChat(ask,'project',()=>options,undefined,destination);
+ assert.equal(calls.length,1);
+ if(!selected&&!ask){assert.equal(calls[0].kind,'note');assert.equal(calls[0].args[1],'chosen-thread');assert.equal(calls[0].args[5],options);}
+ else{
+  const [text,note,context,,route]=calls[0].args;assert.equal(calls[0].kind,'chat');assert.equal(note.path,h.file.path);assert.equal(route.threadId,'chosen-thread');assert.equal(route.jobOptions,options);
+  if(selected){assert.equal(text,ask?`Selected text:\nFirst paragraph.\n\n**USER ASKS:**\n${ask}`:'First paragraph.');assert.ok(context.anchor);}
+  else {assert.equal(text,ask);assert.ok(resolveCursorInsertion(original,context.insertion)<original.length);}
+ }
+});
