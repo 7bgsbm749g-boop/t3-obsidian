@@ -69,13 +69,11 @@ notes, threads, apps, and helpers after retaining evidence.
 ## Documentation and skills
 
 Documentation and skill-instruction changes use the same commit-and-PR flow,
-without local installation. Review the diff and relevant links. Every PR needs
-an aligned numeric version newer than its current target, including product,
-documentation and workflow changes. Fetch the target, then use
-`python3 scripts/github_release.py bump --base origin/main` before committing
-the PR. Keep an existing PR bump across test builds and further edits unless
-the target catches up. Never put feature-labelled test versions into tracked
-version metadata or public releases.
+without local installation. Review the diff and relevant links. Keep numeric
+version metadata unchanged during development, PR creation and test builds.
+The merging agent assigns each PR its own unused version immediately before an
+explicitly authorized merge, using the merge procedure below. Never put
+feature-labelled test versions into tracked metadata or public releases.
 
 The MCP editing skill and server are bundled product assets. Changes to
 `skills/obsidian-t3/SKILL.md`, `agent/mcp_server.py`, or its transport that change
@@ -92,7 +90,8 @@ Do not merge the PR unless the user requests it.
 
 `push`, `push to GitHub`, and `push to main` authorize source uploads only.
 Feature-branch and main pushes do not immediately publish or create tags.
-Every PR carries a newer numeric `0.0.BUILD` aligned across all version files.
+At merge time each PR receives a newer numeric `0.0.BUILD`, aligned across all
+version files and checked against other open PRs and existing release tags.
 The GitHub nightly schedule tags and releases its selected `main` snapshot at
 midnight UTC, skipping an unchanged, already published commit. It never releases
 unmerged PRs or changes a version's existing tag. Explicit early releases remain
@@ -110,10 +109,39 @@ work. See [Review and release checks](docs/review-and-release.md).
 The project remains Alpha. Published versions use numeric `0.0.BUILD`; Alpha is
 the development stage, not a release-title label. Titles use
 `t3-obsidian VERSION`. Keep all version files aligned and preserve published
-history. Every PR needs a version bump; recheck against the current target before
-merge to avoid consuming another PR's number. A bump identifies the source base
-for feature-labelled test builds and does not itself publish. Only explicit user
-direction can end Alpha.
+history. Allocate versions at merge time, not during development. Feature-labelled
+test builds use the current numeric source base without reserving a number.
+A merge-time bump does not publish. Only explicit user direction can end Alpha.
+
+### Agent-managed merge versions
+
+An instruction to create or update a PR is not merge authorization. After the
+user requests a merge, the merging agent handles version allocation and any
+version-only conflicts without asking the user to choose a number. Perform
+authorized merges one at a time, never with parallel merging agents.
+
+1. Fetch the target and integrate it into the PR branch, preserving source and
+   non-version metadata changes. Resolve legacy version-only conflicts here;
+   keep compatibility history and meaningful package/dependency changes.
+2. On the clean, committed head of the ready PR, run
+   `python3 scripts/github_release.py prepare-merge --repo OWNER/REPO --pr NUMBER --base origin/main`.
+   This reads the latest target, immutable manifests from every other open PR
+   (including forks), release tags and local compatibility history. It assigns
+   the next unused number, or keeps this PR's still-valid existing allocation.
+   An inventory failure stops allocation; never guess or use a local-only bump.
+3. Commit the generated version metadata, validate affected changes, and push
+   the exact PR head. Finish required checks and reviews on that head.
+4. Fetch again immediately before merging. If the target or another version
+   claim changed, integrate it and repeat preparation, validation and push as
+   needed. Run
+   `python3 scripts/github_release.py validate-merge --repo OWNER/REPO --pr NUMBER --base origin/main`.
+   Merge only that checked head with an expected-head guard. Do not bypass
+   reviews or repository protection rules.
+
+These commands make no remote writes and do not grant merge permission. The
+agent owns serialization, fresh rechecks and any retry after concurrent changes;
+the user must not need to manage version numbers. See
+[Review and release checks](docs/review-and-release.md).
 
 Personal-vault delivery is separate from development validation, PRs, merges
 and GitHub releases. Deliver only when the user explicitly asks to try a build.

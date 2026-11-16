@@ -30,11 +30,8 @@ jobs:
           persist-credentials: false
       - name: Test release tooling
         run: python3 -m unittest scripts.test_github_release scripts.test_release_policy
-      - name: Require an aligned version bump for every PR
-        if: github.event_name == 'pull_request'
-        env:
-          T3_PR_BASE: ${{ github.event.pull_request.base.sha }}
-        run: python3 scripts/github_release.py validate --base "$T3_PR_BASE"
+      - name: Verify aligned source metadata
+        run: python3 scripts/github_release.py validate
 
   prepare:
     if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'

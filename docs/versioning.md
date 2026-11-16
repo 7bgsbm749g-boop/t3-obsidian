@@ -12,21 +12,43 @@ files aligned for a release and preserve every published version.
 
 ## PRs and releases
 
-Every PR needs a numeric `0.0.BUILD` newer than its target branch, including
-product, documentation and workflow changes. After fetching `origin/main`, run
-`python3 scripts/github_release.py bump --base origin/main` in the task checkout.
-This command selects the next number above the source, target and recorded
-numeric version history. It aligns `manifest.json`, `package.json`, both
-package-lock version fields and the `versions.json` compatibility entry.
-Commit these files with the PR. The command changes only version metadata;
-it does not create tags or publish. Do not run it again for each test build.
+PRs keep their numeric source version during development, including product,
+documentation and workflow changes. Test builds add a feature label to that base
+without reserving a public number. Keep test labels out of tracked metadata.
 
-The `Release / version` check tests the release tools and checks the PR's
-aligned version against its target. Update the branch and bump again if another
-PR merges with the same or a newer number. Keep PR branches current before
-merging; version checks from an older target are not proof of a current bump.
-A bumped manifest identifies the source base used for feature-labelled test
-builds. Keep test labels out of tracked version metadata and public releases.
+Immediately before an explicitly authorized merge, the merging agent fetches
+and integrates the target, then runs this in the clean PR checkout:
+
+```sh
+python3 scripts/github_release.py prepare-merge --repo OWNER/REPO --pr NUMBER --base origin/main
+```
+
+The command reads the target version, every other open PR's manifest at its exact
+head (including forks), existing numeric release tags and local compatibility
+history. It selects an unused number above the known inventory and aligns
+`manifest.json`, `package.json`, both package-lock version fields and
+`versions.json`. A still-valid allocation for this PR is retained across retries.
+Reads that fail stop allocation without changing metadata. It never assigns a
+number merely because a PR was opened or marked ready.
+
+The agent commits and pushes the metadata, finishes checks and reviews, then
+fetches and rechecks immediately before merging:
+
+```sh
+python3 scripts/github_release.py validate-merge --repo OWNER/REPO --pr NUMBER --base origin/main
+```
+
+If a version is now claimed, published or older than the target, the agent
+updates and prepares again. The final check also rejects a dirty checkout,
+changed PR head, draft PR or target that has not been integrated. Merge only the
+checked head with an expected-head guard. Serialize authorized merges; inventory
+reads are not remote reservations. The agent handles retries and version-only
+conflicts, without asking the user to choose numbers. Neither command merges,
+pushes, creates tags or publishes anything.
+
+The `Release / version` check tests the tooling and verifies aligned metadata
+for development PRs without requiring an early bump. Merge-time checks are the
+merging agent's responsibility, as specified in [AGENTS.md](../AGENTS.md).
 
 At midnight UTC each night, GitHub schedules a release of the `main` commit
 selected by that scheduled event. Only that snapshot is tagged, built, attested
@@ -41,7 +63,7 @@ version older than the latest release. An interrupted run can retry the same
 tag without replacing it. Explicit numeric tag pushes can still start a manual
 release; workflow dispatch at that tag can retry its build and publication.
 
-The local release queue and version allocator remain removed. Personal-vault
+The local release queue and worker remain removed. Personal-vault
 delivery is separate and requires an explicit user request; no PR, main merge
 or GitHub release requires it. See [Review and release checks](review-and-release.md).
 [release-policy.json](../release-policy.json) and `scripts/release_policy.py`

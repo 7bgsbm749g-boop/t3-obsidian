@@ -1,18 +1,23 @@
-"""Bump PR versions and prepare and publish tagged GitHub releases."""
+"""Allocate agent-managed merge versions and prepare and publish tagged releases."""
 from __future__ import annotations
 
 import argparse
+import base64
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
+from urllib.parse import quote
 
 from release_policy import bump, release_title, require_target
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = {'main.js': 'dist/main.js', 'manifest.json': 'manifest.json', 'styles.css': 'styles.css'}
+VERSION_FILES = ('manifest.json', 'package.json', 'package-lock.json', 'versions.json')
+NUMERIC_VERSION = re.compile(r'0\.0\.(0|[1-9][0-9]*)\Z')
 
 
 def command(*args: str) -> str:
@@ -52,24 +57,116 @@ def version(base: str | None = None) -> str:
     if json.loads((ROOT / 'versions.json').read_text()).get(selected) != manifest['minAppVersion']:
         raise ValueError('versions.json must include the exact release and minimum Obsidian version.')
     if base is not None and int(selected.rsplit('.', 1)[1]) <= int(base_version(base).rsplit('.', 1)[1]):
-        raise ValueError('Every PR requires a newer 0.0.BUILD than its target. Run github_release.py bump --base origin/main.')
+        raise ValueError('Merge preparation requires a newer 0.0.BUILD than its target. Run prepare-merge.')
     return selected
 
 
 def bump_version(base: str) -> str:
     """Update only version metadata; never create a tag or publish."""
-    names = ('manifest.json', 'package.json', 'package-lock.json', 'versions.json')
-    values = {name: json.loads((ROOT / name).read_text()) for name in names}
-    manifest, package, lock, history = (values[name] for name in names)
+    values = {name: json.loads((ROOT / name).read_text()) for name in VERSION_FILES}
+    manifest, package, lock, history = (values[name] for name in VERSION_FILES)
     candidates = [base_version(base), manifest['version'], package['version'], lock['version'], lock['packages']['']['version']]
     candidates.extend(item for item in history if re.fullmatch(r'0\.0\.(0|[1-9][0-9]*)', item))
     for candidate in candidates:
         require_target(ROOT, candidate)
     selected = bump(ROOT, max(candidates, key=lambda item: int(item.rsplit('.', 1)[1])), 'patch')
+    write_version(values, selected)
+    return selected
+
+
+def write_version(values: dict, selected: str) -> None:
+    manifest, package, lock, history = (values[name] for name in VERSION_FILES)
     manifest['version'] = package['version'] = lock['version'] = lock['packages']['']['version'] = selected
     history[selected] = manifest['minAppVersion']
     for name, value in values.items():
         (ROOT / name).write_text(json.dumps(value, indent=2) + '\n')
+
+
+def pages(path: str) -> list:
+    result = []
+    for page in range(1, 51):
+        rows = api(f'{path}{"&" if "?" in path else "?"}per_page=100&page={page}')
+        if not isinstance(rows, list):
+            raise ValueError('GitHub returned an invalid version inventory.')
+        result.extend(rows)
+        if len(rows) < 100:
+            return result
+    raise ValueError('Version inventory exceeded 5,000 entries. No version was assigned.')
+
+
+def remote_version(repo: str, source: str) -> str:
+    if not re.fullmatch(r'[\w.-]+/[\w.-]+', repo) or not re.fullmatch(r'[a-f0-9]{40}', source):
+        raise ValueError('Invalid version source identity.')
+    value = api(f'repos/{repo}/contents/manifest.json?ref={source}')
+    if (not isinstance(value, dict) or value.get('type') != 'file' or value.get('encoding') != 'base64'
+            or not isinstance(value.get('size'), int) or value['size'] > 1_000_000
+            or not isinstance(value.get('content'), str) or len(value['content']) > 1_400_000):
+        raise ValueError('Cannot read the exact source manifest. No version was assigned.')
+    selected = json.loads(base64.b64decode(''.join(value['content'].split()), validate=True))['version']
+    require_target(ROOT, selected)
+    return selected
+
+
+def target_head(repo: str, target: dict) -> str:
+    reference = quote(target['base']['ref'], safe='')
+    return api(f'repos/{repo}/git/ref/heads/{reference}')['object']['sha']
+
+
+def merge_inventory(repo: str, number: int, base: str) -> dict:
+    """Read immutable manifests, including fork PRs, without checking out their code."""
+    if not re.fullmatch(r'[\w.-]+/[\w.-]+', repo) or number < 1:
+        raise ValueError('Specify the exact repository and PR number.')
+    target = api(f'repos/{repo}/pulls/{number}')
+    if (target['state'] != 'open' or target['draft'] or target['base']['repo']['full_name'] != repo
+            or target['head']['sha'] != command('git', 'rev-parse', 'HEAD')):
+        raise ValueError('Use the clean, published head of the exact open, ready PR.')
+    base_sha = command('git', 'rev-parse', '--verify', '--end-of-options', base + '^{commit}')
+    if target['base']['sha'] != base_sha or target_head(repo, target) != base_sha:
+        raise ValueError('The target moved. Fetch and integrate it before preparing the merge.')
+    command('git', 'merge-base', '--is-ancestor', base_sha, 'HEAD')
+    if command('git', 'status', '--porcelain'):
+        raise ValueError('Commit or preserve local changes before preparing the merge.')
+    others = [row for row in pages(f'repos/{repo}/pulls?state=open') if row['number'] != number]
+
+    def read_pr(row: dict) -> tuple[int, str]:
+        if not row['head'].get('repo'):
+            raise ValueError(f'Cannot read PR #{row["number"]}; no version was assigned.')
+        return row['number'], remote_version(row['head']['repo']['full_name'], row['head']['sha'])
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        claims = dict(pool.map(read_pr, others))
+    tags = [row['name'] for row in pages(f'repos/{repo}/tags') if NUMERIC_VERSION.fullmatch(row['name'])]
+    return {'target': target, 'base': base_version(base), 'claims': claims, 'tags': tags}
+
+
+def unchanged_merge_source(repo: str, number: int, inventory: dict) -> None:
+    latest = api(f'repos/{repo}/pulls/{number}')
+    expected = inventory['target']
+    if (latest['state'] != 'open' or latest['draft'] or latest['head']['sha'] != expected['head']['sha']
+            or latest['base']['sha'] != expected['base']['sha']
+            or latest['base']['ref'] != expected['base']['ref']
+            or target_head(repo, latest) != expected['base']['sha']):
+        raise ValueError('The PR or target moved during the version check. Fetch, integrate and retry.')
+
+
+def merge_version(repo: str, number: int, base: str, *, validate: bool = False) -> str:
+    """Agent-managed pre-merge step. No remote writes, commits, tags or merges."""
+    selected = version()
+    inventory = merge_inventory(repo, number, base)
+    used = set(inventory['claims'].values()) | set(inventory['tags'])
+    floor = max([inventory['base'], *inventory['tags']], key=lambda value: int(value.rsplit('.', 1)[1]))
+    values = {name: json.loads((ROOT / name).read_text()) for name in VERSION_FILES}
+    history = [value for value in values['versions.json'] if NUMERIC_VERSION.fullmatch(value)]
+    ready = (selected not in used and int(selected.rsplit('.', 1)[1]) > int(floor.rsplit('.', 1)[1])
+             and not any(int(value.rsplit('.', 1)[1]) > int(selected.rsplit('.', 1)[1]) for value in history))
+    if validate:
+        if not ready:
+            raise ValueError('Version is stale, published or used by another PR. Run prepare-merge again.')
+    elif not ready:
+        selected = bump(ROOT, max([selected, floor, *used, *history], key=lambda value: int(value.rsplit('.', 1)[1])), 'patch')
+    unchanged_merge_source(repo, number, inventory)
+    if not validate:
+        write_version(values, selected)
     return selected
 
 
@@ -161,11 +258,21 @@ def publish(repo: str, selected: str, source: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['validate', 'bump', 'prepare', 'publish'])
-    parser.add_argument('--base', help='PR target reference. Required for PR validation; bump defaults to origin/main.')
+    parser.add_argument('action', choices=['validate', 'bump', 'prepare-merge', 'validate-merge', 'prepare', 'publish'])
+    parser.add_argument('--base', help='Fetched PR target reference; merge preparation defaults to origin/main.')
+    parser.add_argument('--repo', help='Exact owner/repository for merge-time version allocation.')
+    parser.add_argument('--pr', type=int, help='Exact ready PR number; only use after merge authorization.')
     args = parser.parse_args()
+    merge_action = args.action in ('prepare-merge', 'validate-merge')
+    if merge_action:
+        if not args.repo or not args.pr:
+            parser.error('Merge-time version commands require --repo and --pr.')
+        print(merge_version(args.repo, args.pr, args.base or 'origin/main', validate=args.action == 'validate-merge'))
+        return
+    if args.repo is not None or args.pr is not None:
+        parser.error('--repo and --pr apply only to merge-time version commands.')
     if args.base is not None and args.action not in ('validate', 'bump'):
-        parser.error('--base applies only to validate and bump.')
+        parser.error('--base applies only to validation or version allocation.')
     if args.action == 'bump':
         print(bump_version(args.base or 'origin/main'))
         return

@@ -22,7 +22,8 @@ build refuses test adapters and retired filesystem dependencies in its inputs.
 include installed dependency bytes, runtime, source and configuration. Passing
 bounded test batches retain their own logs; failed batches have no success
 receipt. GitHub runs release-tool regression checks on PRs and main pushes.
-Every PR must also have an aligned numeric version newer than its target.
+Development PRs keep aligned numeric metadata without an early bump; the merging
+agent allocates a distinct version immediately before an authorized merge.
 The nightly schedule tags the selected `main` snapshot at midnight UTC; the
 tag build runs lint and build before attesting and publishing. Branch pushes
 do not immediately publish releases.
@@ -72,11 +73,8 @@ worker will perform these checks.
 
 Documentation changes need a diff and link review without local installation.
 Tooling changes need their affected checks. Product, documentation and workflow
-PRs all need a version bump. Fetch the target and run
-`python3 scripts/github_release.py bump --base origin/main`, then commit the
-aligned metadata with the change. If already bumped above the current target,
-keep that number across further edits and test builds. Update and bump again
-when a merged PR consumes that number.
+PRs keep the current numeric source base during development and test builds.
+Do not allocate a version merely to open, update or mark a PR ready.
 
 ## Commit, push and open a PR
 
@@ -95,7 +93,7 @@ refs or use `--tags`, `--follow-tags`, or `--mirror`.
 
 ## GitHub owns releases
 
-The local release queue and workers remain removed. PRs carry version metadata;
+The local release queue and workers remain removed. Merged PRs carry version metadata;
 merging a PR does not immediately publish or install the plugin. Historical
 tags, archives, receipts and private comparison records remain intact.
 
@@ -111,8 +109,8 @@ local worker or vault access is needed.
 If that exact commit is already published, preparation does nothing. If the
 tag exists with an unfinished release, it dispatches the same tag again. If
 the number belongs to another commit or is older than the latest release, it
-fails without moving tags or publishing old code. Keep every PR updated and
-bumped above its current target before merging. Unmerged PRs are never released.
+fails without moving tags or publishing old code. The merging agent assigns and
+checks a distinct version at merge time. Unmerged PRs are never released.
 
 An explicitly requested early release can still use the aligned numeric
 version committed on its source: tag that exact commit and push only that tag.
@@ -125,9 +123,48 @@ match the source version. Existing tags and assets cannot be overwritten.
 To retry a tagged release, dispatch the workflow at that same numeric tag, for
 example `gh workflow run release-provenance.yml --ref 0.0.BUILD` with the actual
 version substituted. Dispatching at a branch fails the numeric-tag check.
-The release workflow does not choose or bump versions; the PR preparation
-command does that before merge. Keep the
+The release workflow does not choose or bump versions; the merging agent does
+that through `prepare-merge` immediately before an authorized merge. Keep the
 [alpha version policy](versioning.md).
+
+## Agent-managed version allocation at merge time
+
+Only a user request to merge starts this process. The agent handles it without
+asking the user to select a number or repair version-only conflicts. Perform
+authorized merges one at a time, never with parallel merging agents.
+
+Fetch and integrate the current target before touching version metadata. Resolve
+legacy version-only conflicts while preserving compatibility history, dependency
+changes and all other meaningful JSON fields. On the clean, committed head of a
+ready PR, run:
+
+```sh
+python3 scripts/github_release.py prepare-merge --repo OWNER/REPO --pr NUMBER --base origin/main
+```
+
+This reads the latest target, other open PRs (including drafts and forks), numeric
+release tags and local compatibility history. It selects the next unused number
+or retains this PR's still-valid allocation. The helper makes no remote writes.
+It stops before changing metadata if a required read fails or the head/target
+moves. The low-level `bump` command does not inspect other PRs; do not use it for
+merge preparation.
+
+Commit the generated metadata, validate the affected changes, push the exact
+branch head and finish required checks and reviews. Fetch again immediately
+before merging. If the target moved, integrate it and repeat preparation and
+affected validation. Check the latest version inventory with:
+
+```sh
+python3 scripts/github_release.py validate-merge --repo OWNER/REPO --pr NUMBER --base origin/main
+```
+
+If another PR claimed the number, or it has been published or overtaken by the
+target, the agent prepares and validates again. Merge only the checked SHA using
+an expected-head guard, such as `gh pr merge NUMBER --merge --match-head-commit SHA`.
+Do not bypass repository rules or reviews. An allocation is an inventory check,
+not a remote lock: the merging agent owns serialization and fresh rechecks.
+Development CI success alone is not authorization or proof that a PR is ready
+to merge against a changed target.
 
 Personal-vault delivery runs only when the user explicitly asks to try changes.
 It is not a prerequisite or side effect of a PR, merge, GitHub release or agent
