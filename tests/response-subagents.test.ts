@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {parseHTML} from 'linkedom';
-import {normalizeV2Snapshot,normalizeV2StreamItem} from '../src/connection/orchestration-v2';
+import {itemActivities,normalizeV2Snapshot,normalizeV2StreamItem} from '../src/connection/orchestration-v2';
 import {applyThreadItem,inlineBindingCheckpoint,restoreInlineBindings,renderInlineTurn,type InlineThreadState} from '../src/conversations/inline-thread';
 import {responseEmissions} from '../src/responses/response-emissions';
 import {responseToolGroups} from '../src/responses/response-tools';
@@ -59,6 +59,18 @@ test('structured delivery inputs use their task rows while unknown notifications
  assert.match(responseEmissions(state,['run'],text=>text).map(row=>row.body).join(''),/\[!t3-notification\] Notice/);
  const noThread=renderSubagent({...child,childThreadId:null});assert.doesNotMatch(noThread,/href=|chevron-right/);
  assert.match(renderSubagent({...child,remoteChild:{environmentId:'other',threadId:'remote',label:'Remote machine'}},source),/on Remote machine/);
+});
+
+test('note and sidebar work retain images beside subagents after merging streamed image support',()=>{
+ const current=snapshot();current.messages=current.messages.filter(message=>message.role==='user');
+ current.activities.push(...itemActivities({id:'image',runId:'run',type:'dynamic_tool',toolName:'view_image',input:{path:'/fixture/synthetic.png'},status:'completed',ordinal:3,startedAt:at(3),updatedAt:at(3)}));
+ const note=renderInlineTurn(current,'run','parent','running','collapse',source.environmentId);
+ const sidebar=chatTimeline(current,source)[0].history!.map(entry=>entry.text).join('\n');
+ for(const rendered of [note,sidebar]){
+  assert.equal((rendered.match(/```t3-image/g)??[]).length,1);
+  assert.equal((rendered.match(/data-t3-subagent-key=/g)??[]).length,1);
+  assert.ok(rendered.indexOf('data-t3-subagent-key=')<rendered.indexOf('```t3-image'));
+ }
 });
 
 test('subagent URLs reject malformed and executable content, and titles/results cannot inject markup',()=>{

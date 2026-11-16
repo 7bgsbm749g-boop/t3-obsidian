@@ -34,6 +34,8 @@ import {savedToDisplay} from '../responses/native-response-projection';
 import {clearSmartSendPreparation,smartRecovery,hasSmartRecovery,rememberSmartRecovery,snapshotSmartSend,loadSmartSend,mergeSmartSend,smartDestination,prepareSmartSend,explicitSelectionText,rememberResponse,rememberNoteEdits,confirmSmartSend,moveSmartNotes,sourceProjection,smartNote,unpackText,type SmartSendData,type SmartCapture,type Span} from '../notes/smart-send';
 import {noteIdentityRanges,withoutNoteIdentity} from '../notes/note-identity';
 import {retainedLocalFinal,restoredLocalFinal,localFinalIdentity} from '../responses/local-final-cache';
+import {ImageResultStore} from '../responses/image-result-store';
+import {installImageResults} from '../responses/image-result-view';
 import {HtmlResultStore} from '../responses/html-result-store';
 import {HtmlResultViews} from '../responses/html-result-view';
 import {hasResponseMarkers} from '../conversations/inline-thread';
@@ -444,6 +446,11 @@ export default class SendToT3 extends Plugin {
     this.inlineChat=new InlineChatManager(this.app,`${this.localKey}-inline-${this.settings.vaultId}`,id=>this.sessionFor(id),{prepare:(job,request)=>this.prepareHostedInline(job,request),stop:job=>job.localOnly?this.stopLocalInline(job):this.stopHostedInline(job.id,job.hostTarget,job.remoteStopOperationId),status:job=>this.deviceInline?.responseStatus(job.id)},()=>'collapse',()=>finalAnswerFormat(this.settings.inlineStreaming.finalAnswerFormat));
     if(typeof this.registerEditorExtension==='function'){const {EditorState}=cmState;this.registerEditorExtension([EditorState.transactionFilter.of(transaction=>nativeResponses(this.app).filter(transaction)),responseMoveHistory()]);}
     if(typeof this.registerMarkdownCodeBlockProcessor==='function'){
+      const imagePrefix=`image-result:v1:${this.settings.vaultId}:`;
+      installImageResults(this.app,this,new ImageResultStore({read:key=>deviceState(imagePrefix+key),write:async(key,value)=>{await deviceState(imagePrefix+key,value);}},environmentId=>this.inlineThreadAccess(environmentId),async url=>{
+        const response=await requestUrl({url,headers:{Accept:'image/png,image/jpeg,image/gif,image/webp'},throw:false});
+        return {status:response.status,mimeType:Object.entries(response.headers).find(([key])=>key.toLowerCase()==='content-type')?.[1]??'',bytes:response.arrayBuffer};
+      }));
       const prefix=`html-result:v1:${this.settings.vaultId}:`;
       const store=new HtmlResultStore({read:key=>deviceState(prefix+key),write:async(key,value)=>{await deviceState(prefix+key,value);}},environmentId=>this.inlineThreadAccess(environmentId),async url=>{
         const response=await requestUrl({url,headers:{Accept:'text/html'},throw:false});

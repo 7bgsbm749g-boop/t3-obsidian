@@ -745,3 +745,22 @@ a.send-to-t3-subagent:focus-visible { outline:2px solid var(--interactive-accent
 .send-to-t3-subagent-time { font-variant-numeric:tabular-nums; }
 .send-to-t3-subagent-chevron > svg { width:14px; height:14px; }
 .send-to-t3-subagent[data-t3-subagent-status="failed"] .send-to-t3-subagent-detail, .send-to-t3-subagent[data-t3-subagent-status="failed"] .send-to-t3-subagent-status { color:var(--text-error); }
+
+/* Tool images use native Markdown processors in live and saved progress. */
+.send-to-t3-image-result .send-to-t3-image-open {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  height: auto;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  cursor: zoom-in;
+}
+.send-to-t3-image-open img,
+.send-to-t3-image-expanded {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-s);
+}
