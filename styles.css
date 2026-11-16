@@ -670,7 +670,8 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 }
 
 /* Shared T3 work presentation inside native workspace chat surfaces. */
-.t3-sidebar-chat { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 0; color: var(--text-normal); }
+.t3-sidebar-chat { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--text-normal); }
+.workspace-leaf-content .view-content.t3-sidebar-chat { padding: 0; }
 .t3-chat-header { display: flex; align-items: center; gap: var(--size-4-1); min-height: 36px; padding: var(--size-4-1) var(--size-4-2) var(--size-4-1) var(--size-4-3); border-bottom: var(--border-width) solid var(--background-modifier-border); flex-shrink: 0; }
 .t3-chat-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-ui-small); font-weight: var(--font-semibold); }
 .t3-chat-text-action { background: transparent; border: 0; box-shadow: none; color: var(--text-normal); font-size: var(--font-ui-small); padding: var(--size-4-1) var(--size-4-2); height: auto; }
