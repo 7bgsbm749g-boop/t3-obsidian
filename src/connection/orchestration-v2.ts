@@ -3,6 +3,7 @@ import {outgoingMessage} from './send-contracts';
 import {isRecord} from '../shared/values';
 import type {WireRun,WireRuntimeRequest,WireTurnItem,WireThread,WireSnapshot,ThreadSnapshot,V2ControlEvent} from './wire-types';
 import type {InlineActivity,InlineMessage,InlineThreadState,InlineTurn,InlineSubagent} from '../conversations/inline-thread';
+import {toolImageSources,withoutToolImageData} from '../responses/image-results';
 import {htmlRenderFromToolItem} from '../responses/html-results';
 import {worktreeHandoff,mergeWorktreeHandoffs} from '../conversations/inline-worktree';
 import {workspacePreparation} from '../projects/worktree-setup';
@@ -103,13 +104,16 @@ export function itemActivities(item:WireTurnItem,requests:Record<string,WireRunt
   if(['compaction','proposed_plan','todo_list','notification','error'].includes(item.type))return [{...base,id:`v2:${item.id}`,
     kind:item.type==='compaction'?'context-compaction':item.type==='proposed_plan'?'response.proposed-plan':item.type==='todo_list'?'response.plan':'response.notification',
     summary:item.title??item.type.replace(/_/g,' '),payload:{status,completedAt:item.completedAt,beforeTokenCount:item.beforeTokenCount,afterTokenCount:item.afterTokenCount,text:item.text??item.summary??item.failure?.message,markdown:item.markdown,planId:item.planId,streaming:item.streaming,steps:item.steps,error:item.type==='error'}}];
-  return [{...base,id:`v2:${item.id}`,kind:terminal(item.status)?'tool.completed':'tool.updated',summary:item.title??item.toolName??item.type.replace(/_/g,' '),
+  const images=toolImageSources(item);
+  const output=item.type==='dynamic_tool'?withoutToolImageData(item.output):item.output;
+  const imageActivity:InlineActivity={...base,sequence:item.ordinal+0.5,id:`v2:${item.id}:images`,kind:'response.image',summary:'Image',payload:{itemId:item.id,revision:item.updatedAt,imageSources:images}};
+  return [...(images.length?[imageActivity]:[]),{...base,id:`v2:${item.id}`,kind:terminal(item.status)?'tool.completed':'tool.updated',summary:item.title??item.toolName??item.type.replace(/_/g,' '),
     payload:{toolCallId:item.id,itemType:item.type,status,title:item.title??item.toolName,
       files:item.fileName?[item.fileName]:undefined,data:{toolSource:item.toolSource,toolIcon:item.toolIcon,toolName:item.toolName??item.type,kind:item.type,
         input:item.type==='command_execution'?{command:item.input}:item.input,
         command:item.type==='command_execution'?item.input:undefined,
-        output:item.output??(item.outputOmitted?'Output details are not available yet.':undefined),exitCode:item.exitCode,path:item.fileName??item.viewedImagePath,
-        item:{aggregatedOutput:item.output,exitCode:item.exitCode}}}}];
+        output:output??(item.outputOmitted?'Output details are not available yet.':undefined),exitCode:item.exitCode,path:item.fileName??item.viewedImagePath,
+        item:{aggregatedOutput:output,exitCode:item.exitCode}}}}];
 }
 
 export function normalizeV2Snapshot(snapshot:WireSnapshot):ThreadSnapshot;
@@ -208,7 +212,8 @@ export function applyV2ControlEvent(state:InlineThreadState,input:unknown):Inlin
     items=[item];
   }
   const updates=items.flatMap(item=>itemActivities(item,requests)),ids=new Set(updates.map(item=>item.id));
-  return {...state,v2Requests:requests,v2Controls:controls,activities:[...state.activities.filter(activity=>!ids.has(activity.id)),...updates]};
+  const replacedImages=new Set(items.map(item=>`v2:${item.id}:images`));
+  return {...state,v2Requests:requests,v2Controls:controls,activities:[...state.activities.filter(activity=>!ids.has(activity.id)&&!replacedImages.has(activity.id)),...updates]};
 }
 
 /** Convert saved v1 command vocabulary at the transport boundary. No provider
