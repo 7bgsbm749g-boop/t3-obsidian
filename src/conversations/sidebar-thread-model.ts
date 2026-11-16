@@ -15,7 +15,7 @@ export interface SidebarTarget extends ThreadTarget {title:string;kind:SidebarKi
 export function sidebarTarget(value:unknown):SidebarTarget|undefined {
   if(!isRecord(value)||!['thread','side-chat','subagent'].includes(String(value.kind))||typeof value.title!=='string'||![value.threadId,value.projectId,value.environmentId].every(id=>typeof id==='string'&&id.length>0&&id.length<=200))return;
   const parent=value.parent;
-  if(value.kind!=='thread'&&(!isRecord(parent)||![parent.threadId,parent.projectId,parent.environmentId].every(id=>typeof id==='string'&&id.length>0&&id.length<=200)||parent.environmentId!==value.environmentId))return;
+  if(value.kind!=='thread'&&(!isRecord(parent)||![parent.threadId,parent.projectId,parent.environmentId].every(id=>typeof id==='string'&&id.length>0&&id.length<=200)||value.kind==='side-chat'&&parent.environmentId!==value.environmentId))return;
   return value as unknown as SidebarTarget;
 }
 export function subagentTarget(parent:ThreadTarget,child:InlineSubagent):SidebarTarget|undefined {

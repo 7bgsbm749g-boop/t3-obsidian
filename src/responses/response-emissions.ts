@@ -3,6 +3,9 @@ import {renderWorktreeSetup,worktreeSetupPhase} from '../projects/worktree-setup
 import {runTimer} from './response-presentation';
 import {renderResponseTasks} from './response-tasks';
 import {renderProposedPlan} from './response-plan';
+import {isRecord} from '../shared/values';
+import {notificationSubagents,renderSubagent,type SubagentSource} from './response-subagents';
+import type {InlineSubagent} from '../conversations/inline-thread';
 
 export interface ResponseEmission {id:string;turnId:string|null;createdAt?:string;sequence:number;body:string;active:boolean;kind:string}
 const compactionTokens=(count:number)=>{
@@ -24,9 +27,14 @@ export function renderProviderError(id:string,text:string,createdAt?:string):str
 }
 
 /** Public timeline emissions are display data, never run completion evidence. */
-export function responseEmissions(state:InlineThreadState,turns:string[],markdown:(text:string)=>string,activeTurn?:string):ResponseEmission[] {
+export function responseEmissions(state:InlineThreadState,turns:string[],markdown:(text:string)=>string,activeTurn?:string,source?:SubagentSource):ResponseEmission[] {
   const result:ResponseEmission[]=[];
+  const seen=new Set<string>();
   for(const activity of state.activities){
+    if(turns.includes(activity.turnId??'')&&activity.kind==='response.subagent'&&isRecord(activity.payload?.subagent)){
+      const saved=activity.payload.subagent as unknown as InlineSubagent,child=state.subagents?.[saved.id]??saved;seen.add(child.id);
+      result.push({id:activity.id,turnId:activity.turnId,createdAt:activity.createdAt,sequence:activity.sequence??0,body:renderSubagent(child,source),active:false,kind:activity.kind});continue;
+    }
     if(turns.includes(activity.turnId??'')&&activity.kind==='response.worktree-setup'){
       const active=activity.turnId===activeTurn;
       const phase=worktreeSetupPhase(activity,state.worktreeSetup);
@@ -56,10 +64,16 @@ export function responseEmissions(state:InlineThreadState,turns:string[],markdow
       body=renderResponseTasks(activity.id,p);
       if(!body)continue;
     }else{
+      const children=notificationSubagents(state,p.source);
+      if(children.length){
+        body=children.map(child=>renderSubagent(child,source,{id:activity.id,outcome:typeof p.outcome==='string'?p.outcome:'unknown',createdAt:activity.createdAt})).join('');
+        result.push({id:activity.id,turnId:activity.turnId,createdAt:activity.createdAt,sequence:activity.sequence??0,body,active:false,kind:activity.kind});continue;
+      }
       const text=typeof p.text==='string'?p.text:activity.summary;if(!text.trim())continue;
       body=p.error?renderProviderError(activity.id,text,activity.createdAt):separateCallout(`> [!t3-notification] Notice\n>\n${markdown(text)}`);
     }
     result.push({id:activity.id,turnId:activity.turnId,createdAt:activity.createdAt,sequence:activity.sequence??0,body,active,kind:activity.kind});
   }
+  for(const child of Object.values(state.subagents??{}))if(turns.includes(child.runId)&&!seen.has(child.id))result.push({id:`subagent:${child.id}`,turnId:child.runId,createdAt:child.createdAt??child.startedAt??undefined,sequence:0,body:renderSubagent(child,source),active:false,kind:'response.subagent'});
   return result.sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
 }

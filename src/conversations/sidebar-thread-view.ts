@@ -4,8 +4,9 @@ import {ChatTranscript} from './chat-transcript';
 import {ChatComposer} from './chat-composer';
 import {readComposerSettings,type ComposerModel,type ComposerSettings} from './composer-models';
 import type {SidebarSendOptions,SidebarProject} from './sidebar-thread-model';
-import {applyThreadItem,type InlineThreadState} from './inline-thread';
-import {watchThread,type ThreadStreamCallbacks,type ThreadAccess} from './thread-stream';
+import {applyThreadItem,type InlineThreadState,type InlineSubagent} from './inline-thread';
+import {readInlineSnapshot,watchThread,type ThreadStreamCallbacks,type ThreadAccess} from './thread-stream';
+import type {SubagentReference} from '../responses/response-subagents';
 import {SidebarThreadTransport,sidebarTarget,sidebarRunning,subagentTarget,type SidebarKind,type SidebarTarget} from './sidebar-thread-model';
 import type {ThreadChoice} from './thread-target';
 import {isRecord} from '../shared/values';
@@ -49,6 +50,27 @@ export class SidebarThreads {
     const leaf=existing??this.app.workspace.getRightLeaf(false);if(!leaf)throw Error('The right sidebar is unavailable.');
     if(!existing)await leaf.setViewState({type:TYPES[target.kind],state:{target},active:true});
     await this.app.workspace.revealLeaf(leaf);
+  }
+  async openSubagent(reference:SubagentReference){
+    const access=await this.host.access(reference.environmentId);
+    let child:InlineSubagent|undefined,parent:SidebarTarget;
+    try{
+      const {thread}=await readInlineSnapshot(access,reference.threadId,undefined,{messageIds:[],turnIds:[reference.runId]});
+      if(thread.deletedAt)throw Error('The parent thread is no longer available.');
+      child=thread.subagents?.[reference.subagentId];
+      if(!child||child.runId!==reference.runId)throw Error('This subagent is no longer available in the parent thread.');
+      parent={kind:'thread',threadId:reference.threadId,environmentId:reference.environmentId,projectId:thread.projectId,title:thread.title??'Parent'};
+    }finally{await access.close?.();}
+    const remote=isRecord(child.remoteChild)?child.remoteChild:undefined;
+    const environmentId=child.childThreadId?reference.environmentId:typeof remote?.environmentId==='string'?remote.environmentId:reference.environmentId;
+    const threadId=child.childThreadId??(typeof remote?.threadId==='string'?remote.threadId:undefined);
+    if(!threadId)throw Error('This subagent has no thread to open.');
+    const childAccess=await this.host.access(environmentId);
+    try{
+      const snapshot=await readInlineSnapshot(childAccess,threadId);
+      if(snapshot.thread.deletedAt)throw Error('This subagent thread is no longer available.');
+      await this.open({kind:'subagent',environmentId,threadId,projectId:snapshot.thread.projectId,title:child.title||snapshot.thread.title||'Subagent',parent});
+    }finally{await childAccess.close?.();}
   }
   chooseThread(){new Choice(this.app,this.host.projects(),project=>project.label,project=>{void this.chooseProjectThread(project).catch(error=>this.report(error));},'Choose a T3 project').open();}
   private async chooseProjectThread(project:ProjectChoice){
@@ -145,7 +167,7 @@ export class SidebarThreadView extends ItemView {
           const first=!this.online;this.online=true;this.setStatus();if(first)void this.composer?.refreshModels().catch(()=>{});
         }
         if(item.kind==='event'&&item.event.type==='thread.metadata-updated')this.settings={...this.settings,...readComposerSettings(item.event.payload)};
-        this.state=applyThreadItem(this.state,item).state;this.transcript?.update(this.state);
+        this.state=applyThreadItem(this.state,item).state;this.transcript?.update(this.state,this.target);
         const key=JSON.stringify(this.state.activities.filter(activity=>/approval|user-input/.test(activity.kind)));if(key!==this.requestKey){this.requestKey=key;this.disposeRequests?.();this.requests?.empty();if(this.requests)this.disposeRequests=this.owner.host.renderRequests?.(this.requests,target,this.state);}
         this.updateControls();
       },

@@ -2,12 +2,13 @@ import type {InlineThreadState} from '../conversations/inline-thread';
 import {responseToolGroups,currentResponseToolGroup,renderResponseToolGroup} from './response-tools';
 import {responseEmissions} from './response-emissions';
 import type {IntermediateMode} from './response-presentation';
+import type {SubagentSource} from './response-subagents';
 
 /** Portable work presentation. Note projections and workspace chats use the
  * same tool/thought/emission ordering and current-activity ownership. No IO. */
-export function responseWork(state:InlineThreadState,turns:string[],turnId:string,phase:string,mode:IntermediateMode,waiting:boolean,markdown:(text:string)=>string){
+export function responseWork(state:InlineThreadState,turns:string[],turnId:string,phase:string,mode:IntermediateMode,waiting:boolean,markdown:(text:string)=>string,source?:SubagentSource){
   const toolGroups=responseToolGroups(state,turns);
-  const emissions=responseEmissions(state,turns,markdown,phase==='running'?turnId:undefined);
+  const emissions=responseEmissions(state,turns,markdown,phase==='running'?turnId:undefined,source);
   let currentTool=phase==='running'&&!waiting?currentResponseToolGroup(state,turnId,toolGroups):undefined;
   const latest=phase==='running'?emissions.at(-1):undefined;
   const currentEmission=!waiting&&latest?.active&&latest.turnId===turnId&&

@@ -33,7 +33,7 @@ test('failed send retains draft and exact command IDs; successful retry clears i
 });
 test('subagent page has no composer; native child links appear only for available local threads',async()=>{
  const f=await fixture('subagent');await f.snapshot({subagents:{one:{id:'one',runId:'run',title:'Visible child',status:'running',childThreadId:'child'},two:{id:'two',runId:'run',title:'No child',status:'running'}}});
- assert.equal(f.contentEl.querySelector('textarea'),null);assert.match(f.contentEl.textContent!,/Visible child/);assert.doesNotMatch(f.contentEl.textContent!,/No child/);await f.view.send();assert.equal(f.sent.length,0);
+ assert.equal(f.contentEl.querySelector('textarea'),null);assert.match(f.contentEl.textContent!,/Visible child/);assert.match(f.contentEl.textContent!,/No child/);assert.equal(f.contentEl.querySelectorAll('a.send-to-t3-subagent').length,1);await f.view.send();assert.equal(f.sent.length,0);
 });
 test('wrong project snapshot disables sending and never renders its messages',async()=>{
  const f=await fixture();await f.snapshot({projectId:'other'});f.input('Do not send');assert.doesNotMatch(f.contentEl.textContent!,/Question/);assert.equal(f.contentEl.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.disabled,true);await f.view.send();assert.equal(f.sent.length,0);
