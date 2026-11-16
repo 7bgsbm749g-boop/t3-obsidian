@@ -1,4 +1,4 @@
-"""Validate and publish an explicitly tagged GitHub release."""
+"""Bump PR versions and prepare and publish tagged GitHub releases."""
 from __future__ import annotations
 
 import argparse
@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from release_policy import release_title, require_target
+from release_policy import bump, release_title, require_target
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = {'main.js': 'dist/main.js', 'manifest.json': 'manifest.json', 'styles.css': 'styles.css'}
@@ -32,7 +32,16 @@ def api(path: str, *, missing: bool = False, payload: dict | None = None):
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 
-def version() -> str:
+def base_version(reference: str) -> str:
+    source = command('git', 'rev-parse', '--verify', '--end-of-options', reference + '^{commit}')
+    if not re.fullmatch(r'[a-f0-9]{40}', source):
+        raise ValueError('Invalid base commit.')
+    previous = json.loads(command('git', 'show', source + ':manifest.json'))['version']
+    require_target(ROOT, previous)
+    return previous
+
+
+def version(base: str | None = None) -> str:
     manifest = json.loads((ROOT / 'manifest.json').read_text())
     selected = manifest['version']
     require_target(ROOT, selected)
@@ -42,6 +51,25 @@ def version() -> str:
         raise ValueError('Align manifest.json, package.json and package-lock.json before releasing.')
     if json.loads((ROOT / 'versions.json').read_text()).get(selected) != manifest['minAppVersion']:
         raise ValueError('versions.json must include the exact release and minimum Obsidian version.')
+    if base is not None and int(selected.rsplit('.', 1)[1]) <= int(base_version(base).rsplit('.', 1)[1]):
+        raise ValueError('Every PR requires a newer 0.0.BUILD than its target. Run github_release.py bump --base origin/main.')
+    return selected
+
+
+def bump_version(base: str) -> str:
+    """Update only version metadata; never create a tag or publish."""
+    names = ('manifest.json', 'package.json', 'package-lock.json', 'versions.json')
+    values = {name: json.loads((ROOT / name).read_text()) for name in names}
+    manifest, package, lock, history = (values[name] for name in names)
+    candidates = [base_version(base), manifest['version'], package['version'], lock['version'], lock['packages']['']['version']]
+    candidates.extend(item for item in history if re.fullmatch(r'0\.0\.(0|[1-9][0-9]*)', item))
+    for candidate in candidates:
+        require_target(ROOT, candidate)
+    selected = bump(ROOT, max(candidates, key=lambda item: int(item.rsplit('.', 1)[1])), 'patch')
+    manifest['version'] = package['version'] = lock['version'] = lock['packages']['']['version'] = selected
+    history[selected] = manifest['minAppVersion']
+    for name, value in values.items():
+        (ROOT / name).write_text(json.dumps(value, indent=2) + '\n')
     return selected
 
 
@@ -71,6 +99,28 @@ def find_release(repo: str, selected: str):
         if len(releases) < 100:
             return None
     raise ValueError('Release lookup exceeded 5,000 entries; refusing to create a duplicate draft.')
+
+
+def prepare(repo: str, selected: str, source: str) -> None:
+    """Release the scheduled main snapshot without changing source versions."""
+    existing = tag_commit(repo, selected)
+    if existing is not None and existing != source:
+        raise ValueError('This version already belongs to another commit. Bump the PR version; never move a release tag.')
+    latest = api(f'repos/{repo}/releases/latest', missing=True)
+    if (latest is not None and re.fullmatch(r'0\.0\.(0|[1-9][0-9]*)', latest['tag_name'])
+            and int(selected.rsplit('.', 1)[1]) < int(latest['tag_name'].rsplit('.', 1)[1])):
+        raise ValueError('The scheduled version is older than the latest release. Update main before releasing.')
+    if existing is not None:
+        release = find_release(repo, selected)
+        if release is not None and not release['draft']:
+            print(f'Already released {selected} at {source}; nothing to publish.')
+            return
+    else:
+        api(f'repos/{repo}/git/refs', payload={'ref': 'refs/tags/' + selected, 'sha': source})
+    # GITHUB_TOKEN-created tags do not trigger push workflows. Dispatch at the
+    # immutable tag explicitly, including after an interrupted preparation run.
+    api(f'repos/{repo}/actions/workflows/release-provenance.yml/dispatches', payload={'ref': selected})
+    print(f'Dispatched release {selected} at {source}.')
 
 
 def publish(repo: str, selected: str, source: str) -> None:
@@ -111,9 +161,15 @@ def publish(repo: str, selected: str, source: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['validate', 'publish'])
+    parser.add_argument('action', choices=['validate', 'bump', 'prepare', 'publish'])
+    parser.add_argument('--base', help='PR target reference. Required for PR validation; bump defaults to origin/main.')
     args = parser.parse_args()
-    selected = version()
+    if args.base is not None and args.action not in ('validate', 'bump'):
+        parser.error('--base applies only to validate and bump.')
+    if args.action == 'bump':
+        print(bump_version(args.base or 'origin/main'))
+        return
+    selected = version(args.base)
     if args.action == 'validate':
         print(selected)
         return
@@ -122,10 +178,12 @@ def main() -> None:
         raise ValueError('Invalid GitHub source identity.')
     if command('git', 'rev-parse', 'HEAD') != source:
         raise ValueError('Checkout does not match the event source commit.')
-    expected = 'refs/tags/' + selected
+    expected = 'refs/heads/main' if args.action == 'prepare' else 'refs/tags/' + selected
     if os.environ['GITHUB_REF'] != expected:
         raise ValueError('Release action does not match the event ref.')
-    publish(repo, selected, source)
+    if args.action == 'prepare' and os.environ.get('GITHUB_EVENT_NAME') != 'schedule':
+        raise ValueError('Only the nightly schedule can prepare an automatic release.')
+    (prepare if args.action == 'prepare' else publish)(repo, selected, source)
 
 
 if __name__ == '__main__':

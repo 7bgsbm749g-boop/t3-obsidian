@@ -6,6 +6,9 @@ on:
     tags: ['0.0.*']
   pull_request:
     branches: [main]
+  schedule:
+    # Nightly at midnight UTC; GitHub may delay scheduled jobs under load.
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
 permissions:
@@ -25,12 +28,39 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Test release tooling without requiring a version bump
+      - name: Test release tooling
         run: python3 -m unittest scripts.test_github_release scripts.test_release_policy
+      - name: Require an aligned version bump for every PR
+        if: github.event_name == 'pull_request'
+        env:
+          T3_PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/github_release.py validate --base "$T3_PR_BASE"
+
+  prepare:
+    if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: nightly-release-preparation
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Test release tooling
+        run: python3 -m unittest scripts.test_github_release scripts.test_release_policy
+      - name: Tag the nightly snapshot and start its release build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/github_release.py prepare
 
   attest:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     concurrency:
       group: public-plugin-release
       queue: max

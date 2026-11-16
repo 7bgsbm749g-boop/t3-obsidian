@@ -69,9 +69,13 @@ notes, threads, apps, and helpers after retaining evidence.
 ## Documentation and skills
 
 Documentation and skill-instruction changes use the same commit-and-PR flow,
-without local installation. Review the diff and relevant links. PRs and merges
-to `main` do not require a version bump, including product, documentation and
-workflow changes. Keep existing version fields until preparing a GitHub release.
+without local installation. Review the diff and relevant links. Every PR needs
+an aligned numeric version newer than its current target, including product,
+documentation and workflow changes. Fetch the target, then use
+`python3 scripts/github_release.py bump --base origin/main` before committing
+the PR. Keep an existing PR bump across test builds and further edits unless
+the target catches up. Never put feature-labelled test versions into tracked
+version metadata or public releases.
 
 The MCP editing skill and server are bundled product assets. Changes to
 `skills/obsidian-t3/SKILL.md`, `agent/mcp_server.py`, or its transport that change
@@ -87,10 +91,12 @@ remaining limits in the PR. Use a draft PR if required validation is incomplete.
 Do not merge the PR unless the user requests it.
 
 `push`, `push to GitHub`, and `push to main` authorize source uploads only.
-Feature-branch and main pushes do not publish, assign versions or create tags.
-GitHub releases are separate, explicitly requested work. Only a GitHub release
-needs a new unused numeric `0.0.BUILD`, aligned across all version files and its
-immutable tag. A deliberate numeric tag push starts the release build;
+Feature-branch and main pushes do not immediately publish or create tags.
+Every PR carries a newer numeric `0.0.BUILD` aligned across all version files.
+The GitHub nightly schedule tags and releases its selected `main` snapshot at
+midnight UTC, skipping an unchanged, already published commit. It never releases
+unmerged PRs or changes a version's existing tag. Explicit early releases remain
+separate work: a deliberate numeric tag push starts the release build;
 workflow dispatch at that tag can retry it. Vault installation and Obsidian
 directory submission or review remain separate. Developing agents finish at
 the PR unless directed otherwise.
@@ -104,8 +110,10 @@ work. See [Review and release checks](docs/review-and-release.md).
 The project remains Alpha. Published versions use numeric `0.0.BUILD`; Alpha is
 the development stage, not a release-title label. Titles use
 `t3-obsidian VERSION`. Keep all version files aligned and preserve published
-history. Ordinary PRs and main merges retain the existing version; assign a new
-one only when preparing a GitHub release. Only explicit user direction can end Alpha.
+history. Every PR needs a version bump; recheck against the current target before
+merge to avoid consuming another PR's number. A bump identifies the source base
+for feature-labelled test builds and does not itself publish. Only explicit user
+direction can end Alpha.
 
 Personal-vault delivery is separate from development validation, PRs, merges
 and GitHub releases. Deliver only when the user explicitly asks to try a build.
