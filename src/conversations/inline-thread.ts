@@ -626,36 +626,23 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     // Initial questions and continuation prompts share steering's history
     // placement. Keep their exact input record separate from turn bindings.
     const history:string[]=[...(initialInput?[renderInitialInput(initialInput,timing?.startedAt)]:[])];let final='';
-    const completedSegments:string[]=[];let segmentStart=timing?.startedAt,segmentNumber=0;
-    const segmentFold=(contents:string[],end?:string,last=false)=>{
-      const finished=!!end,caption=last&&phase==='error'?'Error':last&&phase==='interrupted'?'Interrupted':last&&phase==='cancelled'?'Stopped':finished?(segmentNumber?'Continued for':'Worked for'):'Working for';
-      const duration=segmentStart?runTimer({startedAt:segmentStart,...(end?{finishedAt:end}:{})}):'';
-      const key=encodeURIComponent(`${threadId}:${segmentStart??turnId}:${segmentNumber}`)+(finished?':complete':':active');
-      return `> [!t3-progress]${finished?'-':'+'} **${label} · ${caption}**${duration?' '+duration:''}${!finished?spinner:''} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(contents.length?'\n>\n'+contents.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
-    };
     let toolIndex=0;
     const toolsBefore=(at=Infinity,sequence=Infinity)=>{while(toolIndex<historyRows.length){const row=historyRows[toolIndex],time=Date.parse(row.createdAt??'')||0;if(time>at||time===at&&row.sequence>sequence)break;history.push(historyRows[toolIndex++].body);}};
     for(const [index,piece] of pieces.entries()){
       const message=state.messages.find(message=>message.id===piece.messageId)??all.find(message=>message.id===piece.messageId),createdAt=piece.createdAt??message?.createdAt;if(createdAt)toolsBefore(Date.parse(createdAt),message?.sequence??Infinity);
       if(index===finalIndex)final=assistant(piece.text,piece.messageId);
-      else if(piece.role==='user'){
-        if(!piece.answer&&createdAt&&segmentStart&&Number.isFinite(Date.parse(createdAt))&&Date.parse(createdAt)>=Date.parse(segmentStart)){
-          completedSegments.push(segmentFold(history,createdAt));history.length=0;segmentStart=createdAt;segmentNumber++;
-        }
-        history.push(renderInput(piece));
-      }
+      else if(piece.role==='user')history.push(renderInput(piece));
       else if(piece.text.trim())history.push(growing(piece.messageId)?quoteStreamingResponse(piece.text):quoteResponse(closeOpenFence(piece.text.trim())));
     }
     toolsBefore();
-    // Completed folds become lazy history in native views. Only offer a group
-    // action when its target remains in this active segment's rendered body.
+    // Only offer a group action when its target is in this fold's history.
     const currentHistoryGroup=workRows.find(row=>row.groupId===activityGroup?.id);
     const activity=renderBottom(currentHistoryGroup&&history.includes(currentHistoryGroup.body)?activityGroup?.id:undefined);
     if(activity)history.push(activity.trim());
-    // A steering input starts its own measured continuation segment. Final
-    // answer selection above keeps the existing exact response boundary.
-    const fold=completedSegments.length?[...completedSegments,segmentFold(history,phase==='running'||phase==='sending'?undefined:timing?.finishedAt,true)].join('\n\n'):
-      `> [!t3-progress]${finalReady?'-':'+'} ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`)+(finalReady?':complete':':active')}"></span>`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
+    // Inputs from every source share one response fold and its total timer.
+    // Steering and automatic continuations must not replace its live identity.
+    // Completion alone changes the key so the finished history defaults closed.
+    const fold=`> [!t3-progress]${finalReady?'-':'+'} ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`)+(finalReady?':complete':':active')}"></span>`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
     const status=handoffError||errorStatus||approvals;
     return fold+(htmlBodies.length?'\n\n'+htmlBodies.map(value=>value.body).join('\n\n'):'')+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
   }

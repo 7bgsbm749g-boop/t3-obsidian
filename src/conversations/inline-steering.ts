@@ -98,7 +98,9 @@ export function incomingLabel(message:InlineMessage,local=false):string {
     const record=senders[0],p=isRecord(record.payload)?record.payload:undefined;
     if(record.version===1&&p?.version===1&&p.kind==='agent'&&typeof p.environmentId==='string'&&uuid.test(p.environmentId)&&typeof p.threadId==='string'&&uuid.test(p.threadId)&&typeof p.title==='string'&&p.title.trim()&&p.title.length<=160)return `Agent · ${p.title}`;
   }
-  return local?'You':'User';
+  // Server-delivered task results and agent steers can omit senderThreadId.
+  // Their canonical author still identifies them without guessing from prose.
+  return message.createdBy==='agent'?'Agent':local?'You':'User';
 }
 
 /** A display association never adopts a provider turn or confirms execution.
