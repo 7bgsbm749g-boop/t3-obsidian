@@ -99,8 +99,11 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
         }
       }
     }catch{requestAborted(signal);/* A missing tool detail must not block canonical reply recovery. */}
-    finally{rpc?.close();}
-    while(outputs.size>256||outputCharacters>2_000_000){const key=outputs.keys().next().value!;outputs.delete(key);outputCharacters-=outputSizes.get(key)??0;outputSizes.delete(key);}
+    finally{
+      rpc?.close();
+      // Cancellation must leave the shared cache bounded too.
+      while(outputs.size>256||outputCharacters>2_000_000){const key=outputs.keys().next().value!;outputs.delete(key);outputCharacters-=outputSizes.get(key)??0;outputSizes.delete(key);}
+    }
     return {...snapshot,projection:{...snapshot.projection,messages,turnItems:items.map(i=>hydrated.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??outputs.get(JSON.stringify([snapshot.projection.thread.id,i.id,i.updatedAt]))??i)}};
   }
   const api:T3Api=async(path,payload,options)=>{

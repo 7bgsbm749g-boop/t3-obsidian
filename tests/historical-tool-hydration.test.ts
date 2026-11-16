@@ -118,3 +118,35 @@ test('cancelling stalled tool hydration releases its lease without closing anoth
   assert.equal(calls,2);assert.equal(data(next,item.id).output,'Fresh');other.close();
  }finally{api.disposeUnaryRpc?.();}
 });
+
+for(const mode of ['characters','entries'] as const)test(`cancelled hydration keeps the ${mode} cache bound and reuses only retained revisions`,async()=>{
+ const reads=new Map<string,number>();let snapshot=wire(),release!:(value:unknown)=>void,blocked=false;
+ const items=new Map<string,ReturnType<typeof tool>>(),Socket=settingsSocket(undefined,undefined,(_tag,payload)=>{
+  const id=payload.itemId;reads.set(id,(reads.get(id)??0)+1);
+  if(id.startsWith('stall-')){blocked=true;return new Promise(resolve=>release=resolve);}
+  return {item:{...items.get(id),output:'x'.repeat(mode==='characters'?1_100_000:10),outputOmitted:false}};
+ });
+ const api=t3Api(async path=>path==='/api/auth/websocket-ticket'?{ticket:'fixture'}:snapshot,'https://fixture',url=>new Socket(url) as any);
+ async function cancelRead(details:ReturnType<typeof tool>[],stage:string){
+  blocked=false;snapshot=wire({turnItems:[...details,tool('stall-'+stage,current.id)]});
+  const controller=new AbortController(),pending=readInlineSnapshot({origin:'https://fixture',api},'thread',undefined,undefined,false,false,undefined,controller.signal);
+  const rejected=assert.rejects(pending,/cancelled/);
+  for(let i=0;i<20&&!blocked;i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(blocked,true);controller.abort(Error('Historical preparation cancelled'));await rejected;
+  release({});await new Promise(resolve=>setImmediate(resolve));
+ }
+ let oldest='',latest='';
+ try{
+  for(let round=0;round<(mode==='characters'?1:7);round++){
+   const details=Array.from({length:mode==='characters'?2:39},(_,i)=>tool(`detail-${round}-${i}`,current.id));
+   for(const item of details)items.set(item.id,item);
+   oldest||=details[0].id;latest=details.at(-1)!.id;await cancelRead(details,String(round));
+  }
+  // Keep the probes cancelled too: a successful hydration would trim the old
+  // implementation's oversized cache and hide the cancellation defect.
+  await cancelRead([items.get(latest)!],'retained-probe');
+  assert.equal(reads.get(latest),1,'The most recent exact revision still reuses its detail');
+  await cancelRead([items.get(oldest)!],'evicted-probe');
+  assert.equal(reads.get(oldest),2,'Cancellation must evict entries above the existing cache bound');
+ }finally{api.disposeUnaryRpc?.();}
+});
