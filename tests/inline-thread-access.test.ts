@@ -142,7 +142,7 @@ test('a route changed during stale-access refresh cannot send the waiting operat
   f.plugin.pairedSessions.remote={token:'new',expiresAt:Date.now()+600_000,environmentId:'target',url:f.remote.url};block=true;
   const pending=access.api('/api/probe'),rejected=assert.rejects(pending,/changed/);
   await new Promise(resolve=>setImmediate(resolve));assert.ok(reply);
-  f.remote.url='https://other.example';reply(new Response(JSON.stringify({environmentId:'target',orchestrationProtocolVersion:2})));
+  f.remote.url='https://other.example';reply(new Response(JSON.stringify({environmentId:'target',label:'Synthetic',orchestrationProtocolVersion:2})));
   await rejected;assert.equal(f.requests.filter(r=>r.url.endsWith('/api/probe')).length,0);
  }finally{f.plugin.disposeUnaryOwners();}
 });
