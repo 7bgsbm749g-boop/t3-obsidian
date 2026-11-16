@@ -39,7 +39,7 @@ export class ChatComposer extends Component {
   this.input=el.createEl('textarea',{cls:'t3-composer-input',attr:{'aria-label':'Message T3',placeholder:'Ask anything. @ files, $ skills, / commands',rows:'2'}});this.input.value=draft;
   const controls=el.createDiv({cls:'t3-composer-controls'});this.attach=this.icon(controls,'paperclip','Attach images',()=>this.fileInput.click());
   const spacer=controls.createSpan({cls:'t3-composer-spacer'});spacer.setAttribute('aria-hidden','true');
-  this.modelButton=controls.createEl('button',{cls:'t3-composer-model',attr:{type:'button','aria-label':'Choose model and permissions'}});this.modelButton.addEventListener('click',()=>{void this.openSettings();});
+  this.modelButton=controls.createEl('button',{cls:'clickable-icon t3-composer-model',attr:{type:'button','aria-label':'Choose model and permissions'}});this.modelButton.addEventListener('click',()=>{void this.openSettings();});
   this.mic=this.icon(controls,'mic','Voice input',()=>this.speech());this.submit=this.icon(controls,'arrow-up','Send message',()=>{void (this.running&&!this.hasInput()?this.host.stop():this.host.send()).catch(error=>this.failure(error));});this.submit.addClass('t3-composer-submit');
   this.fileInput=el.createEl('input',{attr:{type:'file',accept:'image/png,image/jpeg,image/gif,image/webp',multiple:'','aria-label':'Choose images'}});this.fileInput.hidden=true;this.fileInput.addEventListener('change',()=>{void this.addFiles(Array.from(this.fileInput.files??[]));this.fileInput.value='';});
   this.input.addEventListener('input',()=>{this.host.changed(this.input.value);this.controls();this.suggest();});

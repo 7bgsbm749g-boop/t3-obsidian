@@ -702,7 +702,7 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 .t3-chat-activity .send-to-t3-response-activity { margin-top: var(--size-4-3); }
 .t3-chat-transcript pre { max-width: 100%; overflow-x: auto; }
 .t3-chat-children { display: flex; flex-wrap: wrap; gap: var(--size-4-1); }
-.t3-chat-child { display: inline-flex; align-items: center; gap: var(--size-4-2); height: auto; background: transparent; box-shadow: none; border: 1px solid var(--background-modifier-border); font-size: var(--font-ui-small); }
+.t3-chat-child { display: flex; align-items: center; justify-content: flex-start; gap: var(--size-4-2); width: 100%; height: auto; background: transparent; box-shadow: none; border: 0; font-size: var(--font-ui-small); text-align: left; }
 .t3-chat-child svg { width: 14px; height: 14px; }
 .t3-chat-child-status { color: var(--text-muted); font-size: var(--font-ui-smaller); }
 .t3-chat-requests:empty, .t3-composer-attachments:empty, .t3-chat-children:empty { display: none; }

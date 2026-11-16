@@ -103,7 +103,7 @@ export class SidebarThreadView extends ItemView {
   async onOpen(){this.closed=false;this.layout();this.connect();}
   async onClose(){this.closed=true;this.epoch++;this.monitor?.stop();this.clearComponents();}
   private clearComponents(){this.disposeRequests?.();this.disposeRequests=undefined;if(this.transcript)this.removeChild(this.transcript);if(this.composer)this.removeChild(this.composer);this.transcript=undefined;this.composer=undefined;this.requestKey='';}
-  private action(parent:HTMLElement,label:string,icon:string|undefined,run:()=>void|Promise<void>){const button=parent.createEl('button',{cls:icon?'clickable-icon t3-chat-icon':'t3-chat-text-action',attr:{type:'button','aria-label':label,title:label}});if(icon)setIcon(button,icon);else button.setText(label);button.addEventListener('click',()=>{void Promise.resolve().then(run).catch(error=>this.owner.report(error));});return button;}
+  private action(parent:HTMLElement,label:string,icon:string|undefined,run:()=>void|Promise<void>){const button=parent.createEl('button',{cls:icon?'clickable-icon t3-chat-icon':'clickable-icon t3-chat-text-action',attr:{type:'button','aria-label':label,title:label}});if(icon)setIcon(button,icon);else button.setText(label);button.addEventListener('click',()=>{void Promise.resolve().then(run).catch(error=>this.owner.report(error));});return button;}
   private layout(){
     this.clearComponents();this.contentEl.empty();this.contentEl.addClass('t3-sidebar-chat');
     const header=this.contentEl.createDiv({cls:'t3-chat-header'});this.title=header.createSpan({cls:'t3-chat-title',text:this.getDisplayText()});
