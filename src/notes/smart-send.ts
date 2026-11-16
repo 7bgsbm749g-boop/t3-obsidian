@@ -16,11 +16,14 @@ interface ResponseText {noteId:string;body:string;before:string;after:string;off
 interface NoteEditText {noteId:string;source:PackedText;added:Span[]}
 export interface SmartCapture {noteId:string;source:PackedText;covered:Span[];parents:string[];bindings?:string[]}
 interface SentText extends SmartCapture {destination:string}
-export interface SmartSendData {version:1;notes:Record<string,NoteIdentity>;responses:Record<string,ResponseText>;noteEdits?:Record<string,NoteEditText>;bodies:Record<string,PackedText>;heads:Record<string,SentText>;retired:string[]}
+export interface SmartRecovery {checkedAt:number;noteId:string;revision:number;documentHash:string;sourceHash:string;responses:string[];proof:string}
+export interface SmartSendData {recoveries?:Record<string,SmartRecovery>;version:1;notes:Record<string,NoteIdentity>;responses:Record<string,ResponseText>;noteEdits?:Record<string,NoteEditText>;bodies:Record<string,PackedText>;heads:Record<string,SentText>;retired:string[]}
 const empty=():SmartSendData=>({version:1,notes:{},responses:{},noteEdits:{},bodies:{},heads:{},retired:[]});
 type Projection=Awaited<ReturnType<typeof computeSourceProjection>>;
 type ProjectionEntry={document:string;signature:string;work:Promise<Projection>;characters:number};
-type HistoryIndex={responses?:SmartSendData['responses'];edits?:SmartSendData['noteEdits'];byNote:Map<string,ResponseText[]>;editsByNote:Map<string,NoteEditText[]>;projections:Map<string,ProjectionEntry>};
+type Preparation=Awaited<ReturnType<typeof computeSmartSend>>;
+type PreparationEntry={projection:Projection;signature:string;generation:readonly unknown[];work:Promise<Preparation>;characters:number};
+type HistoryIndex={preparationGeneration?:number;preparation?:PreparationEntry;responses?:SmartSendData['responses'];edits?:SmartSendData['noteEdits'];byNote:Map<string,ResponseText[]>;editsByNote:Map<string,NoteEditText[]>;projections:Map<string,ProjectionEntry>};
 const historyIndexes=new WeakMap<SmartSendData,HistoryIndex>();
 function historyIndex(data:SmartSendData){
   let index=historyIndexes.get(data);
@@ -46,7 +49,7 @@ function retainPacked(value:PackedText){
   return value;
 }
 /** Snapshot immutable receipt values without serializing their large strings. */
-export function snapshotSmartSend(data:SmartSendData):SmartSendData{return {...data,notes:{...data.notes},responses:{...data.responses},noteEdits:{...data.noteEdits},bodies:{...data.bodies},heads:{...data.heads},retired:[...data.retired]};}
+export function snapshotSmartSend(data:SmartSendData):SmartSendData{return {...data,notes:{...data.notes},responses:{...data.responses},noteEdits:{...data.noteEdits},bodies:{...data.bodies},heads:{...data.heads},...(data.recoveries?{recoveries:{...data.recoveries}}:{}),retired:[...data.retired]};}
 export async function packText(text:string):Promise<PackedText>{
   const hash=contentHash(text);cache(hash,text);const previous=packedTexts.get(hash);if(previous){packedTexts.delete(hash);packedTexts.set(hash,previous);return {...previous};}
   if(text.length>512&&typeof CompressionStream!=='undefined'&&typeof DecompressionStream!=='undefined'){
@@ -77,20 +80,22 @@ export function loadSmartSend(value:unknown):SmartSendData{
     const source=e.source;if(e.added.every(([,to])=>source.encoding!=='text'||to<=source.data.length))out.noteEdits![id]={noteId:e.noteId,source,added:e.added};
   }
   for(const [id,h] of entries(value.heads))if(isRecord(h)&&typeof h.noteId==='string'&&typeof h.destination==='string'&&packed(h.source)&&spans(h.covered)&&strings(h.parents)&&(h.bindings===undefined||strings(h.bindings)))out.heads[id]=h as unknown as SentText;
+  for(const [key,r] of entries(value.recoveries))if(isRecord(r)&&typeof r.checkedAt==='number'&&Number.isSafeInteger(r.checkedAt)&&typeof r.noteId==='string'&&typeof r.revision==='number'&&typeof r.documentHash==='string'&&typeof r.sourceHash==='string'&&strings(r.responses)&&r.responses.length>0&&r.responses.length<=256&&typeof r.proof==='string'&&key===contentHash(JSON.stringify([r.noteId,r.revision,r.documentHash,r.sourceHash]))) (out.recoveries??={})[key]=r as unknown as SmartRecovery;
+  trimRecoveries(out);
   out.retired=Array.isArray(value.retired)?value.retired.filter((id:unknown):id is string=>typeof id==='string'):[];return out;
 }
 /** Immutable receipts merge by union. A confirmed successor retires only the
  * exact predecessors it read; simultaneous device branches both survive. */
 export function mergeSmartSend(...values:unknown[]):SmartSendData{
   const out=empty(),retired=new Set<string>();
-  for(const value of values){const data=loadSmartSend(value);Object.assign(out.bodies,data.bodies);Object.assign(out.responses,data.responses);Object.assign(out.noteEdits!,data.noteEdits);Object.assign(out.heads,data.heads);for(const id of data.retired)retired.add(id);
+  for(const value of values){const data=loadSmartSend(value);Object.assign(out.bodies,data.bodies);Object.assign(out.responses,data.responses);Object.assign(out.noteEdits!,data.noteEdits);Object.assign(out.heads,data.heads);if(data.recoveries)for(const [key,r] of Object.entries(data.recoveries))if(!out.recoveries?.[key]||r.checkedAt>out.recoveries[key].checkedAt||r.checkedAt===out.recoveries[key].checkedAt&&JSON.stringify(r)>JSON.stringify(out.recoveries[key]))(out.recoveries??={})[key]=r;for(const id of data.retired)retired.add(id);
     for(const [id,n] of Object.entries(data.notes)){const old=out.notes[id];
       // A client can see a remote rename as delete/create before settings
       // arrive. Its deletion of the old location cannot erase a known move.
       const move=n.renamedAt??0,previous=old?.renamedAt??0;
       if(!old||move>previous||move===previous&&(n.revision>old.revision||n.revision===old.revision&&JSON.stringify(n)>JSON.stringify(old)))out.notes[id]=n;}}
   for(const h of Object.values(out.heads))for(const id of h.parents)retired.add(id);
-  for(const id of retired)delete out.heads[id];out.retired=[...retired].sort();return out;
+  for(const id of retired)delete out.heads[id];out.retired=[...retired].sort();trimRecoveries(out);return out;
 }
 export function smartNote(data:SmartSendData,path:string,preferred?:string){
   if(preferred&&data.notes[preferred]?.path===path&&!data.notes[preferred].deleted)return preferred;
@@ -265,9 +270,35 @@ export function explicitSelectionText(document:string,[start,end]:Span):string {
   }
   return text+document.slice(cursor,end);
 }
-export async function prepareSmartSend(data:SmartSendData,path:string,destination:string,document:string,scope?:Span){
-  const noteId=smartNote(data,path),projection=await sourceProjection(data,noteId,document),current=projection.text;
-  const identities=noteIdentities(data,noteId),heads=Object.entries(data.heads).filter(([,h])=>identities.has(h.noteId)&&h.destination===destination);
+/** A content plan is not send authority. Only one exact revision is retained;
+ * callers must still perform canonical-note, credential and dispatch checks. */
+export function clearSmartSendPreparation(data:SmartSendData){const index=historyIndexes.get(data);if(index){index.preparation=undefined;index.preparationGeneration=(index.preparationGeneration??0)+1;}}
+export async function prepareSmartSend(data:SmartSendData,path:string,destination:string,document:string,scope?:Span,generation:readonly unknown[]=[]){
+  const index=historyIndex(data),selection=scope&&[...scope] as Span,epoch=[...generation],cacheGeneration=index.preparationGeneration;
+  try{
+    const noteId=smartNote(data,path),projection=await sourceProjection(data,noteId,document);
+    const identities=noteIdentities(data,noteId),heads=Object.entries(data.heads).filter(([,h])=>identities.has(h.noteId)&&h.destination===destination);
+    const signature=JSON.stringify([path,data.notes[noteId],destination,selection,heads]),old=index.preparation;
+    let work:Promise<Preparation>;
+    if(old?.projection===projection&&old.signature===signature&&old.generation.length===epoch.length&&epoch.every((value,n)=>value===old.generation[n]))work=old.work;
+    else{
+      // Snapshot the small mutable receipt fields before asynchronous decoding.
+      work=computeSmartSend(noteId,projection,heads.map(([id,head])=>[id,{...head,source:{...head.source},covered:head.covered.map(([from,to]):Span=>[from,to]),parents:[...head.parents],bindings:[...head.bindings??[]]}]),selection);
+      const entry={projection,signature,generation:epoch,work,characters:document.length+projection.text.length+signature.length};
+      if(index.preparationGeneration===cacheGeneration)index.preparation=entry.characters<=2_000_000?entry:undefined;
+      void work.then(result=>{
+        if(index.preparation!==entry)return;
+        entry.characters+=result.text.length+result.capture.source.data.length+16*(result.ranges.length+result.capture.covered.length);
+        if(entry.characters>2_000_000)index.preparation=undefined;
+      },()=>{if(index.preparation===entry)index.preparation=undefined;});
+    }
+    const plan=await work;
+    // Every consumer owns its capture; queued requests cannot mutate the cache.
+    return {text:plan.text,capture:{...plan.capture,source:{...plan.capture.source},covered:plan.capture.covered.map(([from,to]):Span=>[from,to]),parents:[...plan.capture.parents],bindings:[...plan.capture.bindings??[]]},ranges:plan.ranges.map(([from,to]):Span=>[from,to])};
+  }catch(error){index.preparation=undefined;throw error;}
+}
+async function computeSmartSend(noteId:string,projection:Projection,heads:Array<[string,SentText]>,scope?:Span){
+  const current=projection.text;
   let covered:Span[]=[];for(const [,head] of heads)covered.push(...mappedCoverage(await unpackText(head.source),current,head.covered));covered=union(covered);
   const requested:Span[]=scope?projection.segments.flatMap(segment=>{const from=Math.max(scope[0],segment.rawFrom),to=Math.min(scope[1],segment.rawTo);return to>from?[[segment.from+from-segment.rawFrom,segment.from+to-segment.rawFrom] as Span]:[];}):[[0,current.length]];
   const added=subtractSpans(requested,covered),view=markdownText(current);
@@ -284,4 +315,29 @@ export async function prepareSmartSend(data:SmartSendData,path:string,destinatio
 export function confirmSmartSend(data:SmartSendData,id:string,destination:string,capture:SmartCapture,bindings:string[]=[]){
   if(data.heads[id]||data.retired.includes(id))return;
   data.heads[id]={...capture,destination,bindings:[...new Set([...(capture.bindings??[]),...bindings])]};data.retired=[...new Set([...data.retired,...capture.parents])].sort();for(const parent of data.retired)delete data.heads[parent];
+}
+
+/** Exact note bytes and source membership are required even after a reload.
+ * Receipts reference the provenance records they proved; losing one restores
+ * the blocking recovery gate. No transcript or credential is stored here. */
+export function smartRecovery(data:SmartSendData,path:string,document:string,source:string){
+  const noteId=smartNote(data,path),revision=data.notes[noteId].revision,documentHash=contentHash(document),sourceHash=contentHash(source);
+  return {key:contentHash(JSON.stringify([noteId,revision,documentHash,sourceHash])),noteId,revision,documentHash,sourceHash};
+}
+function recoveryProof(data:SmartSendData,refs:string[]){
+  return contentHash(JSON.stringify(refs.map(id=>[id,data.responses[id]])));
+}
+export function hasSmartRecovery(data:SmartSendData,key:string){
+  const r=data.recoveries?.[key];if(!r)return false;
+  const note=data.notes[r.noteId];
+  return !!note&&!note.deleted&&note.revision===r.revision&&r.responses.every(id=>data.responses[id]?.noteId===r.noteId&&data.bodies[data.responses[id].body])&&r.proof===recoveryProof(data,r.responses);
+}
+export function rememberSmartRecovery(data:SmartSendData,identity:ReturnType<typeof smartRecovery>,responses:string[]){
+  if(!responses.length||responses.length>256)return;
+  const {key,...receipt}=identity;
+  (data.recoveries??={})[key]={...receipt,checkedAt:Date.now(),responses,proof:recoveryProof(data,responses)};trimRecoveries(data);
+}
+function trimRecoveries(data:SmartSendData){
+  const entries=Object.entries(data.recoveries??{}).sort(([a,left],[b,right])=>right.checkedAt-left.checkedAt||a.localeCompare(b));
+  for(const [key] of entries.slice(128))delete data.recoveries![key];
 }

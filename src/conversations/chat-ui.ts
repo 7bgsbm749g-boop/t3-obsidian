@@ -1,3 +1,4 @@
+import type {ThreadSummary} from './thread-target';
 import {clockForDocument} from '../shared/clock';
 import {resolveJobOptions,overrideCount,type JobOverrides,type ResolvedJobOptions,type InlineDefaults} from './job-options';
 import {logEvent,logFailure} from '../app/diagnostics';
@@ -8,7 +9,10 @@ import {ProjectCreationCancelled} from '../projects/project-create-ui';
 import {abortableRead,cancelledRequest} from '../connection/t3-api';
 
 
+/** Display/preparation evidence only. Dispatch always reads authoritative control. */
+export interface SendPreparation {connectionId?:string;environmentId?:string;thread:Pick<ThreadSummary,'id'|'projectId'|'title'|'archivedAt'|'deletedAt'>}
 export interface ChatDestination {
+  preparation?:SendPreparation;
   threadId?:string;
   responseId?:string;
   projectKey?:string;
@@ -25,6 +29,8 @@ export interface ChatHost {
   onBusyChange?(listener:()=>void):()=>void;
   runDefaultSend?(send:()=>Promise<void>):Promise<void>;
   beginSend?(options:ResolvedJobOptions):()=>void;
+  /** Submission feedback; does not imply a destination or dispatch. */
+  beginPreparing?():()=>void;
   getNotePath():string;
   getProjectName(projectKey?:string):string;
   getDefaultProjectKey?():string|undefined;
@@ -189,6 +195,7 @@ class SendDestinationModal extends NoteTabPanel {
     const resolve=()=>resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},this.overrides);
     const returnToDraft=()=>this.open();
     let finishPreview:(()=>void)|undefined;
+    const finishPreparing=this.host.beginPreparing?.();
     try{
       // New destinations can still need a machine or workspace choice.
       // Their send path starts the preview once that choice is resolved.
@@ -207,13 +214,13 @@ class SendDestinationModal extends NoteTabPanel {
       this.close();
       if(target==='existing')await this.host.sendToExisting(prompt,this.projectKey,resolve,returnToDraft);
       else if(target==='new')await this.host.sendToNew(prompt,this.projectKey,resolve);
-      else await this.host.sendChat(prompt,this.projectKey,resolve,undefined,destination);
+      else await this.host.sendChat(prompt,this.projectKey,resolve,undefined,destination?{...destination,preparation:undefined}:undefined);
     }catch(error){
       if(error instanceof ProjectCreationCancelled)return;
       logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target});
       new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`,10000);
       if(!this.opened&&!(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)))this.open();
-    }finally{finishPreview?.();this.choosing=false;this.refreshAvailability?.();}
+    }finally{finishPreview?.();finishPreparing?.();this.choosing=false;this.refreshAvailability?.();}
   }
 }
 
@@ -224,8 +231,10 @@ async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
     if(!(host.hasConfirmedNoteSend?.()??Boolean(host.getDefaultThread(key)||host.steering))){
       new SendDestinationModal(app,host,prompt).open();return;
     }
-    const finishPreview=host.getDefaultThread(key)||host.steering?host.beginSend?.(resolveJobOptions(host.getInlineDefaults?.()??{enabled:false})):undefined;
+    const finishPreparing=host.beginPreparing?.();
+    let finishPreview:(()=>void)|undefined;
     try{
+      finishPreview=host.getDefaultThread(key)||host.steering?host.beginSend?.(resolveJobOptions(host.getInlineDefaults?.()??{enabled:false})):undefined;
       const options=resolveJobOptions(host.getInlineDefaults?.()??{enabled:false});
       const resolve=()=>options;
       if(!host.getDefaultThread(key)&&!host.steering){
@@ -240,7 +249,7 @@ async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
         if(host.hasNewContent&&!await host.hasNewContent(destination,prompt)){new SendDestinationModal(app,host,prompt).open();return;}
       }
       await host.sendChat(prompt,key,resolve,undefined,destination);
-    }finally{finishPreview?.();}
+    }finally{finishPreview?.();finishPreparing?.();}
   };
   try{
     if(host.busy)throw new RequestDeliveryError('Another send is in progress. Wait for it to finish.',false);

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {runInNewContext} from './obsidian-context';
 import {randomUUID,webcrypto} from 'node:crypto';
-import {indexedDB} from 'fake-indexeddb';
+import {indexedDB,IDBObjectStore} from 'fake-indexeddb';
 async function harness(initial:any,deviceId=randomUUID()){
   let current=initial,saves=0,local:any={deviceId,mode:'direct'};
   class Base{}
@@ -311,4 +311,76 @@ test('shared snapshots keep immutable receipt membership while later history gro
  await p.retainSmartChange(()=>rememberResponse(p.smartData(),'Synthetic.md','first','First body.','','',0));
  const snapshot=p.sharedSnapshot();await p.retainSmartChange(()=>rememberResponse(p.smartData(),'Synthetic.md','later','Later body.','','',0));
  assert.equal(Object.keys(snapshot.smartSend.responses).length,1);assert.equal(Object.keys(p.smartData().responses).length,2);
+});
+
+async function storedDevice(key:string){
+  const db=await new Promise<IDBDatabase>((resolve,reject)=>{const r=indexedDB.open('send-to-t3-code',3);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+  try{return await new Promise<any>((resolve,reject)=>{const tx=db.transaction('devices'),r=tx.objectStore('devices').get(key);tx.oncomplete=()=>resolve(r.result);tx.onabort=()=>reject(tx.error);});}
+  finally{db.close();}
+}
+
+test('queued send checkpoints own their snapshots and commit before compatible replicas and shared publication',async t=>{
+  const h=await harness({vaultId:randomUUID()}),p=h.plugin,transactions=new Map<IDBTransaction,string[]>(),published:string[]=[];
+  const put=IDBObjectStore.prototype.put;
+  t.mock.method(IDBObjectStore.prototype,'put',function(this:IDBObjectStore,value:unknown,key?:IDBValidKey){
+    const keys=transactions.get(this.transaction)??[];keys.push(String(key));transactions.set(this.transaction,keys);return put.call(this,value,key);
+  });
+  const save=p.saveData.bind(p);
+  p.saveData=async(value:any)=>{
+    const state=await storedDevice(h.deviceId);published.push(state.pending[0].directPlan.phase);
+    assert.deepEqual(await storedDevice(`smart-send:${h.deviceId}:${p.settings.vaultId}`),JSON.parse(JSON.stringify(value.smartSend)));
+    assert.deepEqual(await storedDevice(`response-bindings:${h.deviceId}:${p.settings.vaultId}`),JSON.parse(JSON.stringify(value.responseBindings)));
+    await save(value);
+  };
+  const pending={id:randomUUID(),directPlan:{phase:'prepared',turn:{commandId:'stable-command',messageId:'stable-message',text:'Immutable prompt'}}};
+  p.settings.pending=[pending];const first=p.save(true);
+  pending.directPlan.phase='created';pending.directPlan.turn.text='Later snapshot';const second=p.save(true);
+  await Promise.all([first,second]);assert.deepEqual(published,['prepared','created']);
+  const groups=[...transactions.values()];
+  assert.equal(groups.filter(keys=>keys.includes(h.deviceId)).every(keys=>keys.length===1),true,'Pending checkpoints stay separate');
+  const replicas=groups.filter(keys=>keys.some(key=>key.startsWith('smart-send:')));
+  assert.equal(replicas.length,2);assert.ok(replicas.every(keys=>keys.length===2&&keys[1].startsWith('response-bindings:')));
+  assert.equal((await storedDevice(h.deviceId)).pending[0].directPlan.turn.commandId,'stable-command');
+});
+
+test('a failed replica batch retains the durable uncertain plan and rolls back provenance before publication',async t=>{
+  const h=await harness({vaultId:randomUUID()}),p=h.plugin;
+  await p.save(true);const previous=await storedDevice(`smart-send:${h.deviceId}:${p.settings.vaultId}`),saves=h.saves();
+  await rememberResponse(p.smartData(),'Synthetic.md','new-receipt','Unsaved body.','','',0);
+  p.settings.pending=[{id:'uncertain',directPlan:{phase:'prepared',turn:{commandId:'same-command',messageId:'same-message'}}}];
+  const put=IDBObjectStore.prototype.put;
+  t.mock.method(IDBObjectStore.prototype,'put',function(this:IDBObjectStore,value:unknown,key?:IDBValidKey){if(String(key).startsWith('response-bindings:'))throw Error('injected replica failure');return put.call(this,value,key);});
+  await assert.rejects(p.save(true),/injected replica failure/);
+  assert.equal(h.saves(),saves,'No shared proof is published after an aborted batch');
+  assert.deepEqual(await storedDevice(`smart-send:${h.deviceId}:${p.settings.vaultId}`),previous,'Earlier puts in the batch roll back');
+  assert.equal((await storedDevice(h.deviceId)).pending[0].directPlan.turn.commandId,'same-command');
+  t.mock.restoreAll();await p.save(true);
+  assert.equal(Object.keys(h.current().smartSend.responses).length,1,'A later save can retry without losing provenance');
+});
+
+test('rapid unrelated state saves skip settlement regrouping but additions, replacements and disable still synchronize',async()=>{
+  const h=await harness({vaultId:'vault',autoSettleThreads:true}),p=h.plugin,synced:unknown[][]=[];
+  p.settlementEvents={sync:(jobs:unknown[])=>synced.push([...jobs]),wake:()=>{}};
+  const job={requestId:'pending',messageId:'message',threadId:'thread',projectId:'project',connection:{executable:'',host:'',transport:'direct',environmentId:'environment'}};
+  p.settings.settlementJobs.push(job);await p.save();assert.equal(synced.length,1);
+  await Promise.all(Array.from({length:40},()=>p.save()));assert.equal(synced.length,1);
+  p.settings.settlementJobs=[...p.settings.settlementJobs];await p.save();assert.equal(synced.length,1,'array replacement with the same targets is unchanged');
+  p.settings.settlementJobs[0]={...job,messageId:'new-turn'};await p.save();assert.equal(synced.length,2);
+  p.settings.settlementJobs.push({...job,requestId:'another'});await p.save();assert.equal(synced.length,3);
+  p.settings.autoSettleThreads=false;await p.save();assert.equal(synced.length,4);assert.equal(synced.at(-1)?.length,0);
+});
+
+test('plugin visibility saves share completion and collapse force requests to the latest preference',async()=>{
+  const h=await harness({vaultId:'vault'}),p=h.plugin,calls:Array<{enabled:boolean;force:boolean}>=[];
+  let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+  p.threadVisibility={};p.settings.hideObsidianThreads=true;
+  p.applyThreadVisibility=async(enabled:boolean,force:boolean)=>{calls.push({enabled,force});if(calls.length===1)await gate;};
+  const first=p.syncThreadVisibility(true);
+  await Promise.all(Array.from({length:40},()=>p.save()));assert.equal(calls.length,1);
+  const waiting=[];for(let i=0;i<40;i++){p.settings.hideObsidianThreads=i%2===0;waiting.push(p.syncThreadVisibility(true));}
+  assert.ok(waiting.every(work=>work===first));release();await Promise.all([first,...waiting]);
+  assert.deepEqual(calls,[{enabled:true,force:true},{enabled:false,force:true}]);
+  await p.save();assert.equal(calls.length,2);
+  p.settings.paired=[{id:'new',environmentId:'remote',url:'https://fixture',name:'new'}];await p.save();await p.visibilityWork;
+  assert.deepEqual(calls.at(-1),{enabled:false,force:false},'route changes still synchronize');
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {loadSmartSend,mergeSmartSend,prepareSmartSend,explicitSelectionText,confirmSmartSend,rememberResponse,rememberNoteEdits,smartNote,sourceProjection,moveSmartNotes,packText,unpackText} from '../src/notes/smart-send';
+import {clearSmartSendPreparation,loadSmartSend,mergeSmartSend,prepareSmartSend,explicitSelectionText,confirmSmartSend,rememberResponse,rememberNoteEdits,smartNote,sourceProjection,moveSmartNotes,packText,unpackText} from '../src/notes/smart-send';
 import {responseAnchor} from '../src/responses/native-response-projection';
 import {findRunImport,runImportReceipt} from '../src/conversations/run-import-receipt';
 const path='Jobs/Smart.md',destination='machine/project/thread';
@@ -271,4 +271,112 @@ test('unchanged source snapshots reuse compression without sharing mutable packe
   const text='Unique packed source for reuse.\n'.repeat(1200),first=await packText(text);first.data='Caller changed its copy';
   const second=await packText(text);assert.equal(calls,1);assert.equal(await unpackText(second),text);assert.notEqual(second.data,first.data);
  }finally{globalThis.CompressionStream=Original;}
+});
+
+test('same revision preparations coalesce compressed capture and return independent mutable values',async()=>{
+ const Original=globalThis.CompressionStream;let calls=0;
+ globalThis.CompressionStream=class extends Original {constructor(format:CompressionFormat){super(format);calls++;}};
+ try{
+  const data=fresh(),document='Preparation coalescing with Markdown **source**.\n'.repeat(100),scope: [number,number]=[0,document.length];
+  const plans=await Promise.all(Array.from({length:4},()=>prepareSmartSend(data,path,destination,document,scope)));
+  assert.equal(calls,1);for(const plan of plans)assert.deepEqual(plan,plans[0]);
+  plans[0].capture.source.data='modified';plans[0].capture.covered[0][0]=99;plans[0].capture.parents.push('modified');plans[0].capture.bindings!.push('modified');plans[0].ranges[0][0]=99;
+  assert.deepEqual(await prepareSmartSend(data,path,destination,document,scope),plans[1]);
+ }finally{globalThis.CompressionStream=Original;}
+});
+test('preparation reuses destination coverage even when decoded heads exceed the cache budget',async()=>{
+ const data=fresh(),noteId=smartNote(data,path);
+ for(let n=0;n<4;n++)data.heads['head-'+n]={noteId,destination,source:await packText('Historical '+n+' '+String.fromCharCode(75+n).repeat(600000)),covered:[[0,600000]],parents:[],bindings:['binding-'+n]};
+ const Original=globalThis.DecompressionStream;let reads=0;
+ globalThis.DecompressionStream=class extends Original {constructor(format:CompressionFormat){super(format);reads++;}};
+ try{
+  const first=await prepareSmartSend(data,path,destination,'Exact new user revision.');assert.equal(first.text,'Exact new user revision.');assert.equal(reads,4);
+  for(let n=0;n<3;n++)assert.deepEqual(await prepareSmartSend(data,path,destination,'Exact new user revision.'),first);
+  assert.equal(reads,4,'same-revision checks must not repeat destination decoding/diff work');
+  data.heads.unrelated={...data.heads['head-0'],destination:'unrelated'};
+  assert.deepEqual(await prepareSmartSend(data,path,destination,'Exact new user revision.'),first);assert.equal(reads,4);
+ }finally{globalThis.DecompressionStream=Original;}
+});
+test('preparation observes confirmations, scope, destination, typing and merged coverage branches',async()=>{
+ const data=fresh(),document='First paragraph.\n\nSecond paragraph.',scope: [number,number]=[0,16];
+ const first=await prepareSmartSend(data,path,destination,document,scope);
+ assert.equal(first.text,'First paragraph.');confirmSmartSend(data,'first',destination,first.capture,['first-binding']);
+ assert.equal((await prepareSmartSend(data,path,destination,document,scope)).text,'');
+ const next=await prepareSmartSend(data,path,destination,document);assert.equal(next.text.trim(),'Second paragraph.');assert.deepEqual(next.capture.parents,['first']);assert.deepEqual(next.capture.bindings,['first-binding']);
+ assert.equal((await prepareSmartSend(data,path,'new destination',document)).text,document);
+ assert.equal((await prepareSmartSend(data,path,destination,document,[18,document.length])).text,'Second paragraph.');
+ assert.match((await prepareSmartSend(data,path,destination,document+'\nUser typing.')).text,/User typing\./);
+ const remote=loadSmartSend(JSON.parse(JSON.stringify(data))),branch=await prepareSmartSend(remote,path,destination,document,[18,document.length]);confirmSmartSend(remote,'remote',destination,branch.capture,['remote-binding']);
+ Object.assign(data,mergeSmartSend(data,remote));
+ const merged=await prepareSmartSend(data,path,destination,document);assert.equal(merged.text,'');assert.deepEqual(merged.capture.parents,['remote']);assert.deepEqual(merged.capture.bindings,['first-binding','remote-binding']);
+ assert.equal(explicitSelectionText(document,scope),'First paragraph.','explicit resends still use the full selected source');
+});
+test('failed destination preparation can retry after a repaired head arrives',async()=>{
+ const data=fresh(),noteId=smartNote(data,path),source=await packText('Repairable original.');
+ data.heads.broken={noteId,destination,source:{hash:'f'.repeat(64),encoding:'text',data:'bad content'},covered:[[0,source.data.length]],parents:[]};
+ await assert.rejects(prepareSmartSend(data,path,destination,'Repairable original.'),/content check/);
+ data.heads.broken={...data.heads.broken,source};
+ assert.equal((await prepareSmartSend(data,path,destination,'Repairable original.')).text,'');
+});
+
+
+test('preparation keeps only one revision and fences dialog, route, credential and settings generations',async()=>{
+ const data=fresh(),noteId=smartNote(data,path);
+ for(let n=0;n<4;n++)data.heads['head-'+n]={noteId,destination,source:await packText('Generation '+n+' '+String.fromCharCode(65+n).repeat(600000)),covered:[[0,600000]],parents:[]};
+ const Original=globalThis.DecompressionStream;let reads=0;
+ globalThis.DecompressionStream=class extends Original {constructor(format:CompressionFormat){super(format);reads++;}};
+ try{
+  const dialog={},credential={},settings={},generation=[dialog,'route-one',credential,settings];
+  const prepare=(document='Unsent revision.',epoch=generation)=>prepareSmartSend(data,path,destination,document,undefined,epoch);
+  await prepare();assert.equal(reads,4);await prepare();assert.equal(reads,4);
+  for(const epoch of [[{},'route-one',credential,settings],[dialog,'route-two',credential,settings],[dialog,'route-one',{},settings],[dialog,'route-one',credential,{}]]){await prepare(undefined,epoch);assert.equal(reads%4,0);}
+  assert.equal(reads,20);await prepare();assert.equal(reads,24);
+  await prepare('Edited revision.');assert.equal(reads,28);await prepare();assert.equal(reads,32,'returning to an older revision recomputes');
+  clearSmartSendPreparation(data);await prepare();assert.equal(reads,36,'cancelled/finished attempts discard their entry');
+  clearSmartSendPreparation(data);const pending=prepare();clearSmartSendPreparation(data);await pending;assert.equal(reads,40);await prepare();assert.equal(reads,44,'in-flight work cannot repopulate a cancelled generation');
+  const oversized='x'.repeat(1_000_001)+'Oversized revision.';await prepare(oversized);assert.equal(reads,48);await prepare(oversized);assert.equal(reads,52,'oversized revisions are not retained');
+ }finally{globalThis.DecompressionStream=Original;}
+});
+test('failed preparations are never retained even when the same corrupt receipt is retried',async()=>{
+ const data=fresh(),noteId=smartNote(data,path);
+ data.heads.bad={noteId,destination,source:{hash:'e'.repeat(64),encoding:'text',data:'corrupt'},covered:[],parents:[]};
+ for(let n=0;n<2;n++)await assert.rejects(prepareSmartSend(data,path,destination,'Same failed revision.'),/content check/);
+ delete data.heads.bad;assert.equal((await prepareSmartSend(data,path,destination,'Same failed revision.')).text,'Same failed revision.');
+});
+
+test('historical recovery receipts require exact note/source revisions and retained provenance after reload',async()=>{
+  const {smartRecovery,hasSmartRecovery,rememberSmartRecovery}=await import('../src/notes/smart-send');
+  let data=loadSmartSend(undefined);const document='User request\n\n> Synthetic reply\n';
+  await rememberResponse(data,'History.md','history:thread:answer','> Synthetic reply','User request\n\n','\n',14);
+  const identity=smartRecovery(data,'History.md',document,'environment/project/thread/binding');
+  rememberSmartRecovery(data,identity,Object.keys(data.responses));
+  data=mergeSmartSend(loadSmartSend(JSON.parse(JSON.stringify(data))),undefined);
+  assert.equal(hasSmartRecovery(data,identity.key),true);
+  assert.equal(hasSmartRecovery(data,smartRecovery(data,'History.md',document+'Edit','environment/project/thread/binding').key),false);
+  assert.equal(hasSmartRecovery(data,smartRecovery(data,'History.md',document,'different-source').key),false);
+  const changed=loadSmartSend(JSON.parse(JSON.stringify(data)));Object.values(changed.responses)[0].offset++;
+  assert.equal(hasSmartRecovery(changed,identity.key),false);
+  const missing=loadSmartSend(JSON.parse(JSON.stringify(data)));delete missing.bodies[Object.values(missing.responses)[0].body];
+  assert.equal(hasSmartRecovery(missing,identity.key),false);
+  moveSmartNotes(data,'History.md','Moved.md');assert.equal(hasSmartRecovery(data,identity.key),false);
+});
+
+test('negative historical recovery checks do not persist and positive receipts remain bounded',async()=>{
+  const {smartRecovery,hasSmartRecovery,rememberSmartRecovery}=await import('../src/notes/smart-send');
+  const data=loadSmartSend(undefined),identity=smartRecovery(data,'Empty.md','User request','checked-source');
+  rememberSmartRecovery(data,identity,[]);assert.equal(hasSmartRecovery(loadSmartSend(data),identity.key),false);
+  await rememberResponse(data,'Empty.md','history:answer','> Reply','','',0);const refs=Object.keys(data.responses);
+  for(let n=0;n<160;n++)rememberSmartRecovery(data,smartRecovery(data,'Empty.md','User request '+n,'checked-source'),refs);
+  assert.equal(Object.keys(mergeSmartSend(data).recoveries??{}).length,128);
+});
+
+
+test('newer checked recovery receipts survive old settings and bounded-cache merges',async()=>{
+ const {smartRecovery,rememberSmartRecovery}=await import('../src/notes/smart-send');
+ const data=loadSmartSend(undefined),identity=smartRecovery(data,'History.md','User request','source');await rememberResponse(data,'History.md','history:answer','> Reply','','',0);const refs=Object.keys(data.responses);rememberSmartRecovery(data,identity,refs);
+ const old=loadSmartSend(JSON.parse(JSON.stringify(data)));old.recoveries![identity.key].checkedAt=1;data.recoveries![identity.key].checkedAt=2;
+ assert.equal(mergeSmartSend(data,old).recoveries![identity.key].checkedAt,2);
+ for(let n=0;n<150;n++){const next=smartRecovery(data,'History.md','Revision '+n,'source');rememberSmartRecovery(data,next,refs);data.recoveries![next.key].checkedAt=100+n;}
+ const latest=smartRecovery(data,'History.md','Latest revision','source');rememberSmartRecovery(data,latest,refs);
+ assert.ok(mergeSmartSend(data,old).recoveries![latest.key]);
 });

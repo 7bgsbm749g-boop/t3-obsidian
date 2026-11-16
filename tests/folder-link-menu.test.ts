@@ -1,4 +1,4 @@
-import {rememberResponse} from '../src/notes/smart-send';
+import {rememberResponse,prepareSmartSend} from '../src/notes/smart-send';
 import {moveSmartNotes} from '../src/notes/smart-send';
 import {commandId} from '../src/connection/direct';
 import {applyThreadItem} from '../src/conversations/inline-thread';
@@ -92,7 +92,7 @@ async function folderMenuHarness(initial?:any){
     addSeparator(){return this;}
     showAtPosition(){shownMenu=this;return this;}
   }
-  const api={setIcon:()=>{},Plugin,Menu,Platform:{isMobile:true},TFolder:Folder,TFile:File,Modal,FuzzySuggestModal:Modal,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Setting,Notice:class{constructor(text:string){notices.push(text);}}};
+  const api={setIcon:()=>{},Plugin,Menu,Platform:{isMobile:true},TFolder:Folder,TFile:File,Modal,FuzzySuggestModal:Modal,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Setting,Notice:class{constructor(text:string){notices.push(text);}hide(){}}};
   const module={exports:{} as any};
   runInNewContext(await readFile('dist/main.js','utf8'),{
     module,exports:module.exports,window:{innerWidth:1000,innerHeight:700},require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,
@@ -318,10 +318,10 @@ test('a single paired remote No project works without local CLI discovery or a c
   assert.equal(reads.length,1,'Opening the machine picker must not send or read a project');
   picker.close();picker.onChooseItem(h.plugin.vaultMachines()[0]);
   assert.equal((await choosing).project.connectionId,'c','Native close-before-choose order must retain the selected machine');
-  assert.equal(reads.length,2);
+  assert.equal(reads.length,1,'Selecting the same machine reuses only its verified catalog identity');
   const cancelled=h.plugin.noProjectTarget(),rejected=assert.rejects(cancelled,/Machine selection was cancelled/);
   h.modals.at(-1).close();await rejected;
-  assert.equal(reads.length,2,'Cancelling must not resolve a project');
+  assert.equal(reads.length,1,'Cancelling must not resolve a project');
  }finally{h.plugin.onunload();}
 });
 
@@ -929,4 +929,74 @@ test('ordinary note send preserves YAML task IDs without a Taskflow integration'
   assert.equal(sent[0].prompt.split('12345678-1234-4234-8234-123456789abc').length-1,1);
   assert.doesNotMatch(sent[0].prompt,/Taskflow task ID:/);
  }finally{h.plugin.onunload();}
+});
+
+test('historical recovery stages obsolete work, joins the send gate, and reuses only checked receipts after reload',async()=>{
+ const h=await folderMenuHarness(),p=h.plugin,path='History.md',thread='history-thread';
+ let document=`User request\n\n<!-- send-to-t3-fold-key ${thread} -->\n\n> Synthetic reply\n`,reads=0,closes=0,release:()=>void=()=>{};
+ const snapshot={snapshotSequence:1,thread:{id:thread,projectId:'project',messages:[{id:'answer',role:'assistant',text:'Synthetic reply',streaming:false}]}};
+ p.app.vault.getFileByPath=()=>({path});p.app.vault.read=async()=>document;
+ p.settings.noteThreads=[{notePath:path,threadId:thread,projectId:'project',environmentId:'env',connectionId:'c',workspaceRoot:'/writing',selectedAt:new Date().toISOString()}];
+ p.inlineThreadAccess=async()=>({origin:'https://fixture',api:async()=>{reads++;await new Promise<void>(resolve=>{release=resolve;});return snapshot;},close:()=>{closes++;}});
+ // The next save reads a canonical key order from disk. It must not look
+ // like changed source membership after provenance is published.
+ await p.save(true);
+ const originalFence=p.smartRecoveryFence(path);
+ const recovery=p.recoverSmartReplies(path,document,true);for(let n=0;n<12;n++)await Promise.resolve();
+ const sendGate=p.recoverSmartReplies(path,document);let passed=false;void sendGate.then(()=>{passed=true;});
+ await Promise.resolve();assert.equal(passed,false);assert.equal(reads,1);assert.equal(Object.keys(p.smartData().responses).length,0);
+ release();await Promise.all([recovery,sendGate]);assert.equal(p.smartRecoveryFence(path),originalFence,'Settings key order is not a source change');assert.equal(closes,1);assert.equal(reads,1);assert.equal(Object.keys(p.smartData().responses).length,1);
+ assert.ok(h.notices.some(text=>text.includes('Checking saved replies')));
+ const plan=await prepareSmartSend(p.smartData(),path,'target',document);assert.equal(plan.text.includes('Synthetic reply'),false);assert.ok(plan.text.includes('User request'));
+ const saved=JSON.parse(JSON.stringify(p.smartData()));p.smartReplica=saved;p.settings.smartSend=saved;
+ await p.recoverSmartReplies(path,document);assert.equal(reads,1,'Reloaded checked bytes need no source read');
+ document+='\nNew instruction';const obsolete=p.recoverSmartReplies(path,document,true);for(let n=0;n<12;n++)await Promise.resolve();
+ const before=JSON.stringify(p.smartData());p.smartRecovering.get(path).controller.abort();
+ await assert.rejects(obsolete,{name:'AbortError'});release();await Promise.resolve();
+ assert.equal(JSON.stringify(p.smartData()),before,'Canceled work must not publish provenance');assert.equal(closes,2);
+});
+
+
+test('a note changed without an editor event refuses late historical provenance',async()=>{
+ const h=await folderMenuHarness(),p=h.plugin,path='Changed history.md',thread='history-thread';
+ const captured=`User request\n\n<!-- send-to-t3-fold-key ${thread} -->\n\n> Synthetic reply\n`;
+ let current=captured,release:()=>void=()=>{};
+ p.app.vault.getFileByPath=()=>({path});p.app.vault.read=async()=>current;
+ p.settings.noteThreads=[{notePath:path,threadId:thread,projectId:'project',environmentId:'env',connectionId:'c',workspaceRoot:'/writing',selectedAt:new Date().toISOString()}];
+ p.inlineThreadAccess=async()=>({origin:'https://fixture',api:async()=>{await new Promise<void>(resolve=>{release=resolve;});return {snapshotSequence:1,thread:{id:thread,projectId:'project',messages:[{id:'answer',role:'assistant',text:'Synthetic reply',streaming:false}]}};},close:()=>{}});
+ const work=p.recoverSmartReplies(path,captured,true);for(let n=0;n<12;n++)await Promise.resolve();
+ current='New user draft';release();await assert.rejects(work,/note changed/);
+ assert.equal(Object.keys(p.smartData().responses).length,0);assert.equal(Object.keys(p.smartData().recoveries??{}).length,0);
+});
+
+test('historical recovery discards changed ownership and source membership during an awaited canonical read',async()=>{
+ for(const change of ['account','vault','device','source','session'] as const){
+  const h=await folderMenuHarness(),p=h.plugin,path='Fenced history.md',thread='history-thread';
+  const document=`User request\n\n<!-- send-to-t3-fold-key ${thread} -->\n\n> Synthetic reply\n`;
+  let release:()=>void=()=>{};
+  p.app.vault.getFileByPath=()=>({path});p.app.vault.read=async()=>document;
+  p.settings.noteThreads=[{notePath:path,threadId:thread,projectId:'project',environmentId:'env',connectionId:'c',workspaceRoot:'/writing',selectedAt:new Date().toISOString()}];
+  p.inlineThreadAccess=async()=>({origin:'https://fixture',api:async()=>{await new Promise<void>(resolve=>{release=resolve;});return {snapshotSequence:1,thread:{id:thread,projectId:'project',messages:[{id:'answer',role:'assistant',text:'Synthetic reply',streaming:false}]}};},close:()=>{}});
+  const work=p.recoverSmartReplies(path,document,true);for(let n=0;n<12;n++)await Promise.resolve();
+  if(change==='account')p.nativeAccount={userId:'other',sessionId:'new'};
+  if(change==='vault')p.settings.vaultId='other';
+  if(change==='device')p.deviceId='other';
+  if(change==='source')p.settings.noteThreads[0].environmentId='other';
+  if(change==='session')p.pairedSessions.c.expiresAt++;
+  release();await assert.rejects(work,/preparation changed/);
+  assert.equal(Object.keys(p.smartData().responses).length,0,change);
+  assert.equal(Object.keys(p.smartData().recoveries??{}).length,0,change);
+  p.onunload();
+ }
+});
+
+test('Stop unload cancels historical access setup and closes its late result without publishing provenance',async()=>{
+ const h=await folderMenuHarness(),p=h.plugin,path='Stopped history.md',thread='history-thread';
+ const document=`<!-- send-to-t3-fold-key ${thread} -->\n\n> Synthetic reply\n`;let release:(value:any)=>void=()=>{},closes=0,reads=0;
+ p.settings.noteThreads=[{notePath:path,threadId:thread,projectId:'project',environmentId:'env',connectionId:'c',workspaceRoot:'/writing',selectedAt:new Date().toISOString()}];
+ p.inlineThreadAccess=()=>new Promise(resolve=>{release=resolve;});
+ const work=p.recoverSmartReplies(path,document,true);for(let n=0;n<12;n++)await Promise.resolve();
+ p.onunload();await assert.rejects(work,{name:'AbortError'});
+ release({origin:'https://fixture',api:async()=>{reads++;},close:()=>{closes++;}});for(let n=0;n<12;n++)await Promise.resolve();
+ assert.equal(closes,1);assert.equal(reads,0);assert.equal(Object.keys(p.smartData().responses).length,0);
 });

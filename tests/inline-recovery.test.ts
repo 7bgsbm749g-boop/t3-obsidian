@@ -88,3 +88,10 @@ test('projects without Git checkpoints finalize an older response at a confirmed
   assert.equal(turnPhase({...state,activities:[{id:'err',turnId:'original',kind:'runtime.error',summary:'Provider failed',createdAt:'2026-09-30T11:59:59.000Z'}]},'original'),'complete');
   assert.equal(turnPhase({...state,activities:[{id:'question',turnId:'original',kind:'user-input.requested',summary:'Answer needed',payload:{requestId:'q',questions:[{id:'q',header:'Q',question:'Which?',options:[]}]}}]},'original'),'running');
 });
+
+test('new exact evidence while a recent read is in flight avoids starting stale full recovery',async()=>{
+ let version=0;const paths:string[]=[];
+ const access:ThreadAccess={origin:'https://synthetic.invalid',api:async path=>{paths.push(path);version++;return {snapshotSequence:1,page:{hasMore:true},thread:{id:'thread',projectId:'project',messages:[],activities:[]}};}};
+ await readInlineSnapshot(access,'thread','project',()=>({messageIds:['prompt'],turnIds:[],recoveryVersion:String(version)}));
+ assert.equal(paths.length,1);
+});

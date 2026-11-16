@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {DirectInlinePreview,type DirectInlineUpdate,type PreviewClock} from '../src/responses/direct-inline-preview';
 import type {ResponseRecord} from '../src/responses/response-record';
-import type {ThreadStreamCallbacks,ThreadStreamItem,watchThread} from '../src/conversations/thread-stream';
+import {readInlineSnapshot,type InlineHistoryTargets,type ThreadStreamCallbacks,type ThreadStreamItem,type watchThread} from '../src/conversations/thread-stream';
 import {type ResponseStorageFiles} from '../src/responses/response-record';
 import {T3ResponseTooLargeError} from '../src/connection/t3-response-limits';
 import {normalizeV2StreamItem,normalizeV2Snapshot} from '../src/connection/orchestration-v2';
@@ -20,8 +20,8 @@ class TestClock implements PreviewClock {
 function fixture(paced=true,verify?:(path:string,payload?:any)=>Promise<any>){
   const request={version:4 as const,nativeProjection:true,id:randomUUID(),vaultId:randomUUID(),host:{environmentId:'host',workspaceRoot:'/vault',directory:'.obsidian/inline'},initialOwner:randomUUID(),notePath:'Note.md',threadId:'thread',messageId:'prompt',projectId:'project',threadEnvironmentId:'host',initialHash:'hash',createdAt:'2026-10-06T03:00:00Z',intermediateMode:'keep' as const};
   const record:ResponseRecord={request,coordinated:true,migrating:true,owner:'host',epoch:1,revision:0,expiresAt:Number.MAX_SAFE_INTEGER};
-  const streams:Array<{callbacks:ThreadStreamCallbacks;cursor:()=>number|undefined;stopped:boolean}>=[],updates:DirectInlineUpdate[]=[];
-  const watch:typeof watchThread=(_id,_access,callbacks,_socket,_targets,replay)=>{const stream={callbacks,cursor:replay!.afterSequence,stopped:false};streams.push(stream);return {stop:()=>{stream.stopped=true;}};};
+  const streams:Array<{callbacks:ThreadStreamCallbacks;cursor:()=>number|undefined;targets:()=>InlineHistoryTargets;stopped:boolean}>=[],updates:DirectInlineUpdate[]=[];
+  const watch:typeof watchThread=(_id,_access,callbacks,_socket,_targets,replay)=>{const stream={callbacks,cursor:replay!.afterSequence,targets:_targets!,stopped:false};streams.push(stream);return {stop:()=>{stream.stopped=true;}};};
   const clock=new TestClock();
   const preview=new DirectInlinePreview(record,async()=>{if(verify)return {origin:'https://fixture',api:verify};throw Error('No file or writer access in preview fixture');},update=>updates.push(update),watch,clock);
   const snapshot=(sequence=2,text='First paragraph',messageId='prompt',turnId='turn'):ThreadStreamItem=>({kind:'snapshot',snapshot:{snapshotSequence:sequence,thread:{id:'thread',projectId:'project',title:'Test',messages:[{id:messageId,role:'user',text:'Question',turnId,streaming:false},{id:'answer',role:'assistant',text,turnId,streaming:true}],activities:[],latestTurn:{turnId,state:'running',messageId},session:{status:'running',activeTurnId:turnId}}}});
@@ -342,7 +342,8 @@ test('host checkpoint import preserves newer device prose and cannot advance the
 });
 test('an exact delivery receipt binds a null-turn prompt without waiting for the host receipt write',()=>{
   const h=fixture();h.preview.tick(true);const snapshot=h.snapshot() as any;snapshot.snapshot.thread.messages[0].turnId=null;delete snapshot.snapshot.thread.latestTurn.messageId;snapshot.snapshot.thread.latestTurn.requestedAt=h.record.request.createdAt;
-  h.item(snapshot);h.preview.delivery({messageId:'prompt',requestedAt:h.record.request.createdAt,sequence:1,turnId:'turn'});
+  h.item(snapshot);h.preview.accepted('prompt');assert.doesNotMatch(h.updates.at(-1)?.body??'',/First paragraph/);
+  h.preview.delivery({messageId:'prompt',requestedAt:h.record.request.createdAt,sequence:1,turnId:'turn'});
   assert.match(h.updates.at(-1)!.body,/First paragraph/);h.preview.dispose();
 });
 test('stop and completed host records close the direct stream without producing a new save',()=>{
@@ -405,4 +406,76 @@ test('a completed import hands pending questions to a live watch and observes an
  h.preview.tick(true);await settle();assert.equal(h.streams.length,1,'Ticks must not duplicate the shared watcher');
  const resolved=readThreadSnapshot(normalizeV2Snapshot({...stockImported(),snapshotSequence:9}));resolved.thread.v2Requests={'pending-import':{id:'pending-import',kind:'user-input',status:'dismissed',resolvedAt:'2026-10-06T03:03:00Z'}};
  h.item({kind:'snapshot',snapshot:resolved});h.clock.advance(80);await settle();assert.equal(h.updates.at(-1)?.questionsPending,false);assert.equal(h.updates.at(-1)?.completionVerified,true);assert.doesNotMatch(h.updates.at(-1)!.body,/Continue\?|t3-question:/);h.preview.dispose();assert.equal(h.streams[0].stopped,true);
+});
+
+
+test('a proven unsent prompt avoids history while unrelated old targets still recover',async()=>{
+ const h=fixture(false),paths:string[]=[];
+ h.preview.pendingSend('prompt');h.preview.tick(true);
+ const access={origin:'https://synthetic.invalid',api:async(path:string)=>{paths.push(path);return {snapshotSequence:2,page:{hasMore:path.includes('turnLimit=')},thread:{id:'thread',projectId:'project',messages:[],activities:[]}};}};
+ await readInlineSnapshot(access,'thread','project',h.streams[0].targets());
+ assert.equal(paths.length,1);assert.deepEqual(h.streams[0].targets().messageIds,[]);
+ assert.deepEqual(h.updates,[],'Latest unrelated output cannot bind the unsent prompt');
+ h.preview.delivery({messageId:'other',requestedAt:'2026-10-06T03:01:00Z',sequence:2});
+ assert.deepEqual(h.streams[0].targets().messageIds,[],'A different acknowledgement cannot clear the hint');
+ h.record.state={steering:[{messageId:'old-steering',text:'Earlier instruction'}]} as any;h.preview.update(h.record);
+ await readInlineSnapshot(access,'thread','project',h.streams[0].targets());
+ assert.equal(paths.length,3,'An old steering target still requires canonical history');
+ h.preview.delivery({messageId:'prompt',requestedAt:'2026-10-06T03:00:00Z',sequence:3});
+ assert.ok(h.streams[0].targets().messageIds.includes('prompt'));
+ h.preview.dispose();
+});
+
+test('a recovered preview defaults to full recovery and an exact live binding retires the unsent hint',()=>{
+ const old=fixture(false);old.preview.tick(true);assert.deepEqual(old.streams[0].targets().messageIds,['prompt']);old.preview.dispose();
+ const h=fixture(false);h.preview.pendingSend('prompt');h.preview.tick(true);
+ h.item(h.snapshot());assert.equal(h.updates.at(-1)?.turnId,'turn');
+ assert.deepEqual(h.streams[0].targets().messageIds,['prompt']);h.preview.dispose();
+});
+
+
+test('fresh unsent proof invalidates a history search started by an earlier recovery reader',()=>{
+ const h=fixture(false);h.preview.tick(true);const before=h.streams[0].targets().recoveryVersion;
+ h.preview.pendingSend('prompt');assert.notEqual(h.streams[0].targets().recoveryVersion,before);
+ assert.deepEqual(h.streams[0].targets().messageIds,[]);
+ const reserved=h.streams[0].targets().recoveryVersion;h.preview.pendingSend('prompt');
+ assert.equal(h.streams[0].targets().recoveryVersion,reserved,'Repeated adoption must not keep canceling a needed old read');h.preview.dispose();
+});
+
+test('pending creation suppresses only an exact missing snapshot; acceptance wakes without clearing real errors',async()=>{
+ const {PendingThreadError}=await import('../src/conversations/thread-stream');
+ const {SignInRequiredError}=await import('../src/connection/sign-in-state');
+ const h=fixture(false);const issues:any[]=[],wakes:number[]=[];let callbacks!:ThreadStreamCallbacks;
+ const preview=new DirectInlinePreview(h.record,async()=>{throw Error('No transport');},()=>{},(_id,_access,cb)=>{callbacks=cb;return {stop(){},refresh(){wakes.push(1);}};},h.clock,issue=>issues.push(issue));
+ preview.sending(h.record.request.messageId);preview.tick(true);
+ callbacks.reconnecting(new PendingThreadError('thread'));assert.equal(issues.length,0);
+ callbacks.reconnecting(new PendingThreadError('another-thread'));assert.equal(issues.at(-1).kind,'reconnecting');
+ preview.accepted('wrong-message');assert.equal(wakes.length,0);
+ preview.delivery({messageId:'prompt',requestedAt:h.record.request.createdAt,sequence:2});assert.equal(wakes.length,1);assert.equal(issues.at(-1).kind,'reconnecting');
+ callbacks.item(h.snapshot());assert.equal(issues.at(-1),undefined);
+ callbacks.reconnecting(new PendingThreadError('thread'));assert.equal(issues.at(-1).kind,'reconnecting','After exact observation a 404 is no longer pending');
+ callbacks.reconnecting(new SignInRequiredError());assert.equal(issues.at(-1).kind,'sign-in-required');preview.accepted('prompt');assert.equal(wakes.length,1);
+ preview.dispose();h.preview.dispose();
+});
+
+
+test('locally proven unsent adoption marks pending status before storage-triggered watchers can read',async()=>{
+ const {PendingThreadError}=await import('../src/conversations/thread-stream');
+ const h=fixture(false),issues:any[]=[],wakes:string[]=[];let callbacks!:ThreadStreamCallbacks;
+ const preview=new DirectInlinePreview(h.record,async()=>{throw Error('No transport');},()=>{},(_id,_access,cb)=>{callbacks=cb;return {stop(){},refresh(_read,message){wakes.push(message!);}};},h.clock,issue=>issues.push(issue));
+ preview.pendingSend('prompt');preview.tick(true);callbacks.reconnecting(new PendingThreadError('thread'));assert.equal(issues.length,0);
+ callbacks.reconnecting(Error('Offline'));assert.equal(issues.at(-1)?.kind,'reconnecting');
+ preview.pendingSend();preview.accepted('prompt');assert.deepEqual(wakes,['prompt']);assert.equal(issues.at(-1)?.kind,'reconnecting','acceptance keeps an actual offline error until data arrives');
+ callbacks.item(h.snapshot());assert.equal(issues.at(-1),undefined);preview.dispose();h.preview.dispose();
+});
+
+test('a settled failed attempt ends exact-missing suppression without inventing acceptance',async()=>{
+ const {PendingThreadError}=await import('../src/conversations/thread-stream');
+ const h=fixture(false),issues:any[]=[];let callbacks!:ThreadStreamCallbacks;
+ const preview=new DirectInlinePreview(h.record,async()=>{throw Error('No transport');},()=>{},(_id,_access,cb)=>{callbacks=cb;return {stop(){}};},h.clock,issue=>issues.push(issue));
+ try{
+  preview.pendingSend('prompt');preview.tick(true);callbacks.reconnecting(new PendingThreadError('thread'));assert.equal(issues.length,0);
+  preview.pendingSend();callbacks.reconnecting(new PendingThreadError('thread'));
+  assert.equal(issues.at(-1)?.kind,'reconnecting');
+ }finally{preview.dispose();h.preview.dispose();}
 });

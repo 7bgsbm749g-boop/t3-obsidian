@@ -9,13 +9,13 @@ import {sha256} from '@noble/hashes/sha2';
 import {proofKey,proof} from './dpop';
 import type {Connection,Request} from '../app/bridge';
 import type {InlineStartRequest} from '../conversations/inline-thread';
-import {existingThreadTurn} from '../conversations/thread-target';
+import {existingThreadTurn,responseOwnsActiveTurn} from '../conversations/thread-target';
 import {readNewThreadDefaults} from '../conversations/model-defaults';
 import {T3HttpError} from '../conversations/thread-access-cache';
 import {t3Api,abortableRead,requestAborted,type AbortableT3Api,type T3RequestOptions} from './t3-api';
 import {T3_PROTOCOL_VERSION,T3_PROTOCOL_HEADER} from './orchestration-v2';
 import type {ThreadAccess} from '../conversations/thread-stream';
-import type {SocketFactory} from './t3-rpc';
+import type {SocketFactory,T3UnaryRpcOwner} from './t3-rpc';
 import {PLUGIN_PERMISSIONS,hasPluginPermissions} from './environment-permissions';
 import {ensureNoProject} from '../projects/no-project';
 import {AUTO_THREAD_TITLE,promptThreadTitle} from '../conversations/thread-title';
@@ -81,13 +81,14 @@ export async function pair(address:string,code:string,fetcher?:Fetcher,expectedE
  if(!permissions.every(scope=>granted.includes(scope)))throw Error('This pairing link does not permit MCP setup. Create a fresh T3 pairing link with agent configuration access, then reconnect this computer.');
  return {descriptor:d,session:{token:token.access_token,expiresAt:Date.now()+token.expires_in*1000,environmentId:d.environmentId,url:input.url,permissions:granted}};
 }
-export async function environmentApi(c:Connection,s:PairedSession|undefined,fetcher?:Fetcher,makeSocket?:SocketFactory,signal?:AbortSignal){
+export async function environmentApi(c:Connection,s:PairedSession|undefined,fetcher?:Fetcher,makeSocket?:SocketFactory,signal?:AbortSignal,unary?:T3UnaryRpcOwner){
  const url=endpoint(c.url||'');
  if(!s||!s.token||s.url!==url||s.environmentId!==c.environmentId)throw Error('Pair this connection on this device first. Session credentials do not sync.');
  if(s.expiresAt<=Date.now()+5000)throw Error('T3 pairing session expired. Pair this device again using a fresh T3 link.');
+ s={...s,permissions:s.permissions?.slice()};
  const d=await descriptor(url,fetcher,signal);if(d.environmentId!==c.environmentId)throw Error('The address now points to a different T3 environment. Nothing was sent; add it as a new connection.');
  const key=s.dpopKeyId?await proofKey(s.dpopKeyId,false):undefined;
- const api=t3Api(async(path:string,payload?:unknown,options?:T3RequestOptions)=>{requestAborted(options?.signal);if(!path.startsWith('/api/')||path.includes('..')||path.includes('\\'))throw Error('Invalid T3 API path.');const target=url+path;const method=payload===undefined?'GET':'POST';return jsonHttp(target,{method,signal:options?.signal,headers:{Authorization:(key?'DPoP ':'Bearer ')+s.token,'Content-Type':'application/json',[T3_PROTOCOL_HEADER]:String(T3_PROTOCOL_VERSION),...(key?{DPoP:await proof(key,method,target,s.token)}:{})},...(payload===undefined?{}:{body:JSON.stringify(payload)})},fetcher,options?.compactImport===true);},url,makeSocket);
+ const api=t3Api(async(path:string,payload?:unknown,options?:T3RequestOptions)=>{requestAborted(options?.signal);if(!path.startsWith('/api/')||path.includes('..')||path.includes('\\'))throw Error('Invalid T3 API path.');const target=url+path;const method=payload===undefined?'GET':'POST';return jsonHttp(target,{method,signal:options?.signal,headers:{Authorization:(key?'DPoP ':'Bearer ')+s.token,'Content-Type':'application/json',[T3_PROTOCOL_HEADER]:String(T3_PROTOCOL_VERSION),...(key?{DPoP:await proof(key,method,target,s.token)}:{})},...(payload===undefined?{}:{body:JSON.stringify(payload)})},fetcher,options?.compactImport===true);},url,makeSocket,s.expiresAt-5000,unary);
  const transport=fetcher??browserFetch;let catalog=threadCatalogs.get(transport);if(!catalog){catalog=new ThreadCatalogCache();threadCatalogs.set(transport,catalog);}
  const identity=JSON.stringify([url,c.environmentId,s.token,s.expiresAt,s.dpopKeyId,s.accountId,s.permissions]),cache=catalog;
  const routed:import('./t3-rpc').T3Api=async(path,payload,options)=>{
@@ -96,8 +97,10 @@ export async function environmentApi(c:Connection,s:PairedSession|undefined,fetc
    if(path==='/api/orchestration/shell'&&payload===undefined)cache.observe(identity,work);
    return await work;
   }
-  catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403))cache.delete(identity);throw error;}
+  catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403)){cache.delete(identity);api.disposeUnaryRpc?.();}throw error;}
  };
+ routed.acquireUnaryRpc=api.acquireUnaryRpc;
+ routed.disposeUnaryRpc=api.disposeUnaryRpc;
  routed.cachedImportThreads=projectId=>cache.read(identity,projectId);
  routed.importCacheIdentity=cache.scope(identity);
  routed.prepareImportCatalog=signal=>{requestAborted(signal);return cache.prepare(identity,()=>routed('/api/orchestration/shell',undefined,{signal}));};
@@ -154,6 +157,7 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
   if(r.threadId){
    const thread=readMetadataSnapshot(await api('threads/'+encodeURIComponent(r.threadId)+'?controlOnly=true')).thread;
    const turn=existingThreadTurn(thread,{threadId:r.threadId,projectId:r.project.id},commandId(r.id,'turn'),{messageId:commandId(r.id,'message'),role:'user',text:r.prompt,attachments:r.attachments??[],...(r.context?{context:r.context}:{})});
+   if(r.inlineSteering?.activeTurnId&&!responseOwnsActiveTurn(thread,{turnId:r.inlineSteering.activeTurnId}))throw Error('This response no longer owns the active turn. Reopen the chooser before sending.');
    r.directPlan={protocolVersion:2,hash,environmentId:r.connection.environmentId!,phase:'created',create:null,turn,...(thread.session?.status==='running'&&thread.session.activeTurnId?{observedActiveTurnId:thread.session.activeTurnId}:{})};
   }else{
   const projects=readWireProjects(await api('shell'));const project=projects.find(p=>p.id===r.project.id);if(!project)throw Error('Project no longer exists. Scan this connection again.');

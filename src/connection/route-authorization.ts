@@ -1,15 +1,16 @@
 import {isRecord} from '../shared/values';
 import type {T3Api} from './t3-rpc';
+import {connectionDeadline} from './connection-setup';
 
 /** Cache only identity and authorization setup. Each operation still reads its
  * current server state, and a failed setup never remains a usable candidate. */
 export class RouteAuthorizationCache<T> {
  private entries=new Map<string,{work:Promise<T>;until:number}>();
  constructor(private now=()=>Date.now()){}
- open(key:string,create:()=>Promise<T>,force=false,validUntil=Infinity):Promise<T>{
+ open(key:string,create:(signal:AbortSignal)=>Promise<T>,force=false,validUntil=Infinity,parent?:AbortSignal):Promise<T>{
   const current=this.entries.get(key);
   if(!force&&current&&current.until>this.now())return current.work;
-  const work=Promise.resolve().then(create),entry={work,until:Math.min(this.now()+30_000,validUntil)};
+  const work=connectionDeadline(create,parent),entry={work,until:Math.min(this.now()+30_000,validUntil)};
   this.entries.set(key,entry);
   while(this.entries.size>16)this.entries.delete(this.entries.keys().next().value!);
   void work.catch(()=>{if(this.entries.get(key)===entry)this.entries.delete(key);});

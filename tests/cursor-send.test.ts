@@ -9,6 +9,7 @@ import {responseAnchor} from '../src/responses/native-response-projection';
 import {applyThreadItem} from '../src/conversations/inline-thread';
 import {installPaletteChat} from '../src/conversations/palette-chat';
 import {loadSmartSend} from '../src/notes/smart-send';
+import {sendDirect} from '../src/connection/direct';
 
 const require=createRequire(import.meta.url);
 const compiled=build({stdin:{contents:"export {default} from './src/app/main'; export {nativeResponses} from './src/responses/native-response-manager'; export {InlineChatManager} from './src/conversations/inline-chat';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
@@ -26,23 +27,23 @@ async function fixture(document='First paragraph.\n\nLater paragraph.'){
   return {plugin,app,view,editor,file,exports:module.exports,value:()=>value,cursor:(offset:number)=>{cursor=offset;selection=undefined;},select:(from:number,to:number)=>{selection=[from,to];},active:(yes:boolean)=>{active=yes;},mode:(next:string)=>{mode=next;}};
 }
 
-test('whole-note Send waits for its destination before showing the indicator and clears failed preparation',async()=>{
+test('whole-note Send shows Preparing before discovery, keeps Sending after selection, and clears failure',async()=>{
   const h=await fixture(),document=h.value(),events:string[]=[];
-  h.plugin.sendPreviews={begin:()=>{events.push('show');return ()=>events.push('clear');}};
+  h.plugin.sendPreviews={preparing:()=>{events.push('preparing');return ()=>events.push('prepared');},begin:()=>{events.push('show');return ()=>events.push('clear');}};
   let resolve!:(target:any)=>void;const gate=new Promise(done=>{resolve=done;});
   h.plugin.chatTarget=async()=>{events.push('lookup');return gate;};
   h.plugin.projectReadinessError=()=>undefined;
   h.plugin.send=async()=>{events.push('send');throw Error('Synthetic preparation failure');};
   const sending=h.plugin.sendNote(h.file,undefined,undefined,true);
   assert.equal(h.value(),document);
-  await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(events,['lookup']);
+  await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(events,['preparing','lookup']);
   resolve({project:{id:'scratch'},link:{id:'no-project'}});await assert.rejects(sending,/Synthetic preparation failure/);
-  assert.deepEqual(events,['lookup','show','send','clear']);assert.equal(h.value(),document);
+  assert.deepEqual(events,['preparing','lookup','show','send','clear','prepared']);assert.equal(h.value(),document);
 });
 
 test('Inline Off does not create a preparation block',async()=>{
   const h=await fixture(),original=h.value();
-  h.plugin.sendPreviews={begin:()=>assert.fail('Disabled inline streaming must not create a preview')};
+  h.plugin.sendPreviews={preparing:()=>()=>{},begin:()=>assert.fail('Disabled inline streaming must not create a preview')};
   h.plugin.chatTarget=async()=>{throw Error('Synthetic cancellation');};
   await assert.rejects(h.plugin.sendNote(h.file,undefined,undefined,true,undefined,{inline:{enabled:false,intermediateMode:'collapse',finalAnswerFormat:'formatted'}}),/Synthetic cancellation/);
   assert.equal(h.value(),original);
@@ -199,4 +200,72 @@ for(const state of ['completed','running'])for(const cursor of [3,'First paragra
   assert.ok(at>h.value().indexOf('First paragraph.'));assert.ok(at<h.value().indexOf('Later paragraph.'));
   const once=h.value();assert.equal((await h.plugin.importRun(h.file.path,project,threadId,messageId,false,insertion)).duplicate,true);
   assert.equal(h.value(),once);assert.equal(registered.length,2);assert.equal(registered[0].id,registered[1].id);
+});
+
+
+test('verified No project reuse is exact and invalidates on removal, workspace or identity changes',async()=>{
+  const h=await fixture(),p=h.plugin;
+  const paired={id:'machine',environmentId:'env',url:'https://example.invalid',name:'Synthetic'};
+  p.settings={...p.settings,paired:[paired],directProjects:[],vaultId:'vault'};
+  let reads=0;p.readNoProjectProject=async()=>{reads++;return {id:'scratch',title:'No project',workspaceRoot:'/scratch'};};
+  const target=()=>p.noProjectTarget('thread:no-project:machine',false);
+  const first=await target();assert.equal(reads,1);assert.equal((await target()).project,first.project);assert.equal(reads,1);
+  p.settings.directProjects=[];await target();assert.equal(reads,2);
+  p.settings.directProjects[0].workspaceRoot='/changed';await target();assert.equal(reads,3);
+  paired.environmentId='different';await target();assert.equal(reads,4);
+  paired.url='https://other.invalid';await target();assert.equal(reads,5);
+  p.cloudGeneration++;await target();assert.equal(reads,6);
+  p.settings.vaultId='other';await target();assert.equal(reads,7);
+  p.nativeAccount={userId:'other-account'};await target();assert.equal(reads,8);
+  p.settings.paired=[];await assert.rejects(target(),/Reconnect/);assert.equal(reads,8);
+});
+
+test('a late No project result cannot repopulate another connection identity',async()=>{
+  const h=await fixture(),p=h.plugin;
+  p.settings={...p.settings,paired:[{id:'machine',environmentId:'env',url:'https://example.invalid'}],directProjects:[],vaultId:'vault'};
+  let release!:(value:any)=>void;p.readNoProjectProject=()=>new Promise(resolve=>{release=resolve;});
+  const pending=p.noProjectTarget('thread:no-project:machine',false);p.cloudGeneration++;
+  release({id:'scratch',title:'No project',workspaceRoot:'/scratch'});
+  await assert.rejects(pending,/connection changed/);assert.equal(p.noProjectProjects.size,0);assert.equal(p.settings.directProjects.length,0);
+});
+
+test('only matching per-send title metadata skips the duplicate read; other paths read fresh',async()=>{
+  const h=await fixture(),connection={connectionId:'c',environmentId:'e'},project={id:'p'};
+  const thread={id:'t',projectId:'p',title:'Current title',session:{status:'ready'}};
+  const preparation=h.plugin.titlePreparation(connection,thread);
+  let reads=0;h.plugin.readChatThread=async()=>{reads++;return {...thread,title:'Fresh title'};};
+  assert.equal(await h.plugin.requestTitle(connection,project,'t','Note.md',preparation),'Current title');
+  assert.equal(reads,0);
+  assert.equal(preparation.thread.session,undefined,'the context must not retain control authority');
+  thread.title='Changed after capture';assert.equal(preparation.thread.title,'Current title');
+  const invalids=[undefined,{...preparation,environmentId:'other'},{...preparation,connectionId:'other'},{...preparation,thread:{...thread,id:'other'}},{...preparation,thread:{...thread,projectId:'other'}},{...preparation,thread:{...thread,archivedAt:'now'}},{...preparation,thread:{...thread,deletedAt:'now'}}];
+  for(const invalid of invalids)assert.equal(await h.plugin.requestTitle(connection,project,'t','Note.md',invalid),'Fresh title');
+  assert.equal(reads,invalids.length);
+  h.plugin.readChatThread=async()=>{throw Error('Unavailable thread');};
+  await assert.rejects(h.plugin.requestTitle(connection,project,'t','Note.md'),/Unavailable thread/);
+});
+
+for(const race of ['unchanged','approval','stopped'])test(`a prepared title keeps fresh dispatch authority when ${race}`,async()=>{
+  const h=await fixture(),project={id:'p',title:'P',workspaceRoot:'/'},connection={connectionId:'c',environmentId:'e',host:'direct',executable:''};
+  const thread={id:'t',projectId:'p',title:'Selected title',session:{status:'ready'}};
+  const preparation=h.plugin.titlePreparation(connection,thread);
+  h.plugin.settings.pending=[];h.plugin.chatTarget=async()=>({project,link:{}});h.plugin.connection=()=>connection;
+  h.plugin.projectReadinessError=()=>undefined;h.plugin.assertNoteMode=async()=>{};h.plugin.folderLinkIntent=()=>({});
+  h.plugin.readChatThread=async()=>assert.fail('No second title-only read');
+  h.plugin.recordSendFailure=()=>{};h.plugin.failRequest=async()=>{};
+  let controls=0,mutations=0;const persisted:any[]=[];
+  h.plugin.save=async()=>{persisted.push(structuredClone(h.plugin.settings.pending));};
+  h.plugin.dispatch=async(request:any)=>{
+    assert.equal(request.title,'Selected title');assert.ok(persisted.length);
+    await sendDirect(request,undefined,h.plugin.save,undefined,{origin:'https://synthetic.example',api:async(path:string,payload?:unknown)=>{
+      if(path.includes('/threads/')){controls++;return {thread:{...thread,hasPendingApprovals:race==='approval'}};}
+      assert.equal(path,'/api/orchestration/dispatch');assert.ok(payload);
+      assert.ok(persisted.some(items=>items[0]?.directPlan?.phase==='created'),'the exact plan is durable before mutation');
+      mutations++;return {sequence:1};
+    }});
+  };
+  h.plugin.prepareImages=async(markdown:string)=>{if(race==='stopped')h.plugin.stopped=true;return {markdown,attachments:[]};};
+  const sending=h.plugin.sendChat('Question',undefined,{threadId:'t',preparation});
+  if(race==='unchanged')await sending;else await assert.rejects(sending,race==='approval'?/approval/:/disabled/);
+  assert.equal(controls,race==='stopped'?0:1);assert.equal(mutations,race==='unchanged'?1:0);assert.equal(h.plugin.busy,false);
 });

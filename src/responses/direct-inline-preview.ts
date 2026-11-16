@@ -5,7 +5,7 @@ import {applyThreadItem,inlineBindingCheckpoint,inlineTurnMessages,restoreInline
 import {followInlineQuestions,inlineQuestionPhase,questionConversationInputs} from '../interaction/inline-questions';
 import {mergeProse,observeIncoming,steeringBoundary} from '../conversations/inline-steering';
 import {completionTime,finalAnswerFormat,intermediateMode} from './response-presentation';
-import {watchThread,readInlineSnapshot,type ThreadAccess,type ThreadStreamItem} from '../conversations/thread-stream';
+import {watchThread,readInlineSnapshot,PendingThreadError,type ThreadAccess,type ThreadStreamItem,type ThreadWatch} from '../conversations/thread-stream';
 import {logEvent,logFailure,diagnosticEnabled} from '../app/diagnostics';
 import {streamMemory} from '../app/stream-memory-diagnostics';
 import {checkFinalResponse,finalResponseKey} from './final-response';
@@ -28,7 +28,8 @@ export const DIRECT_DISPLAY_INTERVAL_MS=80;
 export class DirectInlinePreview {
   private state:InlineThreadState={messages:[],activities:[]};
   private record:ResponseRecord;
-  private monitor?:{stop():void};
+  private monitor?:ThreadWatch;
+  private pendingDelivery?:string;
   private generation=0;
   private prose:InlineThreadState['messages']=[];
   private turnIds:string[]=[];
@@ -56,11 +57,14 @@ export class DirectInlinePreview {
   private nextInterruptionVerification=0;
   private connectionIssue?:ResponseConnectionIssue;
   private importedRead=false;
+  private unsentMessageId?:string;
+  private recoveryVersion=0;
   private nextImportedRead=0;
   private importedSnapshot?:ThreadSnapshot;
   constructor(record:ResponseRecord,private access:()=>Promise<ThreadAccess>,private receive:(update:DirectInlineUpdate)=>void,private watch:Watch=watchThread,private clock:PreviewClock=displayClock,private connectionChanged?:(issue?:ResponseConnectionIssue)=>void,private readImported=readImportRun){this.record=record;this.minimumSequence=record.state?.bindingCheckpoint?.sequence??0;this.update(record);}
   private diagnosticContext(){const request=this.record.request;return {role:'response' as const,bindingId:request.id,threadId:request.threadId,environmentId:request.threadEnvironmentId,projectId:request.projectId,messageId:this.messageId(),turnId:turnForMessage(this.state,this.messageId()),afterSequence:this.state.sequence,generation:this.generation};}
   private connectionFailed(error:unknown,cause:string){
+    if(error instanceof PendingThreadError&&error.threadId===this.record.request.threadId&&this.pendingDelivery===this.messageId())return;
     const issue:ResponseConnectionIssue={kind:signInRequired(error)?'sign-in-required':'reconnecting'};
     if(this.connectionIssue?.kind!==issue.kind){logEvent('stream.direct.reconnecting',{...this.diagnosticContext(),cause,issue:issue.kind,error},'warning');this.connectionIssue=issue;this.connectionChanged?.(issue);}
     if(issue.kind==='sign-in-required')this.suspend();
@@ -85,10 +89,24 @@ export class DirectInlinePreview {
   restore(resume:DirectInlineUpdate['resume']){if(this.stopped||!resume)return;this.update({...this.record,state:{...this.record.state!,...resume}});if(this.state.messages.length)this.schedule(true);}
   get notePath(){return this.record.state?.notePath??this.record.request.notePath;}
   steeringProse(){return steeringBoundary(this.prose);}
+  /** Only the sender can prove a command has not yet been attempted. This
+   * hint is local and never survives reload or substitutes for run evidence. */
+  pendingSend(messageId?:string){if(messageId&&messageId!==this.unsentMessageId)this.recoveryVersion++;this.unsentMessageId=messageId;if(messageId)this.sending(messageId);else this.pendingDelivery=undefined;}
+  sending(messageId:string){if(!this.stopped&&!turnForMessage(this.state,messageId)&&!this.state.starts?.[messageId])this.pendingDelivery=messageId;}
   delivery(delivery:InlineStartRequest){
     if(this.stopped)return;
+    const request=this.record.request;
+    if(delivery.messageId!==this.messageId()&&!request.localSteering?.some(input=>input.messageId===delivery.messageId))return;
+    if(delivery.messageId===this.unsentMessageId)this.unsentMessageId=undefined;
+    if(delivery.messageId===this.messageId())this.recoveryVersion++;
     this.state=restoreInlineBindings(this.state,{starts:{[delivery.messageId]:delivery}});
     this.schedule(true);
+    this.accepted(delivery.messageId);
+  }
+  accepted(messageId:string){
+    if(this.stopped||messageId!==this.messageId()&&!this.record.request.localSteering?.some(input=>input.messageId===messageId))return;
+    // Acceptance is a reason to read, not proof that an offline reader recovered.
+    if(this.connectionIssue?.kind!=='sign-in-required')this.monitor?.refresh?.(true,messageId);
   }
   seedImport(snapshot:ThreadSnapshot){
     const request=this.record.request,turn=request.importTurn;
@@ -140,7 +158,7 @@ export class DirectInlinePreview {
       item:item=>{if(!this.stopped&&this.generation===generation)this.item(item);},
       reconnecting:error=>{if(!this.stopped&&this.generation===generation)this.connectionFailed(error,'stream-or-snapshot');},
       failure:error=>{if(!this.stopped&&this.generation===generation&&responseTooLarge(error)){this.failure??={kind:'response-too-large',operation:'snapshot'};if(!this.render())this.receive({request:this.record.request,messageId:this.messageId(),sequence:this.state.sequence??0,body:this.record.state?.body??'> **T3 · Working**',failure:this.failure,completionVerified:false});}},
-    },undefined,()=>({messageIds:[this.messageId(),...this.record.state?.steering?.map(input=>input.messageId)??[],...this.follows?.filter(item=>!item.dismissed).map(item=>`async-answer:${item.requestId}`)??[]],turnIds:this.turnIds}),{afterSequence:()=>this.state.sequence??0,pollImmediately:true,pollSnapshots:()=>this.state.protocolVersion!==2&&this.failure?.operation!=='snapshot',diagnostics:()=>this.diagnosticContext()});
+    },undefined,()=>({messageIds:[...(this.messageId()===this.unsentMessageId?[]:[this.messageId()]),...this.record.state?.steering?.map(input=>input.messageId)??[],...this.follows?.filter(item=>!item.dismissed).map(item=>`async-answer:${item.requestId}`)??[]],turnIds:this.turnIds,recoveryVersion:String(this.recoveryVersion)}),{afterSequence:()=>this.state.sequence??0,pollImmediately:true,pollSnapshots:()=>this.state.protocolVersion!==2&&this.failure?.operation!=='snapshot',diagnostics:()=>this.diagnosticContext()});
   }
   private messageId(){return this.record.state?.pendingMessageId??this.record.state?.messageId??this.record.request.messageId;}
   private item(item:ThreadStreamItem,urgent=false){
@@ -152,7 +170,11 @@ export class DirectInlinePreview {
     if(item.kind==='event'&&item.event?.aggregateId!==undefined&&item.event.aggregateId!==request.threadId)return;
     if(this.connectionIssue){logEvent('stream.direct.recovered',{...this.diagnosticContext(),source:item.kind,receivedSequence:sequence});this.connectionIssue=undefined;this.connectionChanged?.();}
     this.receivedAt=this.clock.now();
+    const bound=turnForMessage(this.state,this.messageId());
     const next=applyThreadItem(this.state,item).state;if(next===this.state)return;this.state=next;
+    if(!bound&&turnForMessage(this.state,this.messageId()))this.recoveryVersion++;
+    if(this.unsentMessageId&&turnForMessage(this.state,this.unsentMessageId))this.unsentMessageId=undefined;
+    if(this.pendingDelivery&&turnForMessage(this.state,this.pendingDelivery))this.pendingDelivery=undefined;
     this.schedule(urgent||item.kind==='event'&&((item.event?.type==='thread.run-updated'&&['completed','interrupted'].includes(item.event.payload?.status))||(item.event?.type==='thread.session-set'&&item.event.payload?.session?.status!=='running')||(item.event?.type==='thread.message-sent'&&item.event.payload?.streaming===false)));
   }
   private schedule(urgent=false){

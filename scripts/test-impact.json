@@ -1,5 +1,8 @@
 {
   "dependencies": {
+    "tests/smart-send.test.ts": [
+      "tests/native/smart-send-preparation-lab.ts"
+    ],
     "tests/response-catch-up.test.ts": [
       "tests/native/response-catch-up-lab.ts"
     ],
