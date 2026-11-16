@@ -27,7 +27,7 @@ export function readThreadEvent(value:unknown):ThreadEvent{
   if(!isRecord(value.payload))throw Error('T3 returned an invalid thread event payload.');
   return value as unknown as ThreadEvent;
 }
-export interface InlineSnapshot {snapshotSequence?:number;page?:{hasMore:boolean};thread:Omit<InlineThreadState,'activities'>&{activities?:InlineActivity[];id?:string;projectId?:string}}
+export interface InlineSnapshot {snapshotSequence?:number;page?:{hasMore:boolean};thread:Omit<InlineThreadState,'activities'>&{activities?:InlineActivity[];id?:string;projectId?:string;archivedAt?:string|null;deletedAt?:string|null}}
 export type ThreadStreamItem={kind:'snapshot';snapshot:InlineSnapshot}|{kind:'event';event:ThreadEvent}|{kind:'synchronized'};
 export function readThreadStreamItem(value:unknown):ThreadStreamItem{
   if(!isRecord(value))throw Error('T3 returned an invalid stream item.');
