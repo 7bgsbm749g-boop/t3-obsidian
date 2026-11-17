@@ -117,7 +117,7 @@ async function folderMenuHarness(initial?:any){
   };
   const setting=(modal:Modal,name:string)=>{const all=(el:Element):Setting[]=>[...el.settings,...el.children.flatMap(all)];const item=all(modal.contentEl).find(item=>item.name===name);assert.ok(item);return item as Setting;};
   const button=(modal:Modal,text:string)=>{const all=(el:Element):any[]=>[el,...el.settings.flatMap(setting=>setting.controls),...el.children.flatMap(all)];const item=all(modal.contentEl).find(control=>control.text===text);assert.ok(item);return item as Control;};
-  return {plugin,open,setting,button,shared,notices,deviceId,project,modals,addFolder,shownMenu:()=>shownMenu,setProjects:(value:any[])=>{projectsReply=value;},setThreads:(value:any[])=>{threadsReply=value;},folderMenu:(root=false)=>{const menu=new Menu();const selected=new Folder();if(root){selected.path='/';selected.name='QLO2';}fileMenu(menu,selected,'file-explorer-context-menu');return menu;},fileMenu:(path:string,mobile:boolean)=>{api.Platform.isMobile=mobile;const menu=new Menu();const file=new File(path);fileMenu(menu,file,'file-explorer-context-menu');return {menu,file};},networkRequests:()=>networkRequests,setFailSave:(value:boolean)=>{failSave=value;}};
+  return {rawDestinationContext:destinationContext,plugin,open,setting,button,shared,notices,deviceId,project,modals,addFolder,shownMenu:()=>shownMenu,setProjects:(value:any[])=>{projectsReply=value;},setThreads:(value:any[])=>{threadsReply=value;},folderMenu:(root=false)=>{const menu=new Menu();const selected=new Folder();if(root){selected.path='/';selected.name='QLO2';}fileMenu(menu,selected,'file-explorer-context-menu');return menu;},fileMenu:(path:string,mobile:boolean)=>{api.Platform.isMobile=mobile;const menu=new Menu();const file=new File(path);fileMenu(menu,file,'file-explorer-context-menu');return {menu,file};},networkRequests:()=>networkRequests,setFailSave:(value:boolean)=>{failSave=value;}};
 }
 
 test('agent folder commands use verified metadata, UI persistence, and the subsequent note send route',async()=>{
@@ -448,6 +448,32 @@ test('new-project send lets the user name the project and link a higher Obsidian
     assert.equal(h.plugin.settings.folderLinks[0].folderPath,'Work');
     assert.equal((await h.plugin.chatTarget('Work/other/A.md')).project.title,'Writing tools');
   }finally{h.plugin.onunload();}
+});
+
+test('new-project composer resolves a machine before reading models and pins workspace creation to it',async()=>{
+ const h=await folderMenuHarness();
+ try{
+  const second={id:'other',name:'VPS',url:'https://other.example',environmentId:'other-env'};h.plugin.settings.paired.push(second);
+  const context=h.rawDestinationContext({path:'Notes/A.md'});const choosing=context.chooseProject('folder:new');const machines=h.modals.at(-1);
+  machines.onChooseItem(second);const key=await choosing;assert.equal(key,'folder:new:other');assert.match(context.getProjectName(key),/VPS/);
+  let modelTarget:string|undefined;h.plugin.existingTarget=async(_path:string,key:string)=>{modelTarget=key;throw Error('Selected catalog route inspected');};
+  await assert.rejects(context.getModels(key),/Selected catalog route inspected/);assert.equal(modelTarget,'thread:no-project:other');
+  await assert.rejects(context.getModels('folder:new'),/Choose a machine/);
+  await assert.rejects(context.searchFiles('read',key),/Choose an existing project/);
+  const creates:string[]=[];h.plugin.projectLocation=async(machine:any)=>{creates.push(machine.id);return {browse:async()=>({parentPath:'/projects',entries:[]}),create:async(root:string,title:string)=>({...h.project,id:'new-on-vps',connectionId:machine.id,connectionName:machine.name,title,workspaceRoot:root}),close:()=>{}};};
+  const pending=h.plugin.chatTarget('Notes/A.md',undefined,true,key);const workspace=h.modals.at(-1);await idle();
+  assert.equal(workspace.host.machines().map((machine:any)=>machine.id).join(','),'other');assert.equal(h.setting(workspace,'Machine').controls[0].value,'other');
+  await h.button(workspace,'Create and link').click();const target=await pending;assert.equal(target.project.connectionId,'other');assert.deepEqual(creates,['other']);assert.equal(h.plugin.settings.folderLinks.length,0,'Folder linking still waits for delivery');
+ }finally{h.plugin.onunload();}
+});
+
+test('cancelling the new-project machine picker does not open a workspace or read a catalog',async()=>{
+ const h=await folderMenuHarness();
+ try{
+  h.plugin.settings.paired.push({id:'other',name:'VPS',url:'https://other.example',environmentId:'other-env'});
+  const pending=h.rawDestinationContext({path:'Notes/A.md'}).chooseProject('folder:new');const picker=h.modals.at(-1);picker.close();
+  await assert.rejects(pending,/Project creation cancelled/);assert.equal(h.modals.length,1);assert.equal(h.networkRequests(),0);
+ }finally{h.plugin.onunload();}
 });
 
 for(const path of ['Notes/A.md','A.md',undefined])test(`new project without a folder link from ${path??'chat without a note'}`,async()=>{

@@ -28,6 +28,7 @@ export interface ChatDestination {
 export interface ChatHost {
   draftChanged?(text:string):void;
   contextLabel?:string;
+  chooseProject?(key:string):Promise<string>;
   chooseExisting?(projectKey:string|undefined,choose:(destination:ChatDestination)=>void,back:()=>void,signal?:AbortSignal):Promise<void>;
   searchFiles?(query:string,projectKey?:string,destination?:ChatDestination):Promise<string[]>;
   getModels?(projectKey?:string,destination?:ChatDestination):Promise<{models:ComposerModel[];selection?:ModelSelection}>;
@@ -58,13 +59,13 @@ export interface ChatHost {
 }
 
 class ChatProjectModal extends FuzzySuggestModal<{key:string;label:string}> {
-  constructor(app:App,private choices:()=>{key:string;label:string}[],private choose:(key:string)=>void,private watch?:(listener:()=>void)=>()=>void){super(app);this.setPlaceholder('Choose a T3 Code project');this.emptyStateText='Discovering projects… Connect T3 if no projects appear.';}
+  constructor(app:App,private choices:()=>{key:string;label:string}[],private choose:(key:string)=>void|Promise<void>,private watch?:(listener:()=>void)=>()=>void){super(app);this.setPlaceholder('Choose a T3 Code project');this.emptyStateText='Discovering projects… Connect T3 if no projects appear.';}
   private unwatch?:()=>void;
   onOpen(){void super.onOpen?.();this.unwatch=this.watch?.(()=>this.inputEl?.dispatchEvent(new Event('input')));}
   onClose(){this.unwatch?.();super.onClose?.();}
   getItems(){return this.choices();}
   getItemText(item:{key:string;label:string}){return item.label;}
-  onChooseItem(item:{key:string;label:string}){this.choose(item.key);}
+  onChooseItem(item:{key:string;label:string}){void this.choose(item.key);}
 }
 
 /** The model draft uses only capabilities advertised by the selected T3 machine. */
@@ -134,6 +135,19 @@ export class SendComposer extends NoteTabPanel {
     return resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},{...this.overrides,modelSelection:this.overrides.modelSelection??this.defaultSelection,...(command&&this.selectedModel()?.commands.some(item=>item.name.replace(/^\//,'').toLowerCase()===command)?{providerCommand:command}:{})});
   }
   private capture(){if(this.field){this.prompt=this.field.value;if(this.suggestions)this.overrides.context=this.suggestions.context();this.host.draftChanged?.(this.prompt);}}
+  private async changeProject(key:string){
+    if(!this.opened||this.choosing||this.host.busy)return;
+    this.capture();this.choosing=true;this.refreshAvailability?.();
+    try{
+      const selected=this.host.chooseProject?await this.host.chooseProject(key):key;
+      if(!this.opened)return;
+      this.capture();this.suggestions?.dispose();this.suggestions=undefined;
+      this.projectKey=selected;this.target='new';this.destination=undefined;
+      this.overrides.modelSelection=undefined;this.overrides.interactionMode=undefined;this.overrides.context=undefined;
+      this.models=[];this.defaultSelection=undefined;this.modelLoadKey=undefined;this.cancelCheck();
+    }catch(error){if(!(error instanceof ProjectCreationCancelled))new Notice(error instanceof Error?error.message:String(error));}
+    finally{this.choosing=false;if(this.opened)this.onOpen();}
+  }
   onOpen(){
     this.capture();this.suggestions?.dispose();this.suggestions=undefined;this.opened=true;const revision=++this.revision;
     logEvent('ui.destination.opened',{notePath:this.host.getNotePath(),steering:this.host.steering,projectKey:this.projectKey});
@@ -143,7 +157,7 @@ export class SendComposer extends NoteTabPanel {
     const context=composer.createDiv({cls:'t3-send-context'});
     setIcon(context.createSpan(),'file-text');context.createSpan({text:this.host.contextLabel??this.host.getNotePath().split('/').at(-1)??'Note',cls:'t3-send-source'});
     const project=this.button(context,'Change project','folder',()=>{
-      this.capture();new ChatProjectModal(this.app,()=>this.host.getProjectChoices(),key=>{if(!this.opened||this.choosing)return;this.projectKey=key;this.target='new';this.destination=undefined;this.overrides.modelSelection=undefined;this.overrides.interactionMode=undefined;this.overrides.context=undefined;this.models=[];this.defaultSelection=undefined;this.modelLoadKey=undefined;this.cancelCheck();this.onOpen();},this.host.onProjectChange?.bind(this.host)).open();
+      this.capture();new ChatProjectModal(this.app,()=>this.host.getProjectChoices(),key=>this.changeProject(key),this.host.onProjectChange?.bind(this.host)).open();
     },'t3-send-project');
     project.createSpan({text:this.host.getProjectName(this.projectKey)});setIcon(project.createSpan(),'chevron-down');project.title=this.host.getTargetDescription(this.projectKey);
     const promptName=composer.createSpan({text:'Ask about this note or selection',attr:{id:`t3-send-prompt-${crypto.randomUUID()}`,hidden:''}});

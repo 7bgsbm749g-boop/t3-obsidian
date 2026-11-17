@@ -20,7 +20,17 @@ continuations keep their required thread.
 
 Click the arrow or press Enter to submit. Shift+Enter adds a line. Closing a
 picker keeps the draft. Changing projects clears the old thread and model choice.
+It also clears selected file and skill references; select them again in the new
+workspace. An open suggestion list consumes Enter while results load or when no
+result is available. Escape dismisses the list before normal Enter-to-send resumes.
 The composer retains its draft and switches after a recoverable send failure.
+
+With several connected machines, choosing New project first asks for its T3
+machine. Its model catalog and default
+then come from that machine, and the workspace picker stays on that machine.
+Project creation still waits until Send, and folder links still wait for delivery.
+File search requires an existing workspace; a new project does not search the
+machine's unrelated No project folder.
 
 Confirmed quick sends and command-palette submissions still use their captured
 default route. Holding the destination-selection modifier, using the explicit

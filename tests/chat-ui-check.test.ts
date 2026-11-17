@@ -174,3 +174,44 @@ test('an explicit model click retries a failed catalog read',async()=>{
  const h=await fixture();await h.modal.modelReady;h.host.getModels=async()=>{throw Error('Temporarily offline');};h.modal.modelLoadKey=undefined;h.modal.onOpen();await h.modal.modelReady;assert.match(h.button('Choose model').textContent!,/unavailable/);
  h.host.getModels=async()=>({selection:{instanceId:'p',model:'restored'},models:[{selection:{instanceId:'p',model:'restored'},label:'Restored',provider:'P',options:[],commands:[],skills:[]}]});await h.modal.chooseModel();assert.match(h.modals.at(-1).titleEl.textContent!,/Model/);assert.match(h.button('Choose model').textContent!,/Restored/);
 });
+
+test('changing projects drops selected file and skill records before rebuilding suggestions',async()=>{
+ const h=await fixture();await h.modal.modelReady;h.host.searchFiles=async()=>['README.md'];
+ const select=async(text:string)=>{const input=h.modal.field;input.setRangeText=(value:string,start:number,end:number)=>{input.value=input.value.slice(0,start)+value+input.value.slice(end);input.selectionStart=start+value.length;};input.selectionStart=text.length;h.type(text);await new Promise(done=>setImmediate(done));const event=new h.window.Event('keydown');Object.assign(event,{key:'Enter'});input.dispatchEvent(event);};
+ await select('@README');await select(h.modal.field.value+'$rev');assert.equal(h.modal.overrides.context.records.length,2);
+ const draft=h.modal.field.value;h.button('Change project').click();await h.modals.at(-1).onChooseItem({key:'other',label:'Other'});
+ assert.equal(h.modal.field.value,draft);assert.equal(h.modal.overrides.context,undefined);
+ h.modal.onOpen();await h.modal.choose();assert.equal(h.sent[0].key,'other');assert.equal(h.sent[0].options.context,undefined);
+});
+
+test('Enter cannot submit while file suggestions load, and selects only after results arrive',async()=>{
+ const h=await fixture();await h.modal.modelReady;let release!:(files:string[])=>void;
+ h.host.searchFiles=()=>new Promise<string[]>(resolve=>{release=resolve;});const input=h.modal.field;
+ input.setRangeText=(value:string,start:number,end:number)=>{input.value=input.value.slice(0,start)+value+input.value.slice(end);};
+ h.type('@read');const enter=()=>{const event=new h.window.Event('keydown',{cancelable:true});Object.assign(event,{key:'Enter'});input.dispatchEvent(event);return event;};
+ assert.equal(enter().defaultPrevented,true);await new Promise(done=>setImmediate(done));assert.equal(h.sent.length,0);
+ release(['README.md']);await new Promise(done=>setImmediate(done));enter();assert.equal(input.value,'@README.md ');assert.equal(h.sent.length,0);assert.equal(h.modal.overrides.context.records[0].path,'README.md');
+ await h.modal.choose();assert.equal(h.sent.length,1);
+});
+
+for(const result of ['empty','error'])test(`Enter does not send from an open ${result} suggestion list`,async()=>{
+ const h=await fixture();await h.modal.modelReady;h.host.searchFiles=async()=>{if(result==='error')throw Error('Offline workspace');return [];};
+ h.type('@missing');await new Promise(done=>setImmediate(done));const key=(key:string)=>{const event=new h.window.Event('keydown',{cancelable:true});Object.assign(event,{key});h.modal.field.dispatchEvent(event);};
+ key('Enter');await new Promise(done=>setImmediate(done));assert.equal(h.sent.length,0);key('Escape');key('Enter');await new Promise(done=>setImmediate(done));assert.equal(h.sent.length,1);
+});
+
+test('new project waits for its machine choice and then loads and submits only that catalog',async()=>{
+ const h=await fixture();await h.modal.modelReady;let choose!:(key:string)=>void;
+ h.host.chooseProject=()=>new Promise<string>(resolve=>{choose=resolve;});
+ const loads:string[]=[];h.host.getModels=async(key:string)=>{loads.push(key);assert.equal(key,'folder:new:other-machine');return {selection:{instanceId:'other-provider',model:'other-model'},models:[{selection:{instanceId:'other-provider',model:'other-model'},label:'Other model',options:[],commands:[],skills:[]}]};};
+ h.type('Keep this ask');const picking=h.modal.changeProject('folder:new');
+ assert.equal(h.button('Send ask').disabled,true);assert.equal(loads.length,0);assert.equal(h.sent.length,0);
+ choose('folder:new:other-machine');await picking;await h.modal.modelReady;assert.match(h.button('Choose model').textContent!,/Other model/);
+ await h.modal.choose();assert.equal(h.sent[0].key,'folder:new:other-machine');assert.equal(h.sent[0].options.modelSelection.instanceId,'other-provider');assert.equal(h.sent[0].text,'Keep this ask');
+});
+
+test('cancelled machine selection retains the previous project, model and draft',async()=>{
+ const h=await fixture();await h.modal.modelReady;h.type('Keep this');h.modal.overrides.modelSelection={instanceId:'old',model:'old-model'};
+ h.host.chooseProject=async()=>{throw Error('Cancelled machine choice');};await h.modal.changeProject('folder:new');
+ assert.equal(h.modal.projectKey,'project');assert.equal(h.modal.field.value,'Keep this');assert.equal(h.modal.overrides.modelSelection.model,'old-model');assert.equal(h.sent.length,0);h.modal.close();
+});

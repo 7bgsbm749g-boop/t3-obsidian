@@ -70,6 +70,7 @@ export class ComposerSuggestions {
   private keydown=(event:KeyboardEvent)=>{
     if(this.menu.hidden||event.isComposing)return;
     if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();this.hide();return;}
+    if(event.key==='Enter'&&!this.items.length){event.preventDefault();event.stopImmediatePropagation();return;}
     if(['ArrowUp','ArrowDown','Enter','Tab'].includes(event.key)&&this.items.length){event.preventDefault();event.stopImmediatePropagation();if(event.key==='Enter'||event.key==='Tab')this.insert(this.items[this.index]);else{this.index=(this.index+(event.key==='ArrowDown'?1:this.items.length-1))%this.items.length;this.highlight();}}
   };
   private insert(item:ComposerSuggestion){

@@ -127,7 +127,7 @@ import {folderNotePath,type FolderNotesSettings} from '../projects/folder-note-a
 import {installFolderIndicators,type FolderIndicatorController} from '../projects/folder-indicator';
 import {connectVaultRemote,loadVaultLocations,vaultIdentity,vaultRegistration,waitForVaultNote,type VaultLocation,type VaultRegistration} from '../connection/vault-connection';
 import {loadProjectCreationLocations,rememberProjectCreationLocation,projectCreationDefaults,workspaceParentPath,type ProjectCreationLocation} from '../projects/workspace-picker';
-import {ProjectCreateModal,ProjectCreationCancelled,workspaceInsideVault,type ProjectLocation} from '../projects/project-create-ui';
+import {ProjectCreateModal,ProjectCreationCancelled,workspaceInsideVault,NEW_FOLDER_PROJECT,isNewProjectKey,newProjectKey,newProjectMachine,type ProjectLocation} from '../projects/project-create-ui';
 import {VaultSetupModal,VaultSetupCancelled,type VaultMachine} from '../connection/vault-setup-ui';
 import {threadIsActive,responseOwnsActiveTurn} from '../conversations/thread-target';
 import {DeviceResponseManager} from '../responses/device-local-responses';
@@ -155,7 +155,6 @@ import {ThreadVisibility,threadHiding} from '../conversations/thread-visibility'
 type EditorChatContext={editor:Editor;view:MarkdownView|MarkdownFileInfo;anchor?:SelectionAnchor;canonicalAnchor?:SelectionAnchor;insertion?:CursorInsertion;referenceSelection?:boolean;initialQuestion?:string;responseId?:string;snapshot?:string;smartDocument?:string;smartScope?:Span;smartQuestion?:string};
 type SteeringSource={document:string;ranges:Span[]};
 type PaletteActionContext={file:TFile;editor?:EditorChatContext;insertion:CursorInsertion|null};
-const NEW_FOLDER_PROJECT='folder:new';
 interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat}
 type PreparedNote={content:string;images:Awaited<ReturnType<typeof collectImages>>};
 interface Settings {threadNoteMode:ThreadNoteMode;projectCreationLocations:ProjectCreationLocation[];noteContexts?:NoteContextRecord[];smartSend?:SmartSendData;responseBindings?:ResponseBindingData;codebase?:CodebaseState; replyFolders:ReplyFolders;threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; vaultHost?:VaultHost; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean;hideObsidianThreads?:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
@@ -1660,7 +1659,7 @@ export default class SendToT3 extends Plugin {
     const project=[...this.projects(),...this.settings.directProjects,...this.settings.projects].find(project=>project.id===projectId&&(job?.connection?.connectionId?project.connectionId===job.connection.connectionId:environment?project.connectionId?this.settings.paired.find(connection=>connection.id===project.connectionId)?.environmentId===environment:this.eventLocalEnvironmentId===environment:!cached&&!!job?.connection&&!job.connection.connectionId&&!project.connectionId));
     return project&&projectKey(project);
   }
-  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'hasConfirmedNoteSend'|'getThreadChoiceRestriction'|'getInlineDefaults'|'steering'|'getNotePath'|'getProjectName'|'getDefaultProjectKey'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'getDefaultDestination'|'getAlternativeProjectKey'|'onProjectChange'|'chooseExisting'|'getModels'|'searchFiles'>{
+  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'hasConfirmedNoteSend'|'getThreadChoiceRestriction'|'getInlineDefaults'|'steering'|'getNotePath'|'getProjectName'|'getDefaultProjectKey'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'getDefaultDestination'|'getAlternativeProjectKey'|'onProjectChange'|'chooseExisting'|'chooseProject'|'getModels'|'searchFiles'>{
     // Capture the destination once. A later editor update must not redirect a send.
     const responseId=inline&&inlineSteeringTarget(inline.editor.getValue(),inline.editor.posToOffset(inline.editor.getCursor()),inline.responseId);
     const remembered=this.noteThread(note?.path);
@@ -1672,13 +1671,24 @@ export default class SendToT3 extends Plugin {
     const projectName=(key=selectedKey)=>{
       const link=note?folderLinkForPath(this.settings.folderLinks,note.path):this.settings.folderLinks.find(item=>item.folderPath==='/');
       if(isNoProjectKey(key))return 'No project';
-      if(key===NEW_FOLDER_PROJECT)return 'New project…';
+      if(isNewProjectKey(key))return newProjectMachine(key)?`New project · ${this.vaultMachines().find(machine=>machine.id===newProjectMachine(key))?.name??'Unavailable machine'}`:'New project…';
       if(key)return [...this.projects(),...this.settings.directProjects,...this.settings.projects].find(project=>projectKey(project)===key)?.title??'Unavailable project';
       const remembered=this.noteThread(note?.path);
       if(remembered)return [...this.settings.directProjects,...this.settings.projects].find(project=>project.id===remembered.projectId&&sameWorkspacePath(project.workspaceRoot,remembered.workspaceRoot))?.title??`T3 project ${remembered.projectId.slice(0,8)}`;
       return link?.projectTitle??this.app.vault.getName();
     };
     return {
+      chooseProject:async key=>{
+        if(key!==NEW_FOLDER_PROJECT)return key;
+        const machines=this.vaultMachines();if(!machines.length)throw Error('Connect a T3 machine before creating a project.');
+        let id=machines.length===1?machines[0].id:await new Promise<string>((resolve,reject)=>new ConnectedMachineModal(this.app,machines,resolve,()=>reject(new ProjectCreationCancelled())).open());
+        if(id.startsWith('environment:')){
+          const machine=this.cloudMachines.find(machine=>'environment:'+machine.environmentId===id);if(!machine)throw Error('Refresh T3 connections.');
+          await this.connectAccountMachine(machine);id=this.settings.paired.find(connection=>connection.environmentId===machine.environmentId)?.id??'';
+        }
+        if(!this.settings.paired.some(connection=>connection.id===id))throw Error('Reconnect the selected T3 machine.');
+        return newProjectKey(id);
+      },
       chooseExisting:async(key,choose,back,signal)=>{
         const target=await this.existingTarget(note?.path,key);
         if(signal?.aborted)return;
@@ -1689,7 +1699,8 @@ export default class SendToT3 extends Plugin {
         new ExistingThreadModal(this.app,threads,async thread=>choose({threadId:thread.id,projectKey:projectKey(project),label:thread.title,status:thread.status,detail:`${thread.title} · ${thread.status}`}), 'Choose an existing thread','No existing threads in this project. Choose New thread.',back).open();
       },
       searchFiles:async(query,key,destination)=>{
-        const target=await this.existingTarget(note?.path,key===NEW_FOLDER_PROJECT?NO_PROJECT:destination?.projectKey??key);
+        if(isNewProjectKey(key))throw Error('Choose an existing project to search its workspace files.');
+        const target=await this.existingTarget(note?.path,destination?.projectKey??key);
         if(!target)throw Error('Choose a project to search workspace files.');
         const connection=this.connection(target.project),access=await this.inlineThreadAccess(connection.environmentId??await this.localInlineEnvironment());
         try{const rpc=await acquireT3UnaryRpc(access.api,access.origin);try{
@@ -1698,8 +1709,9 @@ export default class SendToT3 extends Plugin {
         }finally{rpc.close();}}finally{await access.close?.();}
       },
       getModels:async(key,destination)=>{
-        const folderDraft=key===NEW_FOLDER_PROJECT;
-        const target=await this.existingTarget(note?.path,folderDraft?NO_PROJECT:destination?.projectKey??key);
+        const folderDraft=isNewProjectKey(key),machine=newProjectMachine(key);
+        if(folderDraft&&!machine)throw Error('Choose a machine for the new project first.');
+        const target=await this.existingTarget(note?.path,machine?noProjectKey(machine):destination?.projectKey??key);
         // A not-yet-created folder project inherits the environment default.
         const connection=target?this.connection(target.project):undefined;
         if(!connection)throw Error('Choose an existing project or No project to select a model.');
@@ -1709,7 +1721,7 @@ export default class SendToT3 extends Plugin {
           try{
             const config=await rpc.call('server.getConfig',{}),project=target?.project;
             const selection=destination?.threadId&&project?readComposerSettings(await this.readChatThread(connection,project,destination.threadId)).modelSelection:resolveNewThreadModel(config,folderDraft?{id:''}:project??{id:''});
-            return {models:composerModels(config,project?.workspaceRoot),selection};
+            return {models:composerModels(config,folderDraft?undefined:project?.workspaceRoot).filter(model=>!model.disabled),selection};
           }finally{rpc.close();}
         }finally{await access.close?.();}
       },
@@ -2221,7 +2233,7 @@ export default class SendToT3 extends Plugin {
   }
   private async chatTarget(notePath?:string,preferred?:NoteThread,ignorePreviousThread=false,overrideKey?:string,interactive=true):Promise<{project:Project;link:FolderLink}> {
     if(isNoProjectKey(overrideKey))return this.noProjectTarget(overrideKey,interactive);
-    if(overrideKey===NEW_FOLDER_PROJECT)return this.newProjectTarget(notePath,interactive);
+    if(isNewProjectKey(overrideKey))return this.newProjectTarget(notePath,interactive,newProjectMachine(overrideKey));
     const link=notePath?folderLinkForPath(this.settings.folderLinks.filter(link=>link.folderPath!=='/'),notePath):undefined;
     if(overrideKey){const project=[...this.projects(),...this.settings.directProjects,...this.settings.projects].find(item=>projectKey(item)===overrideKey);if(!project)throw Error('The chosen T3 project is unavailable. Choose a project again.');return {project,link:link&&projectKey(project)===`${link.connectionId?link.connectionId+':':''}${link.projectId}`?link:{id:'project-override',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false}};}
     const remembered=preferred??(!ignorePreviousThread?this.noteThread(notePath):undefined);
@@ -2284,11 +2296,11 @@ export default class SendToT3 extends Plugin {
     this.settings.directProjects=[...this.settings.directProjects.filter(item=>projectKey(item)!==projectKey(project)),{...project}];
     return {project,link:{id:'no-project',folderPath:'/',connectionId:paired.id,projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false,environmentId:paired.environmentId}};
   }
-  private async newProjectTarget(notePath?:string,interactive=true):Promise<{project:Project;link:FolderLink}>{
+  private async newProjectTarget(notePath?:string,interactive=true,machineId?:string):Promise<{project:Project;link:FolderLink}>{
     if(!interactive)throw Error('Link this note’s folder to an existing T3 project with link-folder before sending. New projects require the workspace picker.');
     const parent=notePath?.includes('/')?notePath.slice(0,notePath.lastIndexOf('/')):undefined;
     const defaultFolder=parent&&!folderLinkForPath(this.settings.folderLinks,notePath!)?parent:undefined;
-    const choice=await this.pickFolderProject(defaultFolder,parent?.split('/').at(-1)??'New project');
+    const choice=await this.pickFolderProject(defaultFolder,parent?.split('/').at(-1)??'New project',undefined,machineId);
     if(!choice)throw new ProjectCreationCancelled();
     const {project,folderPath}=choice;
     if(this.stopped)throw Error('The plugin was disabled before sending.');
@@ -2302,7 +2314,7 @@ export default class SendToT3 extends Plugin {
     return link.folderPath!=='/'&&!this.settings.folderLinks.some(item=>item.folderPath===link.folderPath)?{folderLinkIntent:link}:{};
   }
   private async existingTarget(notePath?:string,overrideKey?:string){
-    if(overrideKey===NEW_FOLDER_PROJECT)return;
+    if(isNewProjectKey(overrideKey))return;
     return this.chatTarget(notePath,undefined,true,overrideKey);
   }
   vaultMachines():VaultMachine[]{
@@ -2786,8 +2798,9 @@ export default class SendToT3 extends Plugin {
     }
     return projectCreationDefaults(locations,this.vaultMachines(),this.deviceId,machineId);
   }
-  private pickFolderProject(folderPath:string|undefined,name:string,onChosen?:(project:Project,folderPath?:string)=>Promise<void>):Promise<{project:Project;folderPath?:string}|undefined>{
+  private pickFolderProject(folderPath:string|undefined,name:string,onChosen?:(project:Project,folderPath?:string)=>Promise<void>,machineId?:string):Promise<{project:Project;folderPath?:string}|undefined>{
     if(this.projectCreateModal)throw Error('Choose or cancel the open project workspace first.');
+    if(machineId&&!this.vaultMachines().some(machine=>machine.id===machineId))throw Error('Reconnect the selected T3 machine before creating the project.');
     const validateFolder=(path?:string)=>{
       if(path===undefined)return;
       if(path==='/'||!(this.app.vault.getAbstractFileByPath(path) instanceof TFolder))throw Error('This Obsidian folder no longer exists. Choose a folder again.');
@@ -2797,7 +2810,7 @@ export default class SendToT3 extends Plugin {
     return new Promise(resolve=>{
       this.projectCreateModal=new ProjectCreateModal(this.app,name,{
         folderPath,validateConfiguration:validateFolder,
-        machines:()=>this.vaultMachines(),defaults:machineId=>this.projectWorkspaceDefaults(machineId),connect:machine=>this.projectLocation(machine),
+        machines:()=>this.vaultMachines().filter(machine=>!machineId||machine.id===machineId),defaults:selected=>this.projectWorkspaceDefaults(machineId??selected),connect:machine=>this.projectLocation(machine),
         configure:el=>{el.createEl('p',{text:'Project files remain in the T3 workspace. Linked projects appear in Codebase view.'});},
         link:async(project,folderPath)=>{
           if(this.stopped)throw Error('The plugin was disabled before creating the project.');
