@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "since": "2026-11-17T15:19:43Z",
+  "pullRequests": {
+    "22": {
+      "version": "0.0.448",
+      "mergeCommit": "c4dd2722b89929b46e00573a81a421796ede3a41"
+    }
+  },
+  "startCommit": "c4dd2722b89929b46e00573a81a421796ede3a41",
+  "latest": {
+    "pr": 22,
+    "version": "0.0.448",
+    "source": "c4dd2722b89929b46e00573a81a421796ede3a41"
+  }
+}

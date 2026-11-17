@@ -22,7 +22,8 @@ build refuses test adapters and retired filesystem dependencies in its inputs.
 include installed dependency bytes, runtime, source and configuration. Passing
 bounded test batches retain their own logs; failed batches have no success
 receipt. GitHub runs release-tool regression checks on PRs and main pushes.
-Every PR must also have an aligned numeric version newer than its target.
+Development PRs keep aligned numeric metadata without an early bump. GitHub
+assigns a distinct version automatically after each user or agent merge.
 The nightly schedule tags the selected `main` snapshot at midnight UTC; the
 tag build runs lint and build before attesting and publishing. Branch pushes
 do not immediately publish releases.
@@ -72,11 +73,8 @@ worker will perform these checks.
 
 Documentation changes need a diff and link review without local installation.
 Tooling changes need their affected checks. Product, documentation and workflow
-PRs all need a version bump. Fetch the target and run
-`python3 scripts/github_release.py bump --base origin/main`, then commit the
-aligned metadata with the change. If already bumped above the current target,
-keep that number across further edits and test builds. Update and bump again
-when a merged PR consumes that number.
+PRs keep the current numeric source base during development and test builds.
+Do not allocate a version merely to open, update or mark a PR ready.
 
 ## Commit, push and open a PR
 
@@ -95,14 +93,14 @@ refs or use `--tags`, `--follow-tags`, or `--mirror`.
 
 ## GitHub owns releases
 
-The local release queue and workers remain removed. PRs carry version metadata;
+The local release queue and workers remain removed. Merged PRs carry version metadata;
 merging a PR does not immediately publish or install the plugin. Historical
 tags, archives, receipts and private comparison records remain intact.
 
 The [release workflow](../.github/workflows/release-provenance.yml) schedules
 publication every night at midnight UTC (`0 0 * * *`). GitHub can delay scheduled
 starts. The preparation job validates the version files on the exact scheduled
-`main` snapshot, creates its matching immutable numeric tag, then explicitly
+`main` snapshot after reconciling version assignments, creates its matching immutable numeric tag, then explicitly
 dispatches the tag build. This dispatch is necessary because a tag created with
 `GITHUB_TOKEN` does not trigger another push workflow. Preparation can write
 contents and dispatch Actions; PR jobs have only read access. No private token,
@@ -111,8 +109,8 @@ local worker or vault access is needed.
 If that exact commit is already published, preparation does nothing. If the
 tag exists with an unfinished release, it dispatches the same tag again. If
 the number belongs to another commit or is older than the latest release, it
-fails without moving tags or publishing old code. Keep every PR updated and
-bumped above its current target before merging. Unmerged PRs are never released.
+fails without moving tags or publishing old code. GitHub assigns and checks a
+distinct version after each merge. Unmerged PRs are never released.
 
 An explicitly requested early release can still use the aligned numeric
 version committed on its source: tag that exact commit and push only that tag.
@@ -125,9 +123,40 @@ match the source version. Existing tags and assets cannot be overwritten.
 To retry a tagged release, dispatch the workflow at that same numeric tag, for
 example `gh workflow run release-provenance.yml --ref 0.0.BUILD` with the actual
 version substituted. Dispatching at a branch fails the numeric-tag check.
-The release workflow does not choose or bump versions; the PR preparation
-command does that before merge. Keep the
+The post-merge assignment workflow chooses versions. Nightly preparation first
+reconciles pending assignments and selects a completed version snapshot. Keep the
 [alpha version policy](versioning.md).
+
+## Automatic post-merge version assignment
+
+User and agent merges both trigger `.github/workflows/pr-versions.yml` through a
+push to `main`. The workflow uses standard runners and `GITHUB_TOKEN`, reads
+other open PR version claims and tags, and assigns an unused number. It writes
+`manifest.json`, `package.json`, `package-lock.json`, `versions.json` and the PR's
+receipt in `pr-versions.json` in one Git commit. It advances main without force,
+so a concurrent source change cannot be overwritten. A confirmed non-fast-forward
+rejection causes a fresh read and bounded retry; unknown write outcomes stop.
+
+The ledger is the durable receipt, not a local queue. Its cutover is initialized
+from the PR that actually introduced it to main, not from development time. Each
+run scans that PR and later merges, skips existing receipts, and handles pending
+merges in chronological order. This supports manual GitHub merges,
+agent merges, retries, delayed runs and missed push events without asking the
+user to pick a number. Historical PRs before the cutover retain their versions.
+Preserve the ledger and do not change its cutover timestamp on subsequent edits.
+
+Assignment and nightly preparation use the same queued concurrency group.
+Nightly preparation reconciles first, checks out the returned immutable version
+commit, and verifies it contains only completed metadata changes. It cannot tag
+an unnumbered merge snapshot. Assignment itself neither tags nor publishes.
+Automation's `GITHUB_TOKEN` writes do not recursively start another push workflow.
+
+If an assignment fails, inspect the failed run. A recovery run of
+`pr-versions.yml` on `main` resumes from committed receipts without a duplicate
+bump. Do not manually bump PR branches or force an uncertain write. Keep merge
+authorization and normal review/check requirements unchanged. Repository rules
+must permit the workflow's metadata update; failures remain visible and never
+silently bypass protection. This workflow becomes active once merged to `main`.
 
 Personal-vault delivery runs only when the user explicitly asks to try changes.
 It is not a prerequisite or side effect of a PR, merge, GitHub release or agent

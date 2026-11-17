@@ -1,4 +1,5 @@
 import copy
+import base64
 import hashlib
 import json
 import os
@@ -43,14 +44,40 @@ class TaggedPublicationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Align'):
                 release.version()
 
-    def test_pr_requires_a_newer_version_but_tag_validation_does_not(self):
+    def test_explicit_base_validation_requires_newer_but_development_validation_does_not(self):
         for previous in ['0.0.999', '0.0.1000']:
             with self.subTest(previous=previous), patch.object(release, 'base_version', return_value=previous):
-                with self.assertRaisesRegex(ValueError, 'Every PR'):
+                with self.assertRaisesRegex(ValueError, 'Explicit base validation'):
                     release.version('origin/main')
         with patch.object(release, 'base_version', return_value='0.0.998'):
             self.assertEqual(release.version('origin/main'), '0.0.999')
         self.assertEqual(release.version(), '0.0.999')
+
+    def test_inventory_paginates_and_does_not_hide_read_failures(self):
+        with patch.object(release, 'api', side_effect=[[{}] * 100, [{'number': 101}]]) as api:
+            self.assertEqual(len(release.pages('repos/owner/repo/pulls?state=open')), 101)
+            self.assertTrue(api.call_args.args[0].endswith('&per_page=100&page=2'))
+        with patch.object(release, 'api', side_effect=RuntimeError('Forbidden')):
+            with self.assertRaisesRegex(RuntimeError, 'Forbidden'):
+                release.pages('repos/owner/repo/tags')
+
+    def test_remote_json_uses_immutable_fork_identity_and_rejects_invalid_inputs(self):
+        value = {'type': 'file', 'encoding': 'base64', 'size': 24,
+                 'content': base64.b64encode(b'{"version":"0.0.1002"}').decode()}
+        with patch.object(release, 'api', return_value=value) as api:
+            self.assertEqual(release.remote_json('contributor/fork', 'c' * 40, 'manifest.json')['version'], '0.0.1002')
+            self.assertEqual(api.call_args.args[0], 'repos/contributor/fork/contents/manifest.json?ref=' + 'c' * 40)
+            with self.assertRaisesRegex(ValueError, 'source identity'):
+                release.remote_json('owner/repo', 'moving-branch', 'manifest.json')
+        for bad in [{**value, 'size': 1_000_001}, {**value, 'type': 'symlink'}, {**value, 'encoding': 'none'}]:
+            with patch.object(release, 'api', return_value=bad), self.assertRaisesRegex(ValueError, 'exact source manifest'):
+                release.remote_json('owner/repo', 'c' * 40, 'manifest.json')
+
+    def test_development_workflow_keeps_version_check_without_early_bump_requirement(self):
+        workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/release-provenance.yml').read_text()
+        self.assertIn('  version:', workflow)
+        self.assertIn('run: python3 scripts/github_release.py validate\n', workflow)
+        self.assertNotIn('validate --base', workflow)
 
     def test_bump_updates_all_metadata_and_preserves_other_fields_and_history(self):
         history = {'2.45.81': '1.8.7', '0.0.999': '1.13.0', '0.0.1003': '1.13.0'}
@@ -114,21 +141,21 @@ class TaggedPublicationTests(unittest.TestCase):
         for event, ref, checkout in [('push', 'refs/heads/main', 'a' * 40),
                                      ('workflow_dispatch', 'refs/heads/main', 'a' * 40),
                                      ('schedule', 'refs/heads/feature', 'a' * 40),
-                                     ('schedule', 'refs/tags/0.0.999', 'a' * 40),
-                                     ('schedule', 'refs/heads/main', 'b' * 40)]:
+                                     ('schedule', 'refs/tags/0.0.999', 'a' * 40)]:
             with self.subTest(event=event, ref=ref, checkout=checkout), patch.dict(os.environ, {
                 'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_SHA': 'a' * 40,
                 'GITHUB_REF': ref, 'GITHUB_EVENT_NAME': event,
-            }), patch.object(sys, 'argv', ['github_release.py', 'prepare']), patch.object(release, 'command', return_value=checkout), patch.object(release, 'prepare') as prepare:
+            }), patch.object(sys, 'argv', ['github_release.py', 'prepare']), patch.object(release, 'command', return_value=checkout), patch.object(release, 'prepare') as prepare, patch('merge_versions.versioned_snapshot') as snapshot:
                 with self.assertRaises(ValueError):
                     release.main()
                 prepare.assert_not_called()
         with patch.dict(os.environ, {
             'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_SHA': 'a' * 40,
             'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'schedule',
-        }), patch.object(sys, 'argv', ['github_release.py', 'prepare']), patch.object(release, 'command', return_value='a' * 40), patch.object(release, 'prepare') as prepare:
+        }), patch.object(sys, 'argv', ['github_release.py', 'prepare']), patch.object(release, 'command', return_value='a' * 40), patch.object(release, 'prepare') as prepare, patch('merge_versions.versioned_snapshot') as snapshot:
             release.main()
             prepare.assert_called_once_with('owner/repo', '0.0.999', 'a' * 40)
+            snapshot.assert_called_once_with(self.root, 'a' * 40)
 
     def test_publish_rejects_main_and_mismatched_tags_without_api_calls(self):
         for ref in ['refs/heads/main', 'refs/tags/0.0.998']:
@@ -162,6 +189,13 @@ class TaggedPublicationTests(unittest.TestCase):
             run.return_value = subprocess.CompletedProcess([], 1, '', 'gh: Forbidden (HTTP 403)')
             with self.assertRaisesRegex(RuntimeError, 'Forbidden'):
                 release.api('unused', missing=True)
+
+    def test_atomic_ref_update_uses_patch_and_never_forces(self):
+        with patch.object(release.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{}', '')) as run:
+            release.api('repos/owner/repo/git/refs/heads/main', method='PATCH', payload={'sha': 'a' * 40, 'force': False})
+            args = run.call_args.args[0]
+            self.assertEqual(args[args.index('--method') + 1], 'PATCH')
+            self.assertEqual(json.loads(run.call_args.kwargs['input']), {'sha': 'a' * 40, 'force': False})
 
     def test_failed_upload_keeps_the_release_unpublished(self):
         draft = self.draft()
@@ -225,6 +259,41 @@ class TaggedPublicationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'no longer matches'):
                 release.publish('owner/repo', '0.0.999', 'a' * 40)
             api.assert_not_called()
+
+    def test_nightly_uses_completed_snapshot_instead_of_old_schedule_event_sha(self):
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_SHA': 'a' * 40,
+                                    'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'schedule'}), \
+                patch.object(sys, 'argv', ['github_release.py', 'prepare']), \
+                patch.object(release, 'command', return_value='b' * 40), \
+                patch('merge_versions.versioned_snapshot') as snapshot, patch.object(release, 'prepare') as prepare:
+            release.main()
+            snapshot.assert_called_once_with(self.root, 'b' * 40)
+            prepare.assert_called_once_with('owner/repo', '0.0.999', 'b' * 40)
+
+    def test_nightly_cannot_tag_snapshot_without_completed_assignment(self):
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_SHA': 'a' * 40,
+                                    'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'schedule'}), \
+                patch.object(sys, 'argv', ['github_release.py', 'prepare']), \
+                patch.object(release, 'command', return_value='a' * 40), \
+                patch('merge_versions.versioned_snapshot', side_effect=ValueError('Assignment pending')), \
+                patch.object(release, 'prepare') as prepare:
+            with self.assertRaisesRegex(ValueError, 'Assignment pending'):
+                release.main()
+            prepare.assert_not_called()
+
+    def test_nightly_rejects_version_snapshot_outside_main_history(self):
+        def command(*args):
+            if args[:2] == ('git', 'merge-base'):
+                raise subprocess.CalledProcessError(1, args)
+            return 'a' * 40
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_SHA': 'a' * 40,
+                                    'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'schedule'}), \
+                patch.object(sys, 'argv', ['github_release.py', 'prepare']), \
+                patch.object(release, 'command', side_effect=command), \
+                patch('merge_versions.versioned_snapshot'), patch.object(release, 'prepare') as prepare:
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.main()
+            prepare.assert_not_called()
         existing = self.draft(draft=False)
         existing['assets'].pop()
         with patch.object(release, 'tag_commit', return_value='a' * 40), patch.object(release, 'api', return_value=existing), patch.object(release, 'command') as command:

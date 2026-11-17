@@ -12,36 +12,52 @@ files aligned for a release and preserve every published version.
 
 ## PRs and releases
 
-Every PR needs a numeric `0.0.BUILD` newer than its target branch, including
-product, documentation and workflow changes. After fetching `origin/main`, run
-`python3 scripts/github_release.py bump --base origin/main` in the task checkout.
-This command selects the next number above the source, target and recorded
-numeric version history. It aligns `manifest.json`, `package.json`, both
-package-lock version fields and the `versions.json` compatibility entry.
-Commit these files with the PR. The command changes only version metadata;
-it does not create tags or publish. Do not run it again for each test build.
+PRs keep their numeric source version during development, including product,
+documentation and workflow changes. Test builds add a feature label to that base
+without reserving a public number. Keep test labels out of tracked metadata.
 
-The `Release / version` check tests the release tools and checks the PR's
-aligned version against its target. Update the branch and bump again if another
-PR merges with the same or a newer number. Keep PR branches current before
-merging; version checks from an older target are not proof of a current bump.
-A bumped manifest identifies the source base used for feature-labelled test
-builds. Keep test labels out of tracked version metadata and public releases.
+After any user or agent merges a PR, a push to `main` starts
+[Assign merged PR versions](../.github/workflows/pr-versions.yml). This runs on
+standard GitHub Actions with the repository's `GITHUB_TOKEN`; no Pro plan, PAT,
+local daemon or agent is required. It assigns versions after merge rather than
+changing development branches, so new PRs do not fight over version-only edits.
+
+On first use the workflow detects the merge that introduced the ledger, then
+reconciles that PR and later merges. It saves the cutover in
+[`pr-versions.json`](../pr-versions.json). PRs merged before activation retain
+their historical versions. It reads the current main metadata, other open PR manifests at their
+exact heads (including forks), numeric release tags and recorded history. It
+selects the next unused number and atomically commits all four version files and
+a PR receipt. The receipt records the version and original merge commit.
+Each PR gets one receipt; reruns do not consume another number.
+
+Assignments run one at a time in a shared concurrency group with `queue: max`.
+Each run reconciles all pending PRs in merge order, so delayed or missed events
+are recovered. A non-forced ref update protects merges that arrive during a
+write; a confirmed conflict rereads main and retries. An uncertain response or
+permission error stops the run. The next reconciliation checks the committed
+receipts before doing anything further. It never force-pushes or rewrites tags.
+
+Development CI verifies aligned metadata without an early bump. Merging agents
+use normal reviewed-head checks and do not run version allocation themselves.
+Do not edit the generated ledger or bump metadata during development.
 
 At midnight UTC each night, GitHub schedules a release of the `main` commit
-selected by that scheduled event. Only that snapshot is tagged, built, attested
+selected after reconciling pending PR assignments. Only that completed version
+snapshot is tagged, built, attested
 and published; unmerged PRs are not included. Intermediate PR versions need not
 be published. An unchanged, already published snapshot is skipped. GitHub may
 delay the scheduled start; midnight is the requested start, not a guaranteed
 publication time.
 
-The schedule does not choose or bump versions. It uses the number already
-committed on `main` and refuses to reuse a tag for another commit or release a
+Nightly preparation shares the assignment queue and first reconciles pending
+merges. It then checks out the exact completed metadata commit returned by that
+step, even if another merge arrives meanwhile. It refuses to reuse a tag for another commit or release a
 version older than the latest release. An interrupted run can retry the same
 tag without replacing it. Explicit numeric tag pushes can still start a manual
 release; workflow dispatch at that tag can retry its build and publication.
 
-The local release queue and version allocator remain removed. Personal-vault
+The local release queue and worker remain removed. Personal-vault
 delivery is separate and requires an explicit user request; no PR, main merge
 or GitHub release requires it. See [Review and release checks](review-and-release.md).
 [release-policy.json](../release-policy.json) and `scripts/release_policy.py`
