@@ -1602,9 +1602,6 @@ export default class SendToT3 extends Plugin {
     const canonicalAnchor=mapped?selectionAnchor(snapshot,mapped.text,mapped.start,mapped.end):context.anchor;
     return {...context,snapshot,canonicalAnchor,insertion:context.insertion??captureCursorInsertion(display,range.to),referenceSelection:Boolean(context.referenceSelection||mapped?.reference||selectionOverlapsInlineResponse(display,context.anchor))};
   }
-  private needsFolderProject(notePath?:string):boolean {
-    return Boolean(notePath?.includes('/')&&!folderLinkForPath(this.settings.folderLinks.filter(link=>link.folderPath!=='/'),notePath));
-  }
   private responseProjectKey(id:string){
     const cached=this.deviceInline?.cachedResponse(id),job=this.inlineChat?.find(id),request=cached?.record.request??responseBindingRequests(this.settings.responseBindings??{}).find(request=>request.id===id);
     const projectId=request?.projectId??job?.projectId,environment=request?.threadEnvironmentId??job?.connection?.environmentId;
@@ -1623,7 +1620,7 @@ export default class SendToT3 extends Plugin {
     const projectName=(key=selectedKey)=>{
       const link=note?folderLinkForPath(this.settings.folderLinks,note.path):this.settings.folderLinks.find(item=>item.folderPath==='/');
       if(isNoProjectKey(key))return 'No project';
-      if(key===NEW_FOLDER_PROJECT)return `New project: ${note!.path.split('/').at(-2)}`;
+      if(key===NEW_FOLDER_PROJECT)return 'New project…';
       if(key)return [...this.projects(),...this.settings.directProjects,...this.settings.projects].find(project=>projectKey(project)===key)?.title??'Unavailable project';
       const remembered=this.noteThread(note?.path);
       if(remembered)return [...this.settings.directProjects,...this.settings.projects].find(project=>project.id===remembered.projectId&&sameWorkspacePath(project.workspaceRoot,remembered.workspaceRoot))?.title??`T3 project ${remembered.projectId.slice(0,8)}`;
@@ -1633,7 +1630,7 @@ export default class SendToT3 extends Plugin {
       chooseExisting:async(key,choose,back,signal)=>{
         const target=await this.existingTarget(note?.path,key);
         if(signal?.aborted)return;
-        if(!target){new ExistingThreadModal(this.app,[],async()=>{},'Choose an existing thread','No project exists for this folder yet. Choose New thread.',back).open();return;}
+        if(!target){new ExistingThreadModal(this.app,[],async()=>{},'Choose an existing thread','Create the project with New thread first, or choose an existing project.',back).open();return;}
         const {project}=target,readiness=this.projectReadinessError(project);if(readiness)throw Error(readiness);
         const threads=await this.availableModeThreads(note?.path,project,projectThreads(await runBridge(this.connection(project),['threads','--project',project.id],'',{signal}),project.id));
         if(this.stopped||signal?.aborted)return;
@@ -1666,7 +1663,7 @@ export default class SendToT3 extends Plugin {
       onProjectChange:listener=>this.watchProjects(listener),
       getProjectChoices:()=>{
         const machine=this.defaultNoProjectMachine();
-        return [...(this.needsFolderProject(note?.path)?[{key:NEW_FOLDER_PROJECT,label:`New project: ${note!.path.split('/').at(-2)}`}]:[]),{key:NO_PROJECT,label:'No project'},...this.vaultMachines().filter(item=>item.id!==machine).map(item=>({key:noProjectKey(item.id),label:`No project · ${item.name}`})),...this.projects().filter(project=>![...this.noProjectProjects.values()].some(item=>projectKey(item)===projectKey(project))).map(project=>({key:projectKey(project),label:this.projectChoiceLabel(project)}))];
+        return [{key:NEW_FOLDER_PROJECT,label:'New project…'},{key:NO_PROJECT,label:'No project'},...this.vaultMachines().filter(item=>item.id!==machine).map(item=>({key:noProjectKey(item.id),label:`No project · ${item.name}`})),...this.projects().filter(project=>![...this.noProjectProjects.values()].some(item=>projectKey(item)===projectKey(project))).map(project=>({key:projectKey(project),label:this.projectChoiceLabel(project)}))];
       },
       getDefaultThread:key=>!key||canonicalKey(key)===rememberedKey?remembered?.threadId:undefined,
       getAlternativeProjectKey:key=>key??(responseId?rememberedKey??this.responseProjectKey(responseId):selectedKey),
@@ -1735,6 +1732,7 @@ export default class SendToT3 extends Plugin {
     host.onBusyChange=listener=>{this.busyListeners.add(listener);return ()=>this.busyListeners.delete(listener);};
     return host;
   }
+
   private async sendResolvedChat(prompt:string,note:{path:string;absolutePath?:string}|undefined,context:EditorChatContext|undefined,answerOnly:boolean,options:{preparation?:SendPreparation;threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;jobOptions?:ResolvedJobOptions}){
     const jobOptions=options.jobOptions??resolveJobOptions(this.settings.inlineStreaming);
     // Steering extends the existing response, even when this draft says Off.
@@ -2162,7 +2160,7 @@ export default class SendToT3 extends Plugin {
   }
   private async chatTarget(notePath?:string,preferred?:NoteThread,ignorePreviousThread=false,overrideKey?:string,interactive=true):Promise<{project:Project;link:FolderLink}> {
     if(isNoProjectKey(overrideKey))return this.noProjectTarget(overrideKey,interactive);
-    if(overrideKey===NEW_FOLDER_PROJECT){if(!notePath?.includes('/'))throw Error('Choose a note inside a folder.');return (await this.folderTarget(notePath,true,interactive))!;}
+    if(overrideKey===NEW_FOLDER_PROJECT)return this.newProjectTarget(notePath,interactive);
     const link=notePath?folderLinkForPath(this.settings.folderLinks.filter(link=>link.folderPath!=='/'),notePath):undefined;
     if(overrideKey){const project=[...this.projects(),...this.settings.directProjects,...this.settings.projects].find(item=>projectKey(item)===overrideKey);if(!project)throw Error('The chosen T3 project is unavailable. Choose a project again.');return {project,link:link&&projectKey(project)===`${link.connectionId?link.connectionId+':':''}${link.projectId}`?link:{id:'project-override',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false}};}
     const remembered=preferred??(!ignorePreviousThread?this.noteThread(notePath):undefined);
@@ -2225,26 +2223,25 @@ export default class SendToT3 extends Plugin {
     this.settings.directProjects=[...this.settings.directProjects.filter(item=>projectKey(item)!==projectKey(project)),{...project}];
     return {project,link:{id:'no-project',folderPath:'/',connectionId:paired.id,projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false,environmentId:paired.environmentId}};
   }
-  private async folderTarget(notePath:string,create:boolean,interactive=true):Promise<{project:Project;link:FolderLink}|undefined>{
-    const folderPath=notePath.slice(0,notePath.lastIndexOf('/'));
-    const existing=folderLinkForPath(this.settings.folderLinks.filter(link=>link.folderPath!=='/'),notePath);
-    if(existing)return {project:this.projectForLink(existing),link:existing};
-    if(!create)return;
+  private async newProjectTarget(notePath?:string,interactive=true):Promise<{project:Project;link:FolderLink}>{
     if(!interactive)throw Error('Link this note’s folder to an existing T3 project with link-folder before sending. New projects require the workspace picker.');
-    const project=await this.pickFolderProject(folderPath,folderPath.split('/').at(-1)!);
-    if(!project)throw new ProjectCreationCancelled();
+    const parent=notePath?.includes('/')?notePath.slice(0,notePath.lastIndexOf('/')):undefined;
+    const defaultFolder=parent&&!folderLinkForPath(this.settings.folderLinks,notePath!)?parent:undefined;
+    const choice=await this.pickFolderProject(defaultFolder,parent?.split('/').at(-1)??'New project');
+    if(!choice)throw new ProjectCreationCancelled();
+    const {project,folderPath}=choice;
     if(this.stopped)throw Error('The plugin was disabled before sending.');
     const connection=this.connection(project);
     if(project.connectionId)this.settings.directProjects=[...this.settings.directProjects.filter(item=>projectKey(item)!==projectKey(project)),project];
     else this.settings.projects=[...this.settings.projects.filter(item=>item.id!==project.id),project];
-    const link:FolderLink={id:randomId(),folderPath,connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false,vaultId:this.settings.vaultId,...(connection.environmentId?{environmentId:connection.environmentId}:{})};
+    const link:FolderLink={id:randomId(),folderPath:folderPath??'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:false,vaultId:this.settings.vaultId,...(connection.environmentId?{environmentId:connection.environmentId}:{})};
     return {project,link};
   }
   private folderLinkIntent(link:FolderLink):{folderLinkIntent?:FolderLink}{
     return link.folderPath!=='/'&&!this.settings.folderLinks.some(item=>item.folderPath===link.folderPath)?{folderLinkIntent:link}:{};
   }
   private async existingTarget(notePath?:string,overrideKey?:string){
-    if(notePath&&overrideKey===NEW_FOLDER_PROJECT)return this.folderTarget(notePath,false);
+    if(overrideKey===NEW_FOLDER_PROJECT)return;
     return this.chatTarget(notePath,undefined,true,overrideKey);
   }
   vaultMachines():VaultMachine[]{
@@ -2726,21 +2723,29 @@ export default class SendToT3 extends Plugin {
     }
     return projectCreationDefaults(locations,this.vaultMachines(),this.deviceId,machineId);
   }
-  private pickFolderProject(folderPath:string,name:string,onChosen?:(project:Project)=>Promise<void>):Promise<Project|undefined>{
+  private pickFolderProject(folderPath:string|undefined,name:string,onChosen?:(project:Project,folderPath?:string)=>Promise<void>):Promise<{project:Project;folderPath?:string}|undefined>{
     if(this.projectCreateModal)throw Error('Choose or cancel the open project workspace first.');
+    const validateFolder=(path?:string)=>{
+      if(path===undefined)return;
+      if(path==='/'||!(this.app.vault.getAbstractFileByPath(path) instanceof TFolder))throw Error('This Obsidian folder no longer exists. Choose a folder again.');
+      const existing=this.settings.folderLinks.find(link=>link.folderPath===path);
+      if(existing)throw Error(`This folder is already linked to ${existing.projectTitle}. Unlink it first or choose another folder.`);
+    };
     return new Promise(resolve=>{
       this.projectCreateModal=new ProjectCreateModal(this.app,name,{
+        folderPath,validateConfiguration:validateFolder,
         machines:()=>this.vaultMachines(),defaults:machineId=>this.projectWorkspaceDefaults(machineId),connect:machine=>this.projectLocation(machine),
-        configure:el=>{el.createEl('p',{text:'Project files remain in the T3 workspace and appear in Codebase view.'});},
-        link:async project=>{
+        configure:el=>{el.createEl('p',{text:'Project files remain in the T3 workspace. Linked projects appear in Codebase view.'});},
+        link:async(project,folderPath)=>{
           if(this.stopped)throw Error('The plugin was disabled before creating the project.');
-          if(onChosen)await onChosen(project);
+          validateFolder(folderPath);
+          if(onChosen)await onChosen(project,folderPath);
           else {
             const previous=this.settings.projectCreationLocations;
             this.rememberProjectLocation(project);
             try{await this.save();}catch(error){this.settings.projectCreationLocations=previous;throw error;}
           }
-          resolve(project);
+          resolve({project,folderPath});
         },
         closed:()=>{this.projectCreateModal=undefined;resolve(undefined);},
       });
@@ -2748,10 +2753,19 @@ export default class SendToT3 extends Plugin {
     });
   }
   async createFolderProject(folder:TFolder){
-    await this.pickFolderProject(folder.path,folder.path==='/'?this.app.vault.getName():folder.name,async project=>{
+    const linked=folderLinkForPath(this.settings.folderLinks,folder.path+'/');
+    await this.pickFolderProject(folder.path==='/'||linked?undefined:folder.path,folder.path==='/'?this.app.vault.getName():folder.name,async(project,folderPath)=>{
       if(project.connectionId)this.settings.directProjects=[...this.settings.directProjects.filter(p=>projectKey(p)!==projectKey(project)),project];
       else this.settings.projects=[...this.settings.projects.filter(p=>p.id!==project.id),project];
-      await this.saveFolderLink(folder,project,false);
+      if(folderPath){
+        const selected=this.app.vault.getAbstractFileByPath(folderPath);
+        if(!(selected instanceof TFolder))throw Error('This Obsidian folder no longer exists. Choose a folder again.');
+        await this.saveFolderLink(selected,project,false);
+      }else{
+        const previous=this.settings.projectCreationLocations;this.rememberProjectLocation(project);
+        try{await this.save();}catch(error){this.settings.projectCreationLocations=previous;throw error;}
+        this.refreshProjectsInBackground();
+      }
     });
   }
   private checkProjectWorkspace(machine:VaultMachine,path:string){

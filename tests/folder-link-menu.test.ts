@@ -71,10 +71,12 @@ async function folderMenuHarness(initial?:any){
   class Folder {path='Notes';name='Notes';}
   class File {extension='md';constructor(public path:string){}}
   const folder=new Folder();
+  const folders=new Map([[folder.path,folder]]);
+  const addFolder=(path:string)=>{const item=new Folder();item.path=path;item.name=path.split('/').at(-1)!;folders.set(path,item);return item;};
   class Plugin {
     app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,value:any)=>{local=value;},
       workspace:{getActiveViewOfType:()=>undefined,getLeavesOfType:()=>[],onLayoutReady:()=>{},on:(name:string,callback:(...args:any[])=>void)=>{if(name==='file-menu')fileMenu=callback;}},
-      vault:{getName:()=> 'QLO2',read:async()=> '# Synthetic note',getAbstractFileByPath:(path:string)=>path===folder.path?folder:undefined},
+      vault:{getName:()=> 'QLO2',read:async()=> '# Synthetic note',getAbstractFileByPath:(path:string)=>folders.get(path)},
     };
     async loadData(){return {...(shared.at(-1)??{}),paired:[{id:'c',name:'Laptop',url:'https://folder.example',environmentId:'env'}],directScanId:'c',directProjects:[project],directSelected:['c:project']};}
     async saveData(data:any){if(failSave)throw Error('Simulated settings storage failure');shared.push(data);}
@@ -111,7 +113,7 @@ async function folderMenuHarness(initial?:any){
   };
   const setting=(modal:Modal,name:string)=>{const all=(el:Element):Setting[]=>[...el.settings,...el.children.flatMap(all)];const item=all(modal.contentEl).find(item=>item.name===name);assert.ok(item);return item as Setting;};
   const button=(modal:Modal,text:string)=>{const all=(el:Element):any[]=>[el,...el.settings.flatMap(setting=>setting.controls),...el.children.flatMap(all)];const item=all(modal.contentEl).find(control=>control.text===text);assert.ok(item);return item as Control;};
-  return {plugin,open,setting,button,shared,notices,deviceId,project,modals,shownMenu:()=>shownMenu,setProjects:(value:any[])=>{projectsReply=value;},setThreads:(value:any[])=>{threadsReply=value;},folderMenu:(root=false)=>{const menu=new Menu();const selected=new Folder();if(root){selected.path='/';selected.name='QLO2';}fileMenu(menu,selected,'file-explorer-context-menu');return menu;},fileMenu:(path:string,mobile:boolean)=>{api.Platform.isMobile=mobile;const menu=new Menu();const file=new File(path);fileMenu(menu,file,'file-explorer-context-menu');return {menu,file};},networkRequests:()=>networkRequests,setFailSave:(value:boolean)=>{failSave=value;}};
+  return {plugin,open,setting,button,shared,notices,deviceId,project,modals,addFolder,shownMenu:()=>shownMenu,setProjects:(value:any[])=>{projectsReply=value;},setThreads:(value:any[])=>{threadsReply=value;},folderMenu:(root=false)=>{const menu=new Menu();const selected=new Folder();if(root){selected.path='/';selected.name='QLO2';}fileMenu(menu,selected,'file-explorer-context-menu');return menu;},fileMenu:(path:string,mobile:boolean)=>{api.Platform.isMobile=mobile;const menu=new Menu();const file=new File(path);fileMenu(menu,file,'file-explorer-context-menu');return {menu,file};},networkRequests:()=>networkRequests,setFailSave:(value:boolean)=>{failSave=value;}};
 }
 
 test('agent folder commands use verified metadata, UI persistence, and the subsequent note send route',async()=>{
@@ -408,6 +410,95 @@ test('project location errors leave the dialog open without linking',async()=>{
   }finally{h.plugin.onunload();}
 });
 
+test('new-project choices use a neutral name for linked, root and unlinked notes',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    h.plugin.settings.folderLinks=[{id:'link',folderPath:'Notes',projectId:h.project.id,projectTitle:h.project.title,workspaceRoot:h.project.workspaceRoot,connectionId:'c',self:false}];
+    for(const path of ['Notes/A.md','Unlinked/A.md','A.md',undefined]){
+      const context=h.plugin.destinationContext(path?{path}:undefined);
+      assert.equal(context.getProjectName('folder:new'),'New project…');
+      assert.equal(context.getProjectChoices().find((item:any)=>item.key==='folder:new').label,'New project…');
+    }
+    assert.equal(await h.plugin.existingTarget('Notes/A.md','folder:new'),undefined);
+    assert.equal(h.modals.length,0,'Listing existing threads must not create a project');
+  }finally{h.plugin.onunload();}
+});
+
+test('new-project send lets the user name the project and link a higher Obsidian folder after delivery',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    h.addFolder('Work');h.addFolder('Work/later');
+    const creates:any[]=[];
+    h.plugin.projectLocation=async()=>({browse:async()=>({parentPath:'/projects',entries:[]}),create:async(path:string,title:string)=>{creates.push({path,title});return {...h.project,title,workspaceRoot:path};},close:()=>{}});
+    const pending=h.plugin.chatTarget('Work/later/A.md',undefined,true,'folder:new');const modal=h.modals.at(-1);await idle();
+    assert.equal(h.setting(modal,'Obsidian folder').controls[0].value,'Work/later');
+    h.setting(modal,'Project name').controls[0].change('Writing tools');
+    h.setting(modal,'Obsidian folder').controls[0].change('Work');
+    assert.equal(h.setting(modal,'Project name').controls[0].value,'Writing tools');
+    assert.equal(h.setting(modal,'Obsidian folder').controls[0].value,'Work');
+    assert.equal(creates.length,0);assert.equal(h.plugin.settings.folderLinks.length,0);
+    await h.button(modal,'Create and link').click();const target=await pending;
+    assert.deepEqual(creates,[{path:'/projects/Writing tools',title:'Writing tools'}]);
+    assert.equal(target.link.folderPath,'Work');assert.equal(h.plugin.settings.folderLinks.length,0);
+    h.plugin.rememberStarted({id:randomUUID(),project:target.project,connection:{transport:'direct',connectionId:'c'},...h.plugin.folderLinkIntent(target.link)},'new-thread');
+    assert.equal(h.plugin.settings.folderLinks[0].folderPath,'Work');
+    assert.equal((await h.plugin.chatTarget('Work/other/A.md')).project.title,'Writing tools');
+  }finally{h.plugin.onunload();}
+});
+
+for(const path of ['Notes/A.md','A.md',undefined])test(`new project without a folder link from ${path??'chat without a note'}`,async()=>{
+  const h=await folderMenuHarness();
+  try{
+    const existing={id:'link',folderPath:'Notes',projectId:h.project.id,projectTitle:h.project.title,workspaceRoot:h.project.workspaceRoot,connectionId:'c',self:false};
+    h.plugin.settings.folderLinks=[existing];
+    let creates=0;
+    h.plugin.projectLocation=async()=>({browse:async()=>({parentPath:'/projects',entries:[]}),create:async(root:string,title:string)=>{creates++;return {...h.project,id:'new-project',title,workspaceRoot:root};},close:()=>{}});
+    const pending=h.plugin.chatTarget(path,undefined,true,'folder:new');const modal=h.modals.at(-1);await idle();
+    assert.equal(h.setting(modal,'Link an Obsidian folder').controls[0].value,false);
+    h.setting(modal,'Project name').controls[0].change('Independent project');
+    await h.button(modal,'Create project').click();const target=await pending;
+    assert.equal(creates,1);assert.equal(target.project.id,'new-project');
+    assert.equal(Object.keys(h.plugin.folderLinkIntent(target.link)).length,0);
+    h.plugin.rememberStarted({id:randomUUID(),project:target.project,connection:{transport:'direct',connectionId:'c'},...h.plugin.folderLinkIntent(target.link)},'thread');
+    assert.deepEqual(JSON.parse(JSON.stringify(h.plugin.settings.folderLinks)),[existing]);
+    assert.equal(h.plugin.settings.projectCreationLocations[0].parentPath,'/projects');
+  }finally{h.plugin.onunload();}
+});
+
+test('folder menu can create an independently named project with no Obsidian link',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    h.plugin.projectLocation=async()=>({browse:async()=>({parentPath:'/projects',entries:[]}),create:async(root:string,title:string)=>({...h.project,id:'new',title,workspaceRoot:root}),close:()=>{}});
+    const pending=h.plugin.createFolderProject(h.plugin.app.vault.getAbstractFileByPath('Notes'));const modal=h.modals.at(-1);await idle();
+    h.setting(modal,'Project name').controls[0].change('Different title');
+    h.setting(modal,'Link an Obsidian folder').controls[0].change(false);
+    await h.button(modal,'Create project').click();await pending;
+    assert.equal(modal.closed,true);assert.equal(h.plugin.settings.folderLinks.length,0);
+    assert.equal(h.plugin.settings.directProjects.find((project:any)=>project.id==='new').title,'Different title');
+  }finally{h.plugin.onunload();}
+});
+
+test('invalid or already linked Obsidian folders are refused before remote creation',async()=>{
+  const h=await folderMenuHarness();
+  try{
+    let creates=0;
+    h.plugin.settings.folderLinks=[{id:'existing',folderPath:'Notes',projectId:h.project.id,projectTitle:h.project.title,workspaceRoot:h.project.workspaceRoot,connectionId:'c',self:false}];
+    h.plugin.projectLocation=async()=>({browse:async()=>({parentPath:'/projects',entries:[]}),create:async()=>{creates++;return h.project;},close:()=>{}});
+    const pending=h.plugin.chatTarget('A.md',undefined,true,'folder:new');const modal=h.modals.at(-1);await idle();
+    h.setting(modal,'Link an Obsidian folder').controls[0].change(true);
+    await h.button(modal,'Create and link').click();assert.equal(creates,0);
+    assert.ok(descendants(modal.contentEl).some(el=>el.text.includes('Choose an Obsidian folder')));
+    h.setting(modal,'Obsidian folder').controls[0].change('Notes');
+    await h.button(modal,'Create and link').click();assert.equal(creates,0);
+    assert.ok(descendants(modal.contentEl).some(el=>el.text.includes('already linked to Writing')));
+    h.setting(modal,'Obsidian folder').controls[0].change('Removed');
+    await h.button(modal,'Create and link').click();assert.equal(creates,0);
+    assert.ok(descendants(modal.contentEl).some(el=>el.text.includes('no longer exists')));
+    const rejected=assert.rejects(pending,/Project creation cancelled/);modal.close();await rejected;
+    assert.equal(h.plugin.settings.folderLinks.length,1);
+  }finally{h.plugin.onunload();}
+});
+
 test('project creation refuses a browser result that falls back to a parent folder',async()=>{
   const h=await folderMenuHarness();
   try{
@@ -437,6 +528,7 @@ for(const cancelled of [true,false])test(`explicit new-project routing ${cancell
   const h=await folderMenuHarness();
   try{
     const external={...h.project,title:'Chosen workspace',workspaceRoot:'/workspaces/chosen'};
+    h.addFolder('Unlinked');
     const creates:any[]=[];
     h.plugin.projectLocation=async()=>({browse:async(path:string)=>({parentPath:path,entries:[]}),create:async(path:string)=>{creates.push(path);return external;},close:()=>{}});
     const pending=h.plugin.chatTarget('Unlinked/note.md',undefined,true,'folder:new');
