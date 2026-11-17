@@ -154,8 +154,9 @@ export class SendComposer extends NoteTabPanel {
     const controls=composer.createDiv({cls:'t3-send-controls'});
     const options=controls.createDiv({cls:'t3-send-options'});
     const resolved=()=>resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},this.overrides);
-    const streaming=this.button(options,'Stream replies into the editor','text-cursor-input',()=>{this.overrides.inline={...this.overrides.inline,enabled:!resolved().inline.enabled};this.refreshAvailability?.();});streaming.setAttribute('role','switch');
-    const format=this.button(options,'Final answer format','pilcrow',()=>{this.overrides.inline={...this.overrides.inline,finalAnswerFormat:resolved().inline.finalAnswerFormat==='formatted'?'raw-markdown':'formatted'};this.refreshAvailability?.();},'t3-send-format');format.createSpan();
+    const streaming=this.button(options,'Stream replies into the editor','text-cursor-input',()=>{this.overrides.inline={...this.overrides.inline,enabled:!resolved().inline.enabled};this.refreshAvailability?.();},'t3-send-streaming');streaming.setAttribute('role','switch');const streamingLabel=streaming.createSpan();
+    const streamingName=options.createSpan({text:'Stream replies into the editor',attr:{id:`t3-send-streaming-${crypto.randomUUID()}`,hidden:''}});streaming.setAttribute('aria-labelledby',streamingName.id);streaming.removeAttribute('aria-label');streaming.removeAttribute('title');
+    const format=this.button(options,'Final answer format','quote',()=>{this.overrides.inline={...this.overrides.inline,finalAnswerFormat:resolved().inline.finalAnswerFormat==='formatted'?'raw-markdown':'formatted'};this.refreshAvailability?.();},'t3-send-format');format.createSpan();
     // Obsidian turns aria-label into a hover tooltip. A referenced name keeps
     // this control accessible without covering its expanding visible label.
     const formatName=options.createSpan({attr:{id:`t3-send-format-${crypto.randomUUID()}`,hidden:''}});format.setAttribute('aria-labelledby',formatName.id);format.removeAttribute('aria-label');format.removeAttribute('title');
@@ -190,8 +191,10 @@ export class SendComposer extends NoteTabPanel {
       setComposerProviderIcon(providerIcon,this.models.find(item=>item.selection.instanceId===selection?.instanceId&&item.selection.model===selection?.model)?.driver);
       model.title=this.modelError??[modelLabel.textContent,this.overrides.interactionMode==='plan'?'Plan mode':undefined].filter(Boolean).join(' · ');model.setAttribute('aria-description',model.title);
       project.disabled=disabled||Boolean(restriction);thread.disabled=disabled||Boolean(restriction);model.disabled=disabled||!this.host.getModels;
-      streaming.disabled=disabled||continuing;streaming.setAttribute('aria-checked',String(inline.enabled));streaming.title=continuing?'This running response keeps its streaming choices':`Stream replies into the editor: ${inline.enabled?'On':'Off'}`;
-      format.disabled=disabled||continuing||!inline.enabled;const formatLabel=inline.finalAnswerFormat==='formatted'?'Quoted Markdown':'Raw Markdown';format.querySelector('span')!.setText(formatLabel);formatName.setText(`Final answer format: ${formatLabel}`);
+      streaming.disabled=disabled||continuing;streaming.setAttribute('aria-checked',String(inline.enabled));streamingLabel.setText(`Stream replies into note: ${inline.enabled?'On':'Off'}`);streaming.setAttribute('aria-description',continuing?'This running response keeps its streaming choices':streamingLabel.textContent??'');
+      format.disabled=disabled||continuing||!inline.enabled;const formatLabel=inline.finalAnswerFormat==='formatted'?'Quoted Markdown':'Raw Markdown';
+      if(format.dataset.format!==inline.finalAnswerFormat){format.dataset.format=inline.finalAnswerFormat;format.empty();setIcon(format,inline.finalAnswerFormat==='formatted'?'quote':'code');format.createSpan();}
+      format.querySelector('span')!.setText(formatLabel);formatName.setText(`Final answer format: ${formatLabel}`);
       threadLabel.setText(this.target==='new'?'New thread':this.destination?.label??'Previous thread');
       const status=this.destination?.status??this.destination?.detail?.match(/ · (Idle|Active|Running|Waiting)\b/)?.[1];thread.dataset.state=this.target==='new'?'new':this.destination?.unavailable?'unavailable':status?.toLowerCase()??'idle';setIcon(threadIcon,status&&['Active','Running'].includes(status)?'loader-circle':'message-circle');
       thread.title=this.target==='new'?'Send to a new thread':this.destination?.unavailable?this.destination.detail??'Thread unavailable':[threadLabel.textContent,status].filter(Boolean).join(' · ');thread.setAttribute('aria-description',status??'');

@@ -31,8 +31,11 @@ response keep that response's existing policy.
 The model control resolves the project or thread model when the composer opens,
 including the advertised default reasoning setting. It shows that model and its
 provider glyph. A late catalog from another destination cannot change this one.
-The answer-format control shows its icon at rest and reveals the label on hover
+The answer-format control uses quotation marks for Quoted Markdown and angle
+brackets for Raw Markdown. It shows the icon at rest and reveals the label on hover
 or keyboard focus. Conversation status is on the thread button, without a footer.
+The streaming switch shows “Stream replies into note: On/Off” on hover or keyboard
+focus. This label appears above the toolbar, so it does not cover the format control.
 
 The prompt uses T3's file, skill and provider-command suggestions. Type `@` to
 search files on the selected machine, `$` for its enabled skills, or `/` for its

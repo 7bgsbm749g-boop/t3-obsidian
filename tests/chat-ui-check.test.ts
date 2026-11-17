@@ -55,11 +55,14 @@ test('unavailable previous thread cannot submit, but New thread is still availab
  const h=await fixture({steering:true});h.checks[0].resolve({label:'Unavailable',unavailable:true,detail:'Missing thread'});await h.modal.ready;assert.equal(h.button('Send context').disabled,true);await h.modal.choose();assert.equal(h.sent.length,0);assert.match(h.notices[0],/Missing thread/);h.modal.select('new');await h.modal.choose();assert.equal(h.sent[0].target,'new');
 });
 test('switches resolve per send, disable formatting when streaming is off, and preserve defaults',async()=>{
- const h=await fixture();h.button('Final answer format: Quoted Markdown').click();h.button('Stream replies into the editor').click();assert.equal(h.button('Final answer format: Raw Markdown').disabled,true);h.button('Stream replies into the editor').click();await h.modal.choose();assert.equal(h.sent[0].options.inline.finalAnswerFormat,'raw-markdown');assert.equal(h.sent[0].options.inline.enabled,true);assert.equal(h.host.getInlineDefaults().enabled,true);
+ const h=await fixture();const stream=h.button('Stream replies into the editor');assert.equal(stream.querySelector('span')?.textContent,'Stream replies into note: On');h.button('Final answer format: Quoted Markdown').click();stream.click();assert.equal(stream.querySelector('span')?.textContent,'Stream replies into note: Off');assert.equal(h.button('Final answer format: Raw Markdown').disabled,true);stream.click();await h.modal.choose();assert.equal(h.sent[0].options.inline.finalAnswerFormat,'raw-markdown');assert.equal(h.sent[0].options.inline.enabled,true);assert.equal(h.host.getInlineDefaults().enabled,true);
 });
 test('format switch keeps its accessible name without an Obsidian hover tooltip',async()=>{
  const h=await fixture();const format=h.button('Final answer format: Quoted Markdown');assert.ok(format);assert.equal(format.hasAttribute('aria-label'),false);assert.equal(format.hasAttribute('title'),false);format.click();assert.equal(h.button('Final answer format: Raw Markdown'),format);
- assert.equal(h.modal.modalEl.hasAttribute('aria-label'),false);assert.equal(h.document.getElementById(h.modal.modalEl.getAttribute('aria-labelledby'))?.textContent,'Send composer');assert.equal(h.modal.field.hasAttribute('aria-label'),false);assert.equal(h.document.getElementById(h.modal.field.getAttribute('aria-labelledby'))?.textContent,'Ask about this note or selection');h.modal.close();
+ assert.equal(h.modal.modalEl.hasAttribute('aria-label'),false);assert.equal(h.document.getElementById(h.modal.modalEl.getAttribute('aria-labelledby'))?.textContent,'Send composer');assert.equal(h.modal.field.hasAttribute('aria-label'),false);assert.equal(h.document.getElementById(h.modal.field.getAttribute('aria-labelledby'))?.textContent,'Ask about this note or selection');const stream=h.button('Stream replies into the editor');assert.equal(stream.hasAttribute('aria-label'),false);assert.equal(stream.hasAttribute('title'),false);h.modal.close();
+});
+test('format icons identify quoted and raw Markdown before hover and retain the label while typing',async()=>{
+ const h=await fixture();const format=h.button('Final answer format: Quoted Markdown');assert.equal(format.getAttribute('data-icon'),'quote');format.click();assert.equal(format.getAttribute('data-icon'),'code');assert.equal(format.querySelector('span')?.textContent,'Raw Markdown');const label=format.querySelector('span');h.type('Keep typing');assert.equal(format.querySelector('span'),label);format.click();assert.equal(format.getAttribute('data-icon'),'quote');assert.equal(format.querySelector('span')?.textContent,'Quoted Markdown');h.modal.close();
 });
 test('a model choice is resolved into the submitted request and survives UI redraw',async()=>{
  const h=await fixture();h.type('Question');h.modal.overrides.modelSelection={instanceId:'p',model:'chosen',options:[{id:'effort',value:'high'}]};h.modal.onOpen();assert.match(h.button('Choose model').textContent!,/chosen/);await h.modal.choose();assert.equal(h.sent[0].options.modelSelection.model,'chosen');assert.equal(h.sent[0].text,'Question');
@@ -110,7 +113,7 @@ test('closing synchronously before the deferred check avoids starting network wo
 });
 test('a running response keeps its presentation policy and disables conflicting switches',async()=>{
  const h=await fixture({steering:true});h.checks[0].resolve({...continuation,responseId:'active-response'});await h.modal.ready;
- assert.equal(h.button('Stream replies into the editor').disabled,true);assert.equal(h.button('Final answer format: Quoted Markdown').disabled,true);assert.match(h.button('Stream replies into the editor').title,/keeps its streaming choices/);h.modal.close();
+ assert.equal(h.button('Stream replies into the editor').disabled,true);assert.equal(h.button('Final answer format: Quoted Markdown').disabled,true);assert.match(h.button('Stream replies into the editor').getAttribute('aria-description')??'',/keeps its streaming choices/);h.modal.close();
 });
 
 test('a response-derived project updates the visible selector without losing its draft',async()=>{

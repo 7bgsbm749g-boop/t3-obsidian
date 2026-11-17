@@ -672,6 +672,9 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 .t3-send-thread[data-state="new"] > span:nth-child(2) { max-width: none; }
 .t3-send-thread > span, .t3-send-model > span, .t3-send-project > span { display: block; }
 .t3-send-thread[data-state="running"] .t3-send-thread-icon, .t3-send-thread[data-state="active"] .t3-send-thread-icon { color: var(--interactive-accent); }
+.t3-send-streaming { position: relative; }
+.t3-send-streaming > span { position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 3; max-width: min(260px, calc(100vw - 48px)); padding: 6px 8px; border: 1px solid var(--background-modifier-border); border-radius: 6px; background: var(--background-primary); color: var(--text-normal); box-shadow: var(--shadow-s); opacity: 0; transform: translateY(4px); pointer-events: none; transition: opacity 150ms ease-out, transform 150ms ease-out; }
+.t3-send-streaming:is(:hover, :focus-visible) > span { opacity: 1; transform: translateY(0); }
 .t3-send-format > span { position: absolute; left: 28px; top: 0; height: 28px; align-items: center; background: var(--background-modifier-hover); border-radius: 0 6px 6px 0; z-index: 1; max-width: 0; padding-inline: 0; opacity: 0; transition: max-width 150ms ease-out, padding 150ms ease-out, opacity 150ms ease-out; }
 .t3-send-format { position: relative; gap: 0; }
 
@@ -707,7 +710,7 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
   .t3-send-model { max-width: 110px; }
   .t3-send-thread > span:nth-child(2) { max-width: 64px; }
 }
-@media (prefers-reduced-motion: reduce) { .t3-send-format > span { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .t3-send-format > span, .t3-send-streaming > span { transition: none; } }
 
 /* Shared T3 work presentation inside native workspace chat surfaces. */
 .t3-sidebar-chat { display: flex; flex-direction: column; height: 100%; min-height: 0; container: t3-sidebar-chat / inline-size; color: var(--text-normal); }
