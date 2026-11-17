@@ -61,24 +61,38 @@ export class ComposerModelPicker extends Component {
   const models=this.models.filter(model=>query?`${model.provider} ${model.label} ${model.selection.model}`.toLowerCase().includes(query):this.tab==='favorites'?model.isFavorite:model.selection.instanceId===this.tab);
   const visible=models.filter(model=>query||this.tab==='favorites'||!model.isLegacy||model.isFavorite||this.expanded.has(model.selection.instanceId)||this.selected()===model);
   for(const [index,model] of visible.entries()){
-   const selected=this.selected()===model,button=this.button(this.list,model.label,()=>{void this.pickModel(model);},'t3-model-picker-row t3-model-picker-model');button.setAttribute('aria-pressed',String(selected));button.disabled=this.pending||model.disabled===true;
+   const selected=this.selected()===model,button=this.button(this.list,model.label,()=>{void this.pickModel(model,button);},'t3-model-picker-row t3-model-picker-model');button.setAttribute('aria-pressed',String(selected));button.disabled=this.pending||model.disabled===true;
    renderProviderIcon(button,model.driver,model.provider);button.createSpan({cls:'t3-model-picker-label',text:model.label});if(selected)this.icon(button,'check');
    if(index<9)button.createEl('kbd',{text:`${Platform.isMacOS?'⌘':'Ctrl+'}${index+1}`});
   }
   if(!visible.length)this.list.createDiv({cls:'t3-model-picker-empty',text:this.tab==='favorites'&&!query?'No favorites yet':'No models found'});
   if(!query&&this.tab!=='favorites'&&models.some(model=>model.isLegacy&&!model.isFavorite))this.button(this.list,this.expanded.has(this.tab)?'Show less':'Show more',()=>{if(this.expanded.has(this.tab))this.expanded.delete(this.tab);else this.expanded.add(this.tab);this.renderModels();}).setText(this.expanded.has(this.tab)?'Show less':'Show more');
  }
- private async pickModel(model:ComposerModel){
+ private async pickModel(model:ComposerModel,trigger:HTMLButtonElement){
   if(model.disabled)return;const next=copy(this.settings),same=next.modelSelection?.instanceId===model.selection.instanceId;
   next.modelSelection={...model.selection,...(same?{options:next.modelSelection?.options?.filter(saved=>model.options.some(option=>option.id===saved.id&&(option.type==='boolean'?typeof saved.value==='boolean':option.options.some(choice=>choice.id===saved.value))))}:{})};
-  if(next.runtimeMode&&!model.runtimeModes.includes(next.runtimeMode))next.runtimeMode=model.runtimeModes.includes('full-access')?'full-access':model.runtimeModes[0];
+  const mode=next.runtimeMode??'full-access';
+  if(!model.runtimeModes.includes(mode)){
+   new Notice(`${model.label} does not support ${permissions[mode]}. Choose permissions explicitly to switch models.`);
+   if(model.runtimeModes.length){trigger.setAttribute('aria-haspopup','menu');this.showMenu(trigger,model.runtimeModes.map(value=>({label:permissions[value],selected:false,pick:()=>{void this.commit({...next,runtimeMode:value});}})),'right');}
+   return;
+  }
   await this.commit(next);
  }
- private async changeOption(model:ComposerModel,option:ComposerOption,value:string|boolean){
-  const next=copy(this.settings);next.modelSelection={...model.selection,options:[...(next.modelSelection?.options??[]).filter(saved=>saved.id!==option.id),{id:option.id,value}]};await this.commit(next);
+ private async changeOption(model:ComposerModel,option:ComposerOption,value?:string|boolean){
+  const next=copy(this.settings),options=(next.modelSelection?.options??[]).filter(saved=>saved.id!==option.id);
+  if(value!==undefined)options.push({id:option.id,value});
+  next.modelSelection={...model.selection,options};await this.commit(next);
+ }
+ private overridden(option:ComposerOption){return this.settings.modelSelection?.options?.some(saved=>saved.id===option.id)??false;}
+ private optionReset(button:HTMLButtonElement,model:ComposerModel,option:ComposerOption){
+  button.title=`${option.label}: right-click to use default`;
+  const open=()=>{if(this.pending||model.disabled)return;this.showMenu(button,[{label:'Use default',selected:!this.overridden(option),pick:()=>{void this.changeOption(model,option);}}]);};
+  button.addEventListener('contextmenu',event=>{event.preventDefault();event.stopPropagation();open();});
+  button.addEventListener('keydown',event=>{if(!event.isComposing&&(event.key==='ContextMenu'||event.shiftKey&&event.key==='F10')){event.preventDefault();event.stopPropagation();open();}});
  }
  private async commit(next:ComposerSettings){
-  if(this.pending||this.closed)return;const active=this.anchor.ownerDocument.activeElement?.getAttribute('aria-label');this.pending=true;this.render();
+  if(this.pending||this.closed)return;const active=this.menuTrigger?.getAttribute('aria-label')??this.anchor.ownerDocument.activeElement?.getAttribute('aria-label');this.pending=true;this.render();
   try{await this.apply(next);this.settings=copy(next);}catch(error){new Notice(error instanceof Error?error.message:String(error));}
   finally{this.pending=false;if(!this.closed){this.render();this.position();if(active)Array.from(this.el.querySelectorAll<HTMLButtonElement>('button')).find(button=>button.getAttribute('aria-label')===active&&!button.disabled)?.focus();}}
  }
@@ -90,12 +104,12 @@ export class ComposerModelPicker extends Component {
   if(effort){
    const group=content.createDiv({attr:{role:'radiogroup','aria-label':effort.label}}),value=composerOptionValue(model,this.settings,effort);
    const choices=effort.type==='boolean'?[{id:true,label:'On'},{id:false,label:'Off'}]:effort.options;
-   for(const choice of choices){const button=this.button(group,choice.label,()=>{void this.changeOption(model,effort,choice.id);});button.setAttribute('role','radio');button.setAttribute('aria-checked',String(choice.id===value));button.disabled=this.pending||model.disabled===true;button.createSpan({text:choice.label});if(choice.id===value)this.icon(button,'check');else if('isDefault' in choice&&choice.isDefault)button.createSpan({cls:'t3-model-picker-default',text:'Default'});}
+   for(const choice of choices){const button=this.button(group,choice.label,()=>{void this.changeOption(model,effort,choice.id);});this.optionReset(button,model,effort);button.setAttribute('role','radio');button.setAttribute('aria-checked',String(choice.id===value));button.disabled=this.pending||model.disabled===true;button.createSpan({text:choice.label});if(choice.id===value)this.icon(button,'check');else if('isDefault' in choice&&choice.isDefault)button.createSpan({cls:'t3-model-picker-default',text:'Default'});}
   }
   const others=options.filter(option=>option!==effort);if(effort&&others.length)content.createDiv({cls:'t3-model-picker-divider'});
   for(const option of others){const value=composerOptionValue(model,this.settings,option),button=this.button(content,option.label,()=>{
    if(option.type==='boolean')void this.changeOption(model,option,value!==true);else this.optionMenu(button,model,option);
-  });button.disabled=this.pending||model.disabled===true;button.addClass('t3-model-picker-option');const labels=button.createSpan({cls:'t3-model-picker-label'});labels.createSpan({cls:'t3-model-picker-option-name',text:option.label});labels.createSpan({text:option.type==='boolean'?(value?'On':'Off'):option.options.find(choice=>choice.id===value)?.label??'Default'});
+  });this.optionReset(button,model,option);button.disabled=this.pending||model.disabled===true;button.addClass('t3-model-picker-option');const labels=button.createSpan({cls:'t3-model-picker-label'});labels.createSpan({cls:'t3-model-picker-option-name',text:option.label});labels.createSpan({text:option.type==='boolean'?(value?'On':'Off'):option.options.find(choice=>choice.id===value)?.label??'Default'});
    if(option.type==='boolean'){button.setAttribute('role','switch');button.setAttribute('aria-checked',String(value===true));button.createSpan({cls:'t3-model-picker-switch',attr:{'aria-hidden':'true'}});}else{button.setAttribute('aria-haspopup','menu');this.icon(button,'chevron-right');}
   }
  }
@@ -104,13 +118,13 @@ export class ComposerModelPicker extends Component {
   for(const option of model?.options.filter(isSpeed)??[]){
    const value=composerOptionValue(model!,this.settings,option),group=this.footer.createDiv({cls:'t3-model-picker-speed',attr:{role:option.id==='ultracode'?'group':'radiogroup','aria-label':option.label}});
    const choices=option.type==='boolean'?option.id==='ultracode'?[{id:value!==true,label:option.label}]:[{id:false,label:'Standard'},{id:true,label:'Fast'}]:option.options;
-   for(const choice of choices){const button=this.button(group,choice.label,()=>{void this.changeOption(model!,option,choice.id);},'t3-model-picker-segment');if(choice.label==='Fast')this.icon(button,'zap');button.createSpan({text:choice.label});button.disabled=this.pending||model?.disabled===true;
+   for(const choice of choices){const button=this.button(group,choice.label,()=>{void this.changeOption(model!,option,choice.id);},'t3-model-picker-segment');this.optionReset(button,model!,option);if(choice.label==='Fast')this.icon(button,'zap');button.createSpan({text:choice.label});button.disabled=this.pending||model?.disabled===true;
     if(option.id==='ultracode')button.setAttribute('aria-pressed',String(value===true));else{button.setAttribute('role','radio');button.setAttribute('aria-checked',String(value===choice.id));}}
   }
   const mode=this.settings.runtimeMode??'full-access',modes=model?.runtimeModes??[];
   if(modes.length){const button=this.button(this.footer,`Permissions: ${permissions[mode]}`,()=>this.showMenu(button,modes.map(value=>({label:permissions[value],selected:value===mode,pick:()=>{void this.commit({...copy(this.settings),runtimeMode:value});}}))),'t3-model-picker-permissions');this.icon(button,'shield-off');button.createSpan({text:permissions[mode]});this.icon(button,'chevron-up');button.setAttribute('aria-haspopup','menu');}
  }
- private optionMenu(button:HTMLButtonElement,model:ComposerModel,option:ComposerOption){this.showMenu(button,option.options.map(choice=>({label:choice.label,selected:choice.id===composerOptionValue(model,this.settings,option),pick:()=>{void this.changeOption(model,option,choice.id);}})),'right');}
+ private optionMenu(button:HTMLButtonElement,model:ComposerModel,option:ComposerOption){this.showMenu(button,[{label:'Use default',selected:!this.overridden(option),pick:()=>{void this.changeOption(model,option);}},...option.options.map(choice=>({label:choice.label,selected:this.overridden(option)&&choice.id===composerOptionValue(model,this.settings,option),pick:()=>{void this.changeOption(model,option,choice.id);}}))],'right');}
  private showMenu(button:HTMLButtonElement,choices:{label:string;selected:boolean;pick:()=>void}[],side:'right'|'top'='top'){
   if(this.menu){this.closeMenu();return;}
   this.menuTrigger=button;const menu=this.menu=this.el.createDiv({cls:'t3-model-picker-menu',attr:{role:'menu','aria-label':button.getAttribute('aria-label')??'Options'}});button.setAttribute('aria-expanded','true');
@@ -123,9 +137,10 @@ export class ComposerModelPicker extends Component {
  }
  private closeMenu(){this.menu?.remove();this.menu=undefined;this.menuTrigger?.setAttribute('aria-expanded','false');this.menuTrigger?.focus();this.menuTrigger=undefined;}
  private keydown(event:KeyboardEvent){
+  if(event.isComposing)return;
   if(event.key==='Escape'){event.preventDefault();event.stopPropagation();if(this.menu)this.closeMenu();else this.close();return;}
   if((event.ctrlKey||event.metaKey)&&/^[1-9]$/.test(event.key)){const button=this.list.querySelectorAll<HTMLButtonElement>('.t3-model-picker-model')[Number(event.key)-1];if(button&&!button.disabled){event.preventDefault();button.click();}return;}
-  if(event.key==='ArrowRight'&&event.target===this.search){event.preventDefault();(this.column.querySelector<HTMLButtonElement>('[aria-checked="true"]')??this.column.querySelector('button'))?.focus();return;}
+  if(event.key==='ArrowRight'&&event.target===this.search&&!this.search.value&&!event.shiftKey&&!event.ctrlKey&&!event.altKey&&!event.metaKey){event.preventDefault();(this.column.querySelector<HTMLButtonElement>('[aria-checked="true"]')??this.column.querySelector('button'))?.focus();return;}
   if(event.key==='ArrowRight'&&this.rail.contains(event.target as Node)){event.preventDefault();this.search.focus();return;}
   if(event.key==='ArrowLeft'&&this.column.contains(event.target as Node)){event.preventDefault();this.search.focus();return;}
   if(event.key==='ArrowDown'||event.key==='ArrowUp'){
