@@ -1,6 +1,6 @@
 import {acquireT3UnaryRpc} from '../connection/t3-rpc';
 import {readNewThreadDefaults} from './model-defaults';
-import {composerModels,type ComposerSettings} from './composer-models';
+import {readComposerModels,type ComposerSettings} from './composer-models';
 import type {OutgoingAttachment,OutgoingContext} from '../connection/send-contracts';
 import {isRecord} from '../shared/values';
 import {readInlineSnapshot,type ThreadAccess} from './thread-stream';
@@ -49,7 +49,12 @@ export class SidebarThreadTransport {
   async defaults(project:SidebarProject){
     const access=await this.access(project.environmentId);try{return await readNewThreadDefaults(access.api,access.origin,{id:project.projectId,workspaceRoot:project.workspaceRoot});}finally{await access.close?.();}
   }
-  async catalog(target:ThreadTarget,cwd?:string){return this.use(target,async access=>{const rpc=await acquireT3UnaryRpc(access.api,access.origin);try{return composerModels(await rpc.call('server.getConfig',{}),cwd);}finally{rpc.close();}});}
+  async catalog(target:ThreadTarget,cwd?:string,refresh=false){return this.use(target,async access=>{
+    const rpc=await acquireT3UnaryRpc(access.api,access.origin);
+    try{
+      return await readComposerModels(rpc,cwd,refresh);
+    }finally{rpc.close();}
+  });}
   async files(target:ThreadTarget,cwd:string,query:string){return this.use(target,async access=>{const rpc=await acquireT3UnaryRpc(access.api,access.origin);try{const result=await rpc.call('projects.searchEntries',{cwd,query:query.slice(0,256),limit:100,kind:'file'});return isRecord(result)&&Array.isArray(result.entries)?result.entries.flatMap(row=>isRecord(row)&&typeof row.path==='string'?[row.path]:[]):[];}finally{rpc.close();}});}
   async configure(target:SidebarTarget,settings:ComposerSettings){
     if(target.kind==='subagent')throw Error('Subagent threads are read-only.');

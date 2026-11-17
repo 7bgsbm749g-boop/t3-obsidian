@@ -32,7 +32,7 @@ export interface SidebarHost {
   projects():ProjectChoice[];
   threads(project:ProjectChoice):Promise<ThreadChoice[]>;
   create?(project:ProjectChoice,text:string,options?:SidebarSendOptions):Promise<SidebarTarget>;
-  catalog?(target:SidebarTarget):Promise<ComposerModel[]>;
+  catalog?(target:SidebarTarget,refresh?:boolean):Promise<ComposerModel[]>;
   files?(target:SidebarTarget,cwd:string,query:string):Promise<string[]>;
   renderRequests?(element:HTMLElement,target:SidebarTarget,state:InlineThreadState):()=>void;
   created?(target:SidebarTarget):void;
@@ -137,7 +137,7 @@ export class SidebarThreadView extends ItemView {
     this.requests=this.contentEl.createDiv({cls:'t3-chat-requests'});
     if(this.kind!=='subagent'){
       this.composer=new ChatComposer(this.app,this.contentEl.createDiv(),{uuid:()=>this.owner.host.uuid(),changed:text=>{this.draft=text;this.draftAttachments=this.composer?.options().attachments??[];this.draftContext=this.composer?.options().context;this.app.workspace.requestSaveLayout();},send:()=>this.send(),stop:()=>this.owner.transport.stop(this.target!),
-        models:async()=>{const target=this.target??this.draftTarget();if(!target)return [];return this.owner.host.catalog?this.owner.host.catalog(target):this.owner.transport.catalog(target,this.root??this.project?.workspaceRoot);},
+        models:async refresh=>{const target=this.target??this.draftTarget();if(!target)return [];return this.owner.host.catalog?this.owner.host.catalog(target,refresh):this.owner.transport.catalog(target,this.root??this.project?.workspaceRoot,refresh);},
         configure:async settings=>{if(this.target)await this.owner.transport.configure(this.target,settings);this.settings=settings;this.app.workspace.requestSaveLayout();},
         files:async query=>{const target=this.target??this.draftTarget(),cwd=this.root??this.project?.workspaceRoot;if(!target||!cwd)return [];return this.owner.host.files?this.owner.host.files(target,cwd,query):this.owner.transport.files(target,cwd,query);},
       },this.draft);this.addChild(this.composer);this.composer.restoreContext(this.pending?.options?.context??this.draftContext);this.composer.restoreAttachments(this.pending?.options?.attachments??this.draftAttachments);

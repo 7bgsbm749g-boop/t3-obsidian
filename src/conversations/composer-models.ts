@@ -1,21 +1,32 @@
 import {isRecord,records} from '../shared/values';
 import type {ModelSelection,RuntimeMode} from './model-defaults';
 export interface ComposerOption {id:string;label:string;type:'select'|'boolean';role?:string;currentValue?:string|boolean;options:{id:string;label:string;isDefault?:boolean}[]}
-export interface ComposerModel {selection:ModelSelection;label:string;provider:string;driver?:string;options:ComposerOption[];runtimeModes:RuntimeMode[];plan:boolean;commands:{name:string;description?:string}[];skills:{name:string;path:string}[]}
+export interface ComposerModel {selection:ModelSelection;label:string;provider:string;driver?:string;isLegacy?:boolean;isFavorite?:boolean;disabled?:boolean;options:ComposerOption[];runtimeModes:RuntimeMode[];plan:boolean;commands:{name:string;description?:string}[];skills:{name:string;path:string}[]}
 export interface ComposerSettings {modelSelection?:ModelSelection;runtimeMode?:RuntimeMode;interactionMode?:'default'|'plan'}
 const modes:RuntimeMode[]=['approval-required','auto-accept-edits','auto','full-access'];
+/** T3 only refreshes on picker open when catalog-only refresh is supported.
+ * A failed background refresh must not hide a usable existing catalog. */
+export async function readComposerModels(rpc:{call(method:string,input:Record<string,unknown>):Promise<unknown>},cwd?:string,refresh=false):Promise<ComposerModel[]>{
+ let config=await rpc.call('server.getConfig',{});
+ if(refresh&&isRecord(config)&&isRecord(config.environment)&&isRecord(config.environment.capabilities)&&config.environment.capabilities.modelCatalogRefresh===true){
+  try{await rpc.call('server.refreshProviders',{modelCatalogOnly:true});config=await rpc.call('server.getConfig',{});}catch{/* Keep the last server catalog, as T3 does when its background refresh fails. */}
+ }
+ return composerModels(config,cwd);
+}
 /** Only server-advertised model capabilities become controls. No invented
  * effort values, provider IDs, skills, or permission modes. */
 export function composerModels(config:unknown,cwd?:string):ComposerModel[]{
  if(!isRecord(config)||!Array.isArray(config.providers))throw Error('T3 did not return a provider catalog.');
- return records(config.providers).filter(provider=>provider.enabled&&provider.availability!=='unavailable').flatMap(provider=>{
+ return records(config.providers).filter(provider=>provider.enabled).flatMap(provider=>{
   if(typeof provider.instanceId!=='string')return [];
   const workspace=records(provider.workspaceSnapshots).find(row=>row.cwd===cwd),commands=records(workspace?.slashCommands??provider.slashCommands),skills=records(workspace?.skills??provider.skills);
   return records(provider.models).flatMap(model=>{
    if(typeof model.slug!=='string')return [];
-   const descriptors=records(isRecord(model.capabilities)?model.capabilities.optionDescriptors:workspace?.optionDescriptors);
+   const descriptors=records((isRecord(model.capabilities)?model.capabilities.optionDescriptors:undefined)??workspace?.optionDescriptors??provider.optionDescriptors);
+   const settings=isRecord(config.settings)?config.settings:{},preferences=isRecord(settings.providerModelPreferences)?settings.providerModelPreferences[provider.instanceId as string]:undefined;
+   if(isRecord(preferences)&&Array.isArray(preferences.hiddenModels)&&preferences.hiddenModels.includes(model.slug))return [];
    const options=descriptors.flatMap((option):ComposerOption[]=>typeof option.id==='string'&&typeof option.label==='string'&&(option.type==='select'||option.type==='boolean')?[{id:option.id,label:option.label,type:option.type,role:typeof option.role==='string'?option.role:undefined,currentValue:typeof option.currentValue==='string'||typeof option.currentValue==='boolean'?option.currentValue:undefined,options:records(option.options).flatMap(choice=>typeof choice.id==='string'&&typeof choice.label==='string'?[{id:choice.id,label:choice.label,isDefault:choice.isDefault===true}]:[])}]:[]);
-   return [{selection:{instanceId:provider.instanceId as string,model:model.slug},label:typeof model.shortName==='string'?model.shortName:typeof model.name==='string'?model.name:model.slug,driver:typeof provider.driver==='string'?provider.driver:undefined,provider:typeof provider.displayName==='string'?provider.displayName:String(provider.driver??provider.instanceId),options,runtimeModes:Array.isArray(provider.supportedRuntimeModes)?provider.supportedRuntimeModes.filter((mode):mode is RuntimeMode=>modes.includes(mode as RuntimeMode)):modes,plan:provider.showInteractionModeToggle===true,commands:commands.flatMap(row=>typeof row.name==='string'?[{name:row.name,description:typeof row.description==='string'?row.description:undefined}]:[]),skills:skills.flatMap(row=>row.enabled&&row.userInvocable!==false&&typeof row.name==='string'&&typeof row.path==='string'?[{name:row.name,path:row.path}]:[])}];
+   return [{isLegacy:model.isLegacy===true,isFavorite:records(settings.favorites).some(favorite=>favorite.provider===provider.instanceId&&favorite.model===model.slug),disabled:provider.availability==='unavailable'||typeof provider.status==='string'&&provider.status!=='ready'||model.isUnavailable===true,selection:{instanceId:provider.instanceId as string,model:model.slug},label:typeof model.shortName==='string'?model.shortName:typeof model.name==='string'?model.name:model.slug,driver:typeof provider.driver==='string'?provider.driver:undefined,provider:typeof provider.displayName==='string'?provider.displayName:String(provider.driver??provider.instanceId),options,runtimeModes:Array.isArray(provider.supportedRuntimeModes)?provider.supportedRuntimeModes.filter((mode):mode is RuntimeMode=>modes.includes(mode as RuntimeMode)):modes,plan:provider.showInteractionModeToggle===true,commands:commands.flatMap(row=>typeof row.name==='string'?[{name:row.name,description:typeof row.description==='string'?row.description:undefined}]:[]),skills:skills.flatMap(row=>row.enabled&&row.userInvocable!==false&&typeof row.name==='string'&&typeof row.path==='string'?[{name:row.name,path:row.path}]:[])}];
   });
  });
 }
