@@ -20,6 +20,7 @@ test('banner uses exact requested heading and renders GitHub prose, headings and
  assert.match(notes.querySelector('p')!.textContent!,/Release description/);assert.equal(notes.querySelector('h2')!.textContent,'What’s Changed');assert.equal(notes.querySelectorAll('li').length,2);assert.equal(notes.querySelector('strong')!.textContent,'Fix');assert.equal(f.sanitized(),1);
  const link=notes.querySelector('a')!;assert.equal(link.getAttribute('href'),'https://github.com/example/repo/compare/1...2');assert.equal(link.getAttribute('rel'),'noopener noreferrer');assert.equal(link.getAttribute('target'),'_blank');
  assert.equal(f.root.querySelector('.t3-update-banner')!.children[1],notes);
+ const actions=f.root.querySelector('.t3-update-banner-actions')!;assert.equal(actions.parentElement,notes.parentElement);assert.equal(notes.nextElementSibling,actions);assert.equal(f.root.querySelector('.t3-update-banner-header button'),null);
 });
 test('actions and status remain separate from the heading and notes during update or failure',async()=>{
  const f=await fixture();f.banner.render(f.state);f.buttons()[0].click();f.buttons()[1].click();assert.equal(f.updates(),1);assert.equal(f.dismissals(),1);

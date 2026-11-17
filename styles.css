@@ -831,10 +831,12 @@ a.send-to-t3-subagent:focus-visible { outline:2px solid var(--interactive-accent
   transform: translateX(-50%);
   z-index: var(--layer-notice);
   width: min(760px, calc(100% - 32px));
-  display: flex;
-  flex-direction: column;
-  flex: 0 0 auto;
-  gap: var(--size-4-3);
+  box-sizing: border-box;
+  max-height: min(31vh, 280px);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: var(--size-4-2) var(--size-4-3);
   padding: var(--size-4-2) var(--size-4-4);
   padding-top: max(var(--size-4-2), env(safe-area-inset-top));
   border: 1px solid var(--background-modifier-border);
@@ -845,15 +847,13 @@ a.send-to-t3-subagent:focus-visible { outline:2px solid var(--interactive-accent
   font-size: var(--font-ui-small);
   -webkit-app-region: no-drag;
 }
-.t3-update-banner-header { display: flex; align-items: center; gap: var(--size-4-3); }
-.t3-update-banner-title { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-.t3-update-banner-message { overflow-wrap: anywhere; color: var(--text-muted); }
-.t3-update-banner-notes { max-height: min(40vh, 360px); overflow: auto; overflow-wrap: anywhere; }
+.t3-update-banner-header { grid-column: 1 / -1; min-width: 0; }
+.t3-update-banner-title { overflow-wrap: anywhere; }
+.t3-update-banner-message { grid-column: 1 / -1; overflow-wrap: anywhere; color: var(--text-muted); }
+.t3-update-banner-notes { grid-column: 1; grid-row: 2; min-height: 0; overflow: auto; overflow-wrap: anywhere; }
+.t3-update-banner-notes :is(h1, h2, h3, h4, h5, h6) { margin-block: 0 var(--size-4-1); }
+.t3-update-banner-notes :is(p, ul, ol) { margin-block: 0 var(--size-4-2); }
 .t3-update-banner-notes > :first-child { margin-top: 0; }
 .t3-update-banner-notes > :last-child { margin-bottom: 0; }
 .t3-update-banner-notes pre { white-space: pre-wrap; }
-.t3-update-banner-actions { display: flex; flex: 0 0 auto; gap: var(--size-4-2); }
-@media (max-width: 480px) {
-  .t3-update-banner-header { flex-wrap: wrap; }
-  .t3-update-banner-actions { margin-left: auto; }
-}
+.t3-update-banner-actions { grid-column: 2; grid-row: 2; align-self: end; display: flex; gap: var(--size-4-2); }
