@@ -156,10 +156,14 @@ test('a selected file context is removed when its token is deleted',async()=>{
  const h=await fixture();await h.modal.modelReady;h.host.searchFiles=async()=>['README.md'];const input=h.modal.field;
  input.setRangeText=(text:string,start:number,end:number)=>{input.value=input.value.slice(0,start)+text+input.value.slice(end);};
  h.type('@README');await new Promise(done=>setImmediate(done));const event=new h.window.Event('keydown');Object.defineProperty(event,'key',{value:'Enter'});input.dispatchEvent(event);
- assert.equal(h.modal.overrides.context.records[0].path,'README.md');h.type('A different question');assert.equal(h.modal.overrides.context,undefined);await h.modal.choose();assert.equal(h.sent[0].options.context,undefined);
+ assert.equal(h.modal.overrides.context.records[0].path,'README.md');h.type('@README.md-old');assert.equal(h.modal.overrides.context,undefined);h.type('A different question');assert.equal(h.modal.overrides.context,undefined);await h.modal.choose();assert.equal(h.sent[0].options.context,undefined);
 });
 test('menus use T3 fuzzy matching and /skill: filters the list to skills',async()=>{
  const h=await fixture();await h.modal.modelReady;
  h.type('/mdl');await new Promise(done=>setImmediate(done));assert.match(h.modal.contentEl.querySelector('.t3-send-suggestions').textContent!,/\/model/);
  h.type('/skill:');await new Promise(done=>setImmediate(done));const list=h.modal.contentEl.querySelector('.t3-send-suggestions');assert.match(list.textContent!,/\/skill:review/);assert.doesNotMatch(list.textContent!,/\/model|\/compact/);assert.equal(list.getAttribute('aria-label'),'Commands');
+});
+test('an explicit model click retries a failed catalog read',async()=>{
+ const h=await fixture();await h.modal.modelReady;h.host.getModels=async()=>{throw Error('Temporarily offline');};h.modal.modelLoadKey=undefined;h.modal.onOpen();await h.modal.modelReady;assert.match(h.button('Choose model').textContent!,/unavailable/);
+ h.host.getModels=async()=>({selection:{instanceId:'p',model:'restored'},models:[{selection:{instanceId:'p',model:'restored'},label:'Restored',provider:'P',options:[],commands:[],skills:[]}]});await h.modal.chooseModel();assert.match(h.modals.at(-1).titleEl.textContent!,/Model/);assert.match(h.button('Choose model').textContent!,/Restored/);
 });

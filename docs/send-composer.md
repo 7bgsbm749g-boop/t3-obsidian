@@ -46,3 +46,7 @@ Layout values and menu presentation follow T3 Code source `c52df24d28`, includin
 `ChatComposer.tsx`, `ComposerSurface.tsx`, `ComposerCommandMenu.tsx`,
 `composerFooterLayout.ts`, and `composer-logic.ts`. The note context and thread
 destination controls are specific to this plugin.
+
+Codex `/feedback` requires an existing thread and uses T3's feedback-upload API
+after explicit Send; it is never submitted merely by choosing a suggestion.
+The T3-only usage panel is not advertised as an executable provider command.

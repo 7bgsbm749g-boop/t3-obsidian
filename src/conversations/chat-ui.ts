@@ -130,8 +130,8 @@ export class SendComposer extends NoteTabPanel {
   }
   private selectedModel(){const selection=this.overrides.modelSelection??this.defaultSelection;return this.models.find(model=>model.selection.instanceId===selection?.instanceId&&model.selection.model===selection?.model);}
   private resolvedOptions(){
-    const command=this.prompt.match(/^\/(\S+)/)?.[1];
-    return resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},{...this.overrides,modelSelection:this.overrides.modelSelection??this.defaultSelection,...(command&&this.selectedModel()?.commands.some(item=>item.name.replace(/^\//,'')===command)?{providerCommand:command}:{})});
+    const command=this.prompt.match(/^\/(\S+)/)?.[1]?.toLowerCase();
+    return resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},{...this.overrides,modelSelection:this.overrides.modelSelection??this.defaultSelection,...(command&&this.selectedModel()?.commands.some(item=>item.name.replace(/^\//,'').toLowerCase()===command)?{providerCommand:command}:{})});
   }
   private capture(){if(this.field){this.prompt=this.field.value;if(this.suggestions)this.overrides.context=this.suggestions.context();this.host.draftChanged?.(this.prompt);}}
   onOpen(){
@@ -183,13 +183,13 @@ export class SendComposer extends NoteTabPanel {
       const selection=this.overrides.modelSelection??this.defaultSelection;
       modelLabel.setText(selection?composerModelLabel(selection,this.models):this.modelError?'Model unavailable':'Loading model…');
       setComposerProviderIcon(providerIcon,this.models.find(item=>item.selection.instanceId===selection?.instanceId&&item.selection.model===selection?.model)?.driver);
-      model.title=this.modelError??[modelLabel.textContent,this.overrides.interactionMode==='plan'?'Plan mode':undefined].filter(Boolean).join(' · ');
+      model.title=this.modelError??[modelLabel.textContent,this.overrides.interactionMode==='plan'?'Plan mode':undefined].filter(Boolean).join(' · ');model.setAttribute('aria-description',model.title);
       project.disabled=disabled||Boolean(restriction);thread.disabled=disabled||Boolean(restriction);model.disabled=disabled||!this.host.getModels;
       streaming.disabled=disabled||continuing;streaming.setAttribute('aria-checked',String(inline.enabled));streaming.title=continuing?'This running response keeps its streaming choices':`Stream replies into the editor: ${inline.enabled?'On':'Off'}`;
-      format.disabled=disabled||continuing||!inline.enabled;const formatLabel=inline.finalAnswerFormat==='formatted'?'Quoted Markdown':'Raw Markdown';format.querySelector('span')!.setText(formatLabel);format.title=`Final answer format: ${formatLabel}`;format.setAttribute('aria-label',format.title);
+      format.disabled=disabled||continuing||!inline.enabled;const formatLabel=inline.finalAnswerFormat==='formatted'?'Quoted Markdown':'Raw Markdown';format.querySelector('span')!.setText(formatLabel);format.removeAttribute('title');format.setAttribute('aria-label',`Final answer format: ${formatLabel}`);
       threadLabel.setText(this.target==='new'?'New thread':this.destination?.label??'Previous thread');
       const status=this.destination?.status??this.destination?.detail?.match(/ · (Idle|Active|Running|Waiting)\b/)?.[1];thread.dataset.state=this.target==='new'?'new':this.destination?.unavailable?'unavailable':status?.toLowerCase()??'idle';setIcon(threadIcon,status&&['Active','Running'].includes(status)?'loader-circle':'message-circle');
-      thread.title=this.target==='new'?'Send to a new thread':[threadLabel.textContent,status,this.destination?.detail].filter(Boolean).join(' · ');thread.setAttribute('aria-description',status??'');
+      thread.title=this.target==='new'?'Send to a new thread':this.destination?.unavailable?this.destination.detail??'Thread unavailable':[threadLabel.textContent,status].filter(Boolean).join(' · ');thread.setAttribute('aria-description',status??'');
       send.disabled=disabled||this.target!=='new'&&Boolean(this.destination?.unavailable);
       const label=this.prompt.trim()?'Send ask':'Send context';send.setAttribute('aria-label',label);send.title=label;
       this.field!.readOnly=disabled;busyDetail.hidden=!this.host.busy;
@@ -220,6 +220,7 @@ export class SendComposer extends NoteTabPanel {
     if(this.choosing||this.host.busy||!this.host.getModels)return;
     const revision=this.revision;this.capture();
     try{
+      if(this.modelError){this.modelLoadKey=undefined;this.modelReady=this.loadModels(revision);}
       await this.modelReady;
       if(!this.opened||revision!==this.revision)return;
       if(!this.models.length)throw Error(this.modelError??'No models are available on this T3 machine.');

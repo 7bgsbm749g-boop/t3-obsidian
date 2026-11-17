@@ -691,7 +691,7 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 @container (min-width: 640px) { .t3-send-composer textarea.t3-send-input { padding-top: 16px; } .t3-send-suggestion { min-height: 28px; } }
 @container (max-width: 619px) {
   .t3-send-model { max-width: 160px; }
-  .t3-send-thread { max-width: 42%; }
+  .t3-send-thread { max-width: 50%; }
   .t3-send-thread > span:nth-child(2) { max-width: 90px; }
 }
 @container (max-width: 379px) {

@@ -80,7 +80,16 @@ export class ComposerSuggestions {
     if((item.kind==='file'||item.kind==='skill')&&this.records.length<100){const id=this.input.ownerDocument.defaultView?.crypto?.randomUUID?.()??crypto.randomUUID();this.records.push({version:1,contextId:id,label:item.name.slice(0,200),kind:item.kind==='file'?'mention':'skill',...(item.kind==='file'?{path:item.path}:{name:item.name,path:item.path})});}
     this.hide();this.input.focus();this.host.changed();
   }
-  context():OutgoingContext|undefined {const records=this.records.filter(record=>this.input.value.includes((record.kind==='mention'?'@':'$')+String(record.kind==='mention'?record.path:record.name)));return records.length?{version:1,records:structuredClone(records)}:undefined;}
+  context():OutgoingContext|undefined {
+    const records=this.records.filter(record=>{
+      const token=(record.kind==='mention'?'@':'$')+String(record.kind==='mention'?record.path:record.name),text=this.input.value;
+      let offset=text.indexOf(token);
+      while(offset>=0){if((offset===0||/\s/u.test(text[offset-1]))&&(offset+token.length===text.length||/\s/u.test(text[offset+token.length])))return true;offset=text.indexOf(token,offset+1);}
+      return false;
+    });
+    return records.length?{version:1,records:structuredClone(records)}:undefined;
+  }
+
   private hide(){this.sequence++;this.menu.hidden=true;this.items=[];this.input.setAttribute('aria-expanded','false');this.input.removeAttribute('aria-activedescendant');}
   dispose(){this.disposed=true;this.hide();this.input.removeEventListener('input',this.refresh);this.input.removeEventListener('click',this.refresh);this.input.removeEventListener('keydown',this.keydown);this.input.removeEventListener('blur',this.blur);this.menu.remove();}
 }

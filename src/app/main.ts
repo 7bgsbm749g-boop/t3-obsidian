@@ -59,6 +59,7 @@ import {responseMoveHistory} from '../responses/response-move';
 import {incomingLabel} from '../conversations/inline-steering';
 import {isT3MessageId} from '../connection/t3-message-id';
 import {ProjectDiscovery,type ProjectSource,type ProjectSnapshot} from '../projects/project-discovery';
+import {composerFeedback} from '../conversations/composer-feedback';
 import {readComposerSettings,composerModels} from '../conversations/composer-models';
 import {resolveNewThreadModel} from '../conversations/model-defaults';
 import {resolveJobOptions,type ResolvedJobOptions} from '../conversations/job-options';
@@ -1300,7 +1301,18 @@ export default class SendToT3 extends Plugin {
     if(captured&&selection.trim()&&!captured.anchor)captured={...captured,anchor:captureEditorSelection(captured.editor)};
     if(captured&&!captured.anchor)captured={...captured,insertion:captured.insertion??captureCursorInsertion(captured.editor.getValue(),captured.editor.posToOffset(captured.editor.getCursor()))};
     if(captured)captured=this.canonicalChatContext(captured);
-    const send=(text:string,key:string|undefined,options:ResolvedJobOptions|undefined,destination?:ChatDestination,newThread=false)=>{
+    const send=async(text:string,key:string|undefined,options:ResolvedJobOptions|undefined,destination?:ChatDestination,newThread=false)=>{
+      if(options?.providerCommand==='feedback'&&!options.context?.records?.length){
+        if(newThread||!destination?.threadId)throw Error('Start a Codex thread first, then choose it before sending feedback.');
+        const target=await this.existingTarget(file.path,destination.projectKey??key);if(!target)throw Error('Choose an existing project for feedback.');
+        const connection=this.connection(target.project);await this.readChatThread(connection,target.project,destination.threadId);
+        const access=await this.inlineThreadAccess(connection.environmentId??await this.localInlineEnvironment());
+        try{const rpc=await acquireT3UnaryRpc(access.api,access.origin);try{
+          if(this.stopped)throw Error('The plugin was disabled before uploading feedback.');
+          const feedback=await composerFeedback((method,input)=>rpc.call(method,input),options.modelSelection?.instanceId??'',destination.threadId,text);
+          if(feedback){new Notice('Feedback sent to OpenAI');return;}
+        }finally{rpc.close();}}finally{await access.close?.();}
+      }
       if(!text.trim()&&!selection.trim())return this.sendNote(file,destination?.threadId,destination?.projectKey,newThread,key,options,insertion,destination?.preparation);
       return this.openManualAction(file,text,selection,captured,false,{key,options,destination,newThread});
     };
