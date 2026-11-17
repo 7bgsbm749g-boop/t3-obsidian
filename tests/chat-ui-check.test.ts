@@ -158,3 +158,8 @@ test('a selected file context is removed when its token is deleted',async()=>{
  h.type('@README');await new Promise(done=>setImmediate(done));const event=new h.window.Event('keydown');Object.defineProperty(event,'key',{value:'Enter'});input.dispatchEvent(event);
  assert.equal(h.modal.overrides.context.records[0].path,'README.md');h.type('A different question');assert.equal(h.modal.overrides.context,undefined);await h.modal.choose();assert.equal(h.sent[0].options.context,undefined);
 });
+test('menus use T3 fuzzy matching and /skill: filters the list to skills',async()=>{
+ const h=await fixture();await h.modal.modelReady;
+ h.type('/mdl');await new Promise(done=>setImmediate(done));assert.match(h.modal.contentEl.querySelector('.t3-send-suggestions').textContent!,/\/model/);
+ h.type('/skill:');await new Promise(done=>setImmediate(done));const list=h.modal.contentEl.querySelector('.t3-send-suggestions');assert.match(list.textContent!,/\/skill:review/);assert.doesNotMatch(list.textContent!,/\/model|\/compact/);assert.equal(list.getAttribute('aria-label'),'Commands');
+});

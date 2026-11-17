@@ -669,7 +669,7 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 .t3-send-thread { min-width: 0; max-width: min(230px, 50%); color: var(--text-normal); }
 .t3-send-thread > span, .t3-send-model > span, .t3-send-project > span { display: block; }
 .t3-send-thread[data-state="running"] .t3-send-thread-icon, .t3-send-thread[data-state="active"] .t3-send-thread-icon { color: var(--interactive-accent); }
-.t3-send-format > span { position: absolute; left: 28px; top: 0; height: 28px; align-items: center; background: var(--background-modifier-hover); border-radius: 6px; z-index: 1; max-width: 0; opacity: 0; transition: max-width 150ms ease, opacity 150ms ease; }
+.t3-send-format > span { position: absolute; left: 28px; top: 0; height: 28px; align-items: center; background: var(--background-modifier-hover); border-radius: 6px; z-index: 1; max-width: 0; opacity: 0;  }
 .t3-send-format { position: relative; gap: 0; }
 
 .t3-send-format:is(:hover, :focus-visible) > span { max-width: 140px; opacity: 1; }
@@ -680,13 +680,15 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 .t3-send-detail[hidden] { display: none; }
 .t3-send-suggestions { position: absolute; bottom: calc(100% - 1px); inset-inline: -1px; z-index: var(--layer-popover); max-height: 288px; overflow-y: auto; padding: 8px 8px 16px; border: 1px solid var(--background-modifier-border); border-radius: 16px 16px 0 0; background: var(--background-primary); box-shadow: var(--shadow-s); }
 .t3-send-suggestions[hidden] { display: none; }
-.t3-send-suggestion { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; }
+.t3-send-suggestion { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
 .t3-send-suggestion[aria-selected="true"] { background: var(--background-modifier-hover); }
 .t3-send-suggestion svg { display: block; width: 16px; height: 16px; }
+.t3-send-suggestion-copy { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.t3-send-suggestion-scope { flex-shrink: 0; border: 1px solid var(--background-modifier-border); border-radius: 4px; padding: 0 4px; color: var(--text-muted); font-size: 10px; }
 .t3-send-suggestion-name { min-width: 0; max-width: 45%; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: var(--font-medium); }
 .t3-send-suggestion-description { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 12px; }
 .t3-send-suggestions-empty { padding: 14px 12px 12px; color: var(--text-muted); font-size: 12px; }
-@container (min-width: 640px) { .t3-send-composer textarea.t3-send-input { padding-top: 16px; } }
+@container (min-width: 640px) { .t3-send-composer textarea.t3-send-input { padding-top: 16px; } .t3-send-suggestion { min-height: 28px; } }
 @container (max-width: 619px) {
   .t3-send-model { max-width: 160px; }
   .t3-send-thread { max-width: 42%; }

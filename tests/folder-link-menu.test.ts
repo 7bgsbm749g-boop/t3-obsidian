@@ -18,7 +18,8 @@ async function folderMenuHarness(initial?:any){
   let fileMenu:(...args:any[])=>void=()=>{},failSave=false,networkRequests=0;
   class Element {
     text='';cls='';tag='';settings:any[]=[];children:Element[]=[];disabled=false;onclick?:()=>any;oninput?:()=>any;value='';
-    classList={add(){},remove(){},contains(){return false;}};attrs:Record<string,string>={};
+    classList={add(){},remove(){},contains(){return false;}};attrs:Record<string,string>={};dataset:Record<string,string>={};
+    remove(){}removeAttribute(key:string){delete this.attrs[key];}removeEventListener(name:string){delete this.events[name];}
     focus(){}addClass(){}setAttribute(key:string,value:string){this.attrs[key]=value;}getAttribute(key:string){return this.attrs[key];}
     get textContent():string{return this.text+this.children.map(child=>child.textContent).join('');}
     createDiv(options?:any){return this.createEl('div',options);}
@@ -102,9 +103,12 @@ async function folderMenuHarness(initial?:any){
     module,exports:module.exports,window:{innerWidth:1000,innerHeight:700},require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,
     document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},
     fetch:async(url:string,options:any)=>{networkRequests++;assert.equal(options?.method??'GET','GET','Folder linking must never dispatch T3 commands');if(threadsReply===undefined&&projectsReply===undefined)throw Error('Link configuration must not dispatch or scan T3');return new Response(JSON.stringify(url.endsWith('/environment')?{environmentId:'env',label:'Laptop',orchestrationProtocolVersion:2}:{threads:threadsReply,projects:projectsReply}));},
-    Headers,Response,AbortController,DOMException,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console,
+    Headers,Response,AbortController,DOMException,URLSearchParams,URL,TextEncoder,TextDecoder,structuredClone,crypto:webcrypto,setTimeout,clearTimeout,console,
   },{timeout:5000});
   const plugin=new module.exports.default();await plugin.onload();
+  // Folder tests isolate routing from the machine catalog, which has its own checks.
+  const destinationContext=plugin.destinationContext.bind(plugin);
+  plugin.destinationContext=(...args:any[])=>({...destinationContext(...args),getModels:async()=>({selection:{instanceId:'fixture',model:'fixture-model'},models:[{selection:{instanceId:'fixture',model:'fixture-model'},label:'Fixture model',provider:'Fixture',options:[],commands:[],skills:[]}]})});
   const open=async()=>{
     const menu=new Menu();fileMenu(menu,folder,'file-explorer-context-menu');
     const entry=menu.items.find(item=>item.title==='Link to T3 Code');assert.ok(entry?.submenu);

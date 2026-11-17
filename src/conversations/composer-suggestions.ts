@@ -1,9 +1,10 @@
+import {scoreQueryMatch,normalizeSearchQuery,insertRankedSearchResult,type RankedSearchResult} from './composer-search';
 import {setIcon} from 'obsidian';
 import type {OutgoingContext} from '../connection/send-contracts';
 import type {ComposerModel} from './composer-models';
 
 export interface ComposerTrigger {prefix:'@'|'$'|'/';query:string;start:number;end:number}
-export interface ComposerSuggestion {kind:'file'|'skill'|'command'|'action';name:string;description:string;path?:string}
+export interface ComposerSuggestion {kind:'file'|'skill'|'command'|'action';name:string;description:string;path?:string;displayName?:string;scope?:string}
 /** T3 composer-logic.ts: triggers use the token at the caret, not the whole draft. */
 export function composerTrigger(text:string,cursor:number):ComposerTrigger|undefined {
   const before=text.slice(0,cursor),match=before.match(/(?:^|\s)([@$/])([^\s]*)$/u);
@@ -13,13 +14,20 @@ export function composerTrigger(text:string,cursor:number):ComposerTrigger|undef
 /** Provider slash commands are offered only at prompt start, as in T3.
  * Skills also appear as /skill:name; file searches remain on the chosen machine. */
 export function composerSuggestions(trigger:ComposerTrigger,text:string,model:ComposerModel|undefined,files:string[]=[]):ComposerSuggestion[]{
-  const skills=(model?.skills??[]).map(skill=>({kind:'skill' as const,name:skill.name,path:skill.path,description:skill.description??skill.path}));
+  const skills=(model?.skills??[]).map(skill=>({kind:'skill' as const,name:skill.name,path:skill.path,description:skill.description??(skill.scope?skill.scope+' skill':''),displayName:skill.displayName,scope:skill.scope}));
   const commands=!text.slice(0,trigger.start).trim()?(model?.commands??[]).map(command=>({kind:'command' as const,name:command.name.replace(/^\//,''),description:command.description??''})):[];
   const actions:ComposerSuggestion[]=[{kind:'action',name:'model',description:'Choose provider and model'},...(model?.plan?[{kind:'action' as const,name:'plan',description:'Switch to plan mode'},{kind:'action' as const,name:'default',description:'Switch to normal mode'}]:[])];
-  const items=trigger.prefix==='@'?files.map(path=>({kind:'file' as const,name:path,description:path,path})):trigger.prefix==='$'?skills:[...actions,...commands.filter(command=>!actions.some(action=>action.name===command.name)),...skills];
-  const query=trigger.query.toLowerCase().replace(/^skill:/,'');
-  const score=(item:ComposerSuggestion)=>item.name.toLowerCase()===query?0:item.name.toLowerCase().startsWith(query)?2:item.name.toLowerCase().includes(query)?6:item.description.toLowerCase().includes(query)?26:Infinity;
-  return items.filter(item=>Number.isFinite(score(item))).sort((a,b)=>score(a)-score(b)||a.name.localeCompare(b.name)).slice(0,100);
+  const items:ComposerSuggestion[]=trigger.prefix==='@'?files.map(path=>({kind:'file' as const,name:path,description:path,path})):trigger.prefix==='$'?skills:[...actions,...commands.filter(command=>!actions.some(action=>action.name===command.name)),...skills];
+  const raw=normalizeSearchQuery(trigger.query),skillQuery=trigger.prefix==='/'&&(raw==='skill'||raw.startsWith('skill:'));
+  const query=skillQuery?raw.replace(/^skill:?/,''):raw;
+  const candidates=skillQuery?items.filter(item=>item.kind==='skill'):items.filter(item=>item.kind!=='command'||!skills.some(skill=>skill.name.toLowerCase()===item.name.toLowerCase()));
+  if(!query)return candidates.slice(0,100);
+  const ranked:RankedSearchResult<ComposerSuggestion>[]=[];
+  for(const item of candidates){
+    const scores=[scoreQueryMatch({value:item.name.toLowerCase(),query,exactBase:0,prefixBase:2,boundaryBase:4,includesBase:6,fuzzyBase:100,boundaryMarkers:['-','_','/']}),scoreQueryMatch({value:(item.displayName??'').toLowerCase(),query,exactBase:1,prefixBase:3,boundaryBase:5,includesBase:7,fuzzyBase:110}),scoreQueryMatch({value:item.description.toLowerCase(),query,exactBase:20,prefixBase:22,boundaryBase:24,includesBase:26})].filter((score):score is number=>score!==null);
+    if(scores.length)insertRankedSearchResult(ranked,{item,score:Math.min(...scores),tieBreaker:(item.kind==='action'?'0':item.kind==='command'?'1':'2')+'\0'+item.name},100);
+  }
+  return ranked.map(result=>result.item);
 }
 
 export class ComposerSuggestions {
@@ -36,6 +44,7 @@ export class ComposerSuggestions {
   private async search(){
     const trigger=composerTrigger(this.input.value,this.input.selectionStart??this.input.value.length);this.trigger=trigger;
     if(!trigger){this.hide();return;}
+    this.menu.setAttribute('aria-label',trigger.prefix==='@'?'Files and folders':trigger.prefix==='$'?'Skills':'Commands');
     const sequence=++this.sequence;this.showMessage(trigger.prefix==='@'?'Searching workspace files...':'Searching workspace skills...');
     try{
       const [{model},files]=await Promise.all([this.host.catalog(),trigger.prefix==='@'?this.host.files(trigger.query):Promise.resolve([])]);
@@ -50,7 +59,9 @@ export class ComposerSuggestions {
     for(const [index,item] of this.items.entries()){
       const id=this.listId+'-'+index,row=this.menu.createDiv({cls:'t3-send-suggestion',attr:{id,role:'option','aria-selected':String(index===this.index)}});
       setIcon(row.createSpan(),item.kind==='file'?'file-text':item.kind==='skill'?'package':'terminal');
-      row.createSpan({cls:'t3-send-suggestion-name',text:item.kind==='skill'&&this.trigger?.prefix==='/'?'/skill:'+item.name:(this.trigger?.prefix??'')+item.name});row.createSpan({cls:'t3-send-suggestion-description',text:item.description});
+      const copy=row.createSpan({cls:'t3-send-suggestion-copy'});
+      copy.createSpan({cls:'t3-send-suggestion-name',text:item.kind==='skill'&&this.trigger?.prefix==='/'?'/skill:'+(item.displayName??item.name):(this.trigger?.prefix??'')+(item.displayName??item.name)});copy.createSpan({cls:'t3-send-suggestion-description',text:item.description});
+      if(item.scope)copy.createSpan({cls:'t3-send-suggestion-scope',text:item.scope});
       row.addEventListener('pointerdown',event=>{event.preventDefault();this.insert(item);});row.addEventListener('pointermove',()=>{if(this.index!==index){this.index=index;this.highlight();}});
     }
     this.highlight();
