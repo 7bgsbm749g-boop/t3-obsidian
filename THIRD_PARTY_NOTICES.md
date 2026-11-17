@@ -762,9 +762,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-## T3 Code model picker layout and interaction
+## T3 Code model picker, inbox layout, and wordmark
 
-Adapted from [pingdotgg/t3code](https://github.com/pingdotgg/t3code/tree/983654b3b2f7267a69e3d5d049d781aadbbc3166/apps/web/src/components/chat): ProviderModelPicker, ModelPickerContent, ModelPickerSidebar, and ComposerModelEffort. The Obsidian implementation uses native DOM controls and active-theme variables.
+Adapted from [pingdotgg/t3code](https://github.com/pingdotgg/t3code/tree/983654b3b2f7267a69e3d5d049d781aadbbc3166/apps/web/src/components/chat): ProviderModelPicker, ModelPickerContent, ModelPickerSidebar, and ComposerModelEffort. The note inbox also adapts the sidebar section and row layout and the T3 wordmark from `assets/prod/logo.svg`. The Obsidian implementation uses native DOM controls and active-theme variables.
 
 MIT License
 

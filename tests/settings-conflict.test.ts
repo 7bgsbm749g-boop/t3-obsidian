@@ -339,7 +339,7 @@ test('queued send checkpoints own their snapshots and commit before compatible r
   const groups=[...transactions.values()];
   assert.equal(groups.filter(keys=>keys.includes(h.deviceId)).every(keys=>keys.length===1),true,'Pending checkpoints stay separate');
   const replicas=groups.filter(keys=>keys.some(key=>key.startsWith('smart-send:')));
-  assert.equal(replicas.length,2);assert.ok(replicas.every(keys=>keys.length===2&&keys[1].startsWith('response-bindings:')));
+  assert.equal(replicas.length,2);assert.ok(replicas.every(keys=>keys.length===3&&keys[1].startsWith('response-bindings:')&&keys[2].startsWith('note-inbox:')));
   assert.equal((await storedDevice(h.deviceId)).pending[0].directPlan.turn.commandId,'stable-command');
 });
 
@@ -383,4 +383,25 @@ test('plugin visibility saves share completion and collapse force requests to th
   await p.save();assert.equal(calls.length,2);
   p.settings.paired=[{id:'new',environmentId:'remote',url:'https://fixture',name:'new'}];await p.save();await p.visibilityWork;
   assert.deepEqual(calls.at(-1),{enabled:false,force:false},'route changes still synchronize');
+});
+
+
+test('inbox choices survive stale settings saves, external changes, and restart without losing independent fields',async()=>{
+  const h=await harness({vaultId:randomUUID()}),p=h.plugin;
+  const pin={value:true,clock:10,actor:'local'};
+  p.settings.noteInbox={stream:{pinned:pin}};
+  h.setCurrent({...h.current(),noteInbox:{stream:{shelf:{value:{kind:'settled',activity:'fixture'},clock:11,actor:'remote'}}}});
+  await p.save();
+  assert.equal(h.current().noteInbox.stream.pinned.value,true);
+  assert.equal(h.current().noteInbox.stream.shelf.value.kind,'settled');
+  const restarted=await harness(h.current());
+  assert.equal(restarted.plugin.settings.noteInbox.stream.shelf.value.kind,'settled');
+  h.setCurrent({...h.current(),noteInbox:{stream:{pinned:{value:false,clock:20,actor:'remote'}}}});
+  await p.onExternalSettingsChange();
+  assert.equal(p.settings.noteInbox.stream.pinned.value,false);
+  assert.equal(p.settings.noteInbox.stream.shelf.value.kind,'settled','a stale field cannot delete a different register');
+  assert.equal(h.current().noteInbox.stream.shelf.value.kind,'settled','compatible local state is republished');
+  const staleRestart=await harness({...h.current(),noteInbox:{}},h.deviceId);
+  assert.equal(staleRestart.plugin.settings.noteInbox.stream.pinned.value,false,'the local replica survives stale Sync at startup');
+  assert.equal(staleRestart.current().noteInbox.stream.shelf.value.kind,'settled');
 });

@@ -38,6 +38,27 @@ Use **Settings → T3 Code → Replies** to adjust reply behaviour, and **Projec
 
 **Hide Obsidian threads in T3**, under **Replies**, is off by default. It tags new threads created here with `t3-obsidian` and hides them across connected T3 environments and clients. It also enables T3’s existing hidden-tag filter, including other tags already listed there. Turning it off removes only `t3-obsidian` from that filter; thread tags and other entries remain. Existing threads created outside the plugin are not tagged. New threads can appear briefly before tagging. Unavailable machines and pending tags are checked again when Obsidian reconnects or returns to the foreground.
 
+## Note inbox in the file explorer
+
+Choose the **T3 icon** in the file explorer's top buttons to switch between the
+file tree and the note inbox. The inbox includes only existing Markdown notes
+with a current or past T3 stream. Several streams in a note share one row;
+sending a note without attaching a stream does not add it.
+
+The inbox groups **Pinned**, **Working**, regular **Inbox**, **Snoozed**, and
+**Settled** notes, with search, collapsible sections, live activity and unread
+reply indicators. Select a row to open the normal note editor. Use the check
+button or row menu to settle work; the menu also pins, snoozes, wakes, and
+reopens notes. Running responses and notes that need input must finish before
+you can settle or snooze them. New sends return settled work to the inbox;
+snoozed notes return when their wake time passes. Completing a response does
+not settle its note.
+
+Inbox choices follow stream bindings through note moves and use the existing
+plugin settings sync. Settling a note changes only its inbox state: its file,
+content, and T3 conversations remain available. File explorer mode and section
+collapse choices stay on the current device.
+
 ## Right sidebar conversations
 
 Use **T3 Code: Open thread in right sidebar…** to select a connected project,
