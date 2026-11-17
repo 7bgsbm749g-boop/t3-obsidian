@@ -913,3 +913,7 @@ a.send-to-t3-subagent:focus-visible { outline:2px solid var(--interactive-accent
 .t3-update-banner-notes > :last-child { margin-bottom: 0; }
 .t3-update-banner-notes pre { white-space: pre-wrap; }
 .t3-update-banner-actions { grid-column: 2; grid-row: 2; align-self: end; display: flex; gap: var(--size-4-2); }
+
+.nav-files-container.t3-note-inbox-dragging { position:relative; }
+.t3-note-inbox-drop-target { position:absolute; top:var(--t3-inbox-drop-top); inset-inline:12px; height:32px; z-index:2; display:flex; align-items:center; padding:0 8px; border:1px solid var(--background-modifier-border); border-radius:var(--radius-m); background:var(--background-primary); color:var(--text-muted); font-size:var(--font-ui-smaller); }
+.t3-note-inbox-drop-target.is-over { color:var(--interactive-accent); border-color:var(--interactive-accent); background:var(--background-modifier-hover); }

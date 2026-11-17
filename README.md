@@ -51,14 +51,19 @@ menus. Pinned notes come first, followed by regular notes. The small **Working**
 **Snoozed**, and **Settled** shelf headers follow T3 Code's sidebar, with a
 trailing count and collapse chevron.
 
-Use the normal note context menu to pin, settle, snooze, wake, or reopen work.
+Drag a note onto **Pinned** at the top or **Settled** at the bottom of the inbox.
+These drop targets appear only while dragging. Drop onto a regular note to
+unpin or reopen work. The normal note context menu offers the same actions,
+plus snooze and wake.
 Running responses and notes that need input must finish before you can settle
 or snooze them. New sends return settled work to the inbox; snoozed notes return
 when their wake time passes. Completing a response does not settle its note.
 
 Inbox choices follow stream bindings through note moves and use the existing
-plugin settings sync. Settling a note changes only its inbox state: its file,
-content, and T3 conversations remain available. File explorer mode and section
+plugin settings sync. Settling a note also settles each attached T3 thread
+on its original machine. Reopening the note reopens those threads. The note
+enters Settled only after T3 accepts all required commands; unavailable
+threads leave its inbox state unchanged. Note files and their contents stay in place. File explorer mode and section
 collapse choices stay on the current device.
 
 ## Right sidebar conversations

@@ -81,3 +81,20 @@ test('the inbox control is beside Codebase in the top mode row and Files restore
  f.toggle();f.codebaseTab.click();f.controller.refresh();assert.equal(button.getAttribute('aria-pressed'),'false');
  f.toggle();await Promise.resolve();assert.equal(f.state().enabled,true,'selecting Inbox from another mode keeps the filter enabled');assert.equal(button.getAttribute('aria-pressed'),'true');assert.ok(f.revealed()>0);
 });
+
+test('native drags expose pin and settle targets without changing note rows, selection, or folder handlers',async(t)=>{
+ const f=await fixture();t.after(()=>f.controller.dispose());f.toggle();const row=f.rows.get('Docs/Regular.md').title,before=row.outerHTML,item=f.rows.get('Docs/Regular.md').item;
+ const event=(type:string,target:any)=>{const e=new f.window.Event(type,{bubbles:true,cancelable:true});Object.defineProperty(e,'dataTransfer',{value:{dropEffect:'none'}});target.dispatchEvent(e);return e;};
+ f.view.tree.selectedDoms.add(item);event('dragstart',row);assert.equal(row.outerHTML,before);assert.ok(f.view.tree.selectedDoms.has(item));assert.equal(f.document.querySelectorAll('[data-t3-inbox-drop]').length,2);assert.deepEqual(f.dragged,['Docs/Regular.md']);
+ const pinned=f.document.querySelector('[data-t3-inbox-drop="pinned"]')!;assert.equal(event('dragover',pinned).defaultPrevented,true);event('drop',pinned);await new Promise(resolve=>setTimeout(resolve,0));
+ assert.equal(f.changes[0].action.kind,'pin');assert.equal(f.changes[0].action.value,true);assert.equal(f.document.querySelector('[data-t3-inbox-drop]'),null);
+ event('dragstart',row);event('drop',f.document.querySelector('[data-t3-inbox-drop="settled"]')!);await new Promise(resolve=>setTimeout(resolve,0));assert.equal(f.changes[1].action.kind,'settled');
+ let nativeDrops=0;f.root.addEventListener('drop',()=>nativeDrops++);event('drop',row);assert.equal(nativeDrops,0,'an inbox drop must not move a physical file');
+ f.toggle();event('drop',row);assert.equal(nativeDrops,1,'ordinary Files keeps its native drop behavior');
+});
+test('busy and stale drags cannot settle notes; Escape and mode changes remove transient targets',async(t)=>{
+ const f=await fixture();t.after(()=>f.controller.dispose());f.toggle();f.document.querySelector<HTMLButtonElement>('[data-t3-inbox-shelf="working"]')!.click();
+ const fire=(name:string,target:any)=>target.dispatchEvent(new f.window.Event(name,{bubbles:true,cancelable:true}));
+ fire('dragstart',f.rows.get('Docs/Working.md').title);fire('drop',f.document.querySelector('[data-t3-inbox-drop="settled"]'));await Promise.resolve();assert.equal(f.changes.length,0);
+ fire('dragstart',f.rows.get('Docs/Regular.md').title);f.setNotes([]);f.controller.refresh();assert.equal(f.document.querySelector('[data-t3-inbox-drop]'),null);assert.equal(f.changes.length,0);
+});

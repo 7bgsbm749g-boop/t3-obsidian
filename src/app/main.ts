@@ -128,6 +128,7 @@ import {lastUsedNoteThread,loadNoteThreads,mergeNoteThreads,mutateNoteThreads,pr
 import {noteIndicators,type NoteIndicator} from '../responses/explorer-responses';
 import {changeNoteInbox,inboxNotes,mergeNoteInbox,type NoteInboxData,type InboxAction,type InboxNote} from '../notes/note-inbox';
 import {NoteInboxView,loadInboxViewState,type InboxViewState} from '../notes/note-inbox-view';
+import {changeInboxThreads,inboxThreadTargets} from '../notes/note-inbox-threads';
 import {CompletionGlow} from '../responses/completion-glow';
 import {folderNotePath,type FolderNotesSettings} from '../projects/folder-note-adapter';
 import {installFolderIndicators,type FolderIndicatorController} from '../projects/folder-indicator';
@@ -264,6 +265,7 @@ export default class SendToT3 extends Plugin {
   private paletteChat?:PaletteChatController;
   private folderIndicators?:FolderIndicatorController;
   private noteInboxView?:NoteInboxView;
+  private inboxActions=new Map<string,Promise<void>>();
   private inboxIndicators=new Map<string,NoteIndicator>();
   private inboxViewState:InboxViewState=loadInboxViewState(undefined);
   private completionGlow?:CompletionGlow;
@@ -1062,8 +1064,28 @@ export default class SendToT3 extends Plugin {
     return inboxNotes(responseBindingRequests(this.settings.responseBindings??{}),[...responses,...(this.inlineChat?.explorerResponses()??[]).filter(response=>!known.has(response.id))],this.inboxIndicators,this.settings.noteInbox??{},this.settings.vaultId,path=>this.app.vault.getAbstractFileByPath(path) instanceof TFile);
   }
   private async changeInboxNote(note:InboxNote,action:InboxAction){
-    const current=this.inboxNotes().find(value=>value.path===note.path);if(!current)throw Error('This note no longer has a T3 stream.');
-    this.settings.noteInbox=changeNoteInbox(this.settings.noteInbox??{},current,action,this.deviceId);
+    const previous=this.inboxActions.get(note.path)??Promise.resolve();
+    const work=previous.catch(()=>{}).then(()=>this.applyInboxNote(note.path,action));this.inboxActions.set(note.path,work);
+    try{await work;}finally{if(this.inboxActions.get(note.path)===work)this.inboxActions.delete(note.path);}
+  }
+  private async applyInboxNote(path:string,action:InboxAction){
+    const before=this.inboxNotes().find(note=>note.path===path);if(!before)throw Error('This note no longer has a T3 stream.');
+    changeNoteInbox(this.settings.noteInbox??{},before,action,this.deviceId);
+    const current=()=>{
+      const found=this.inboxNotes().find(note=>note.path===path);
+      if(this.stopped||!found||found.activity!==before.activity||JSON.stringify(found.ids)!==JSON.stringify(before.ids))throw Error('This note or its streams changed. Try the action again.');
+      if(action.kind==='settled'&&(found.indicator.active||found.indicator.input))throw Error('Wait for the response before settling this note.');
+      return found;
+    };
+    const wake=action.kind==='regular'&&before.section==='settled'||action.kind==='pin'&&action.value&&before.section==='settled';
+    if(action.kind==='settled'||wake){
+      const responses=[...(this.deviceInline?.explorerResponses()??[]),...(this.inlineChat?.explorerResponses()??[])];
+      const targets=inboxThreadTargets(before,responseBindingRequests(this.settings.responseBindings??{}),responses);
+      await changeInboxThreads(targets,action.kind==='settled',environmentId=>this.inlineThreadAccess(environmentId),()=>{current();},randomId);
+    }
+    let data=this.settings.noteInbox??{};const latest=current();
+    if(action.kind==='pin'&&action.value&&(latest.section==='settled'||latest.section==='snoozed'))data=changeNoteInbox(data,latest,{kind:'regular'},this.deviceId);
+    this.settings.noteInbox=changeNoteInbox(data,latest,action,this.deviceId);
     await deviceState(`note-inbox:${this.deviceId}:${this.settings.vaultId}`,this.settings.noteInbox);
     await this.save();
   }

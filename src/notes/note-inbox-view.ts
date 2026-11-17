@@ -1,5 +1,6 @@
 import {Notice,TFile,setIcon,type App,type EventRef,type Menu,type WorkspaceLeaf} from 'obsidian';
 import {NativeInboxTree,nativeExplorerTree,type NativeExplorerTree,type NativeTreeItem} from './native-inbox-tree';
+import {NoteInboxDrag} from './note-inbox-drag';
 import {INBOX_SECTIONS,type InboxAction,type InboxNote,type InboxSection} from './note-inbox';
 
 const SHELVES=['working','snoozed','settled'] as const;
@@ -13,7 +14,7 @@ export function loadInboxViewState(value:unknown):InboxViewState {
   return {enabled:raw?.enabled===true,collapsed:Array.isArray(raw?.collapsed)?SHELVES.filter(section=>raw.collapsed?.includes(section)):[...SHELVES]};
 }
 export interface InboxHost {notes():InboxNote[];change(note:InboxNote,action:InboxAction):Promise<void>;state():InboxViewState;saveState(state:InboxViewState):void}
-interface Explorer {root:HTMLElement;tree:HTMLElement;toolbar:HTMLElement;tab:HTMLElement;restoreFiles:()=>void;view:NativeExplorerTree;button:HTMLButtonElement;projection?:NativeInboxTree;headers:Map<Shelf,HTMLElement>;spacer?:HTMLElement;frame?:number;observer:MutationObserver}
+interface Explorer {drag:NoteInboxDrag;root:HTMLElement;tree:HTMLElement;toolbar:HTMLElement;tab:HTMLElement;restoreFiles:()=>void;view:NativeExplorerTree;button:HTMLButtonElement;projection?:NativeInboxTree;headers:Map<Shelf,HTMLElement>;spacer?:HTMLElement;frame?:number;observer:MutationObserver}
 /** The existing file explorer renders the notes and handles their interactions.
  * Only its native virtual children are filtered and grouped for this mode. */
 export class NoteInboxView {
@@ -35,7 +36,7 @@ export class NoteInboxView {
         if(!tab||!toolbar||!tree||!view||[...this.explorers.values()].some(other=>other.toolbar===toolbar))continue;
         explorer=this.mount(root,toolbar,tab,leaf,tree,view);this.explorers.set(root,explorer);
       }
-      this.placeButton(explorer);
+      explorer.drag.refresh();this.placeButton(explorer);
       const enabled=this.host.state().enabled,selected=enabled&&explorer.tab.classList.contains('is-active');root.classList.toggle('t3-note-inbox-mode',enabled);explorer.button.classList.toggle('is-active',selected);
       this.attribute(explorer.button,'aria-pressed',String(selected));
       if(enabled){
@@ -55,7 +56,10 @@ export class NoteInboxView {
   private mount(root:HTMLElement,toolbar:HTMLElement,tab:HTMLElement,leaf:WorkspaceLeaf,tree:HTMLElement,view:NativeExplorerTree):Explorer {
     const button=toolbar.createEl('button',{cls:'clickable-icon t3-note-inbox-toggle',attr:{type:'button','aria-label':'T3 inbox','aria-pressed':'false',title:'T3 inbox — filter notes with T3 streams'}});
     const svg=root.ownerDocument.win.createSvg('svg');svg.setAttribute('viewBox','10 27 108 76');svg.setAttribute('aria-hidden','true');svg.classList.add('svg-icon');const path=root.ownerDocument.win.createSvg('path');path.setAttribute('d',T3_PATH);path.setAttribute('fill','currentColor');path.setAttribute('stroke','none');svg.appendChild(path);button.appendChild(svg);
-    const observer=new MutationObserver(()=>this.schedule()),restoreFiles=()=>{const state=this.host.state();if(state.enabled){this.host.saveState({...state,enabled:false});this.refresh();}},explorer:Explorer={root,tree,toolbar,tab,restoreFiles,view,button,headers:new Map(),observer};
+    const observer=new MutationObserver(()=>this.schedule()),restoreFiles=()=>{const state=this.host.state();if(state.enabled){this.host.saveState({...state,enabled:false});this.refresh();}},drag=new NoteInboxDrag(root,tree,{enabled:()=>this.host.state().enabled,notes:()=>this.host.notes(),selected:path=>{
+      const item=view.fileItems[path],selected=[...view.tree.selectedDoms];
+      return selected.includes(item)?selected.flatMap(item=>item.file&&this.host.notes().some(note=>note.path===item.file?.path)?[item.file.path]:[]):[path];
+    },change:async(note,action)=>{await this.host.change(note,action);this.refresh();},error:error=>this.report(error)}),explorer:Explorer={drag,root,tree,toolbar,tab,restoreFiles,view,button,headers:new Map(),observer};
     tab.addEventListener('click',restoreFiles);
     button.addEventListener('click',()=>{const state=this.host.state();this.host.saveState({...state,enabled:!tab.classList.contains('is-active')||!state.enabled});this.refresh();void this.app.workspace.revealLeaf(leaf).then(()=>this.refresh()).catch(error=>this.report(error));});
     observer.observe(tree,{childList:true,subtree:true,attributes:true,attributeFilter:['data-path']});
@@ -115,6 +119,6 @@ export class NoteInboxView {
       for(const [label,delay] of [['Snooze for 1 hour',60*60_000],['Snooze until tomorrow',24*60*60_000],['Snooze for 1 week',7*24*60*60_000]] as const)menu.addItem(item=>item.setTitle(label).setIcon('alarm-clock').setDisabled(busy).onClick(()=>this.change(note,{kind:'snoozed',until:Date.now()+delay})));
     }
   }
-  private remove(explorer:Explorer){explorer.observer.disconnect();explorer.tab.removeEventListener('click',explorer.restoreFiles);if(explorer.frame!==undefined)window.cancelAnimationFrame(explorer.frame);try{explorer.projection?.dispose();}finally{explorer.root.classList.remove('t3-note-inbox-mode');explorer.button.remove();}}
+  private remove(explorer:Explorer){explorer.drag.dispose();explorer.observer.disconnect();explorer.tab.removeEventListener('click',explorer.restoreFiles);if(explorer.frame!==undefined)window.cancelAnimationFrame(explorer.frame);try{explorer.projection?.dispose();}finally{explorer.root.classList.remove('t3-note-inbox-mode');explorer.button.remove();}}
   dispose(){if(this.stopped)return;this.stopped=true;if(this.wake)window.clearTimeout(this.wake);this.app.workspace.offref(this.menuEvent);for(const explorer of this.explorers.values())this.remove(explorer);this.explorers.clear();}
 }

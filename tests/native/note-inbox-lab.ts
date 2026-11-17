@@ -4,6 +4,8 @@
 import {Plugin,TFile,Notice} from 'obsidian';
 import {updateResponseBindingData} from '../../src/responses/response-binding-data';
 import {changeNoteInbox,inboxNotes} from '../../src/notes/note-inbox';
+import {readInlineSnapshot,PendingThreadError,type ThreadAccess} from '../../src/conversations/thread-stream';
+import {readNewThreadDefaults} from '../../src/conversations/model-defaults';
 import {deviceState} from '../../src/storage/device-state';
 declare const INBOX_LAB_REPORT:string;
 declare const INBOX_LAB_VAULT:string;
@@ -13,13 +15,15 @@ export default class InboxLab extends Plugin {
   private nativeProof?:unknown;
   private selectionProof?:unknown;
   private capabilities?:unknown;
+  private files:TFile[]=[];
+  private access?:ThreadAccess;private ownedThreads:string[]=[];private backend?:unknown;
   onload(){
     this.registerDomEvent(window,'error',event=>{if(event.error instanceof TypeError||event.error instanceof ReferenceError){const message=String(event.error.message).replace(/https?:\/\/\S+/g,'[URL]').slice(0,300);require('node:fs').appendFileSync(INBOX_LAB_REPORT.replace('.json','-errors.jsonl'),JSON.stringify({name:event.error.name,message})+'\n');}});
     this.addCommand({id:'cleanup',name:'Finish inbox validation',callback:()=>{if(this.cleanup)void this.cleanup().catch(error=>{this.write({phase:'cleanup-failed',error:String(error)});new Notice(String(error));});}});
     this.registerEvent(this.app.workspace.on('files-menu',(_menu,files,source)=>{if(files.length&&files.every(file=>file.path.startsWith(folder+'/'))){this.selectionProof={source,paths:files.map(file=>file.path)};this.write({phase:'native-selection'});}}));
     this.app.workspace.onLayoutReady(()=>void this.start().catch(error=>{this.write({error:String(error)});new Notice(String(error));}));
   }
-  private write(value:unknown){require('node:fs').writeFileSync(INBOX_LAB_REPORT,JSON.stringify({...value as object,nativeFilter:this.nativeProof,nativeSelection:this.selectionProof,nativeCapabilities:this.capabilities},null,2));}
+  private write(value:unknown){require('node:fs').writeFileSync(INBOX_LAB_REPORT,JSON.stringify({...value as object,nativeFilter:this.nativeProof,nativeSelection:this.selectionProof,nativeCapabilities:this.capabilities,backend:this.backend,threadIds:this.ownedThreads,notePaths:this.files.map(file=>file.path),notesStayedInFolder:this.files.every(file=>file.path.startsWith(folder+'/'))},null,2));}
   private async start(){
     if(this.app.vault.getName()!==INBOX_LAB_VAULT)throw Error('Use the configured synthetic test vault.');
     const plugins=(this.app as any).plugins;await plugins.loadManifests();await plugins.enablePlugin('t-three-code');
@@ -29,16 +33,62 @@ export default class InboxLab extends Plugin {
     await this.app.vault.createFolder(folder);
     const original={save:product.save,bindings:product.settings.responseBindings,inbox:product.settings.noteInbox,explorer:product.deviceInline.explorerResponses,view:product.inboxViewState};
     const created:string[]=[],ids:string[]=[],responses:any[]=[],actions:any[]=[];
-    product.save=async()=>{actions.push({at:new Date().toISOString(),state:product.settings.noteInbox});this.write({phase:'actions',version:product.manifest.version,scope:'Installed product; synthetic stream projections; no provider/Sync claim',actions});};
+    this.cleanup=async()=>{
+      await Promise.allSettled([...product.inboxActions.values()]);
+      product.save=original.save;product.deviceInline.explorerResponses=original.explorer;
+      for(const id of ids){delete product.settings.responseBindings[id];delete product.responseBindingReplica[id];delete product.settings.noteInbox[id];}
+      await deviceState(`response-bindings:${product.deviceId}:${product.settings.vaultId}`,product.responseBindingReplica);
+      for(const [id,receipt] of product.completionGlow.receipts)if(receipt.notePath.startsWith(folder+'/'))product.completionGlow.receipts.delete(id);
+      product.completionGlow.persist();
+      await deviceState(`note-inbox:${product.deviceId}:${product.settings.vaultId}`,product.settings.noteInbox);
+      product.inboxViewState=original.view;this.app.saveLocalStorage(`t3-note-inbox-view:${product.settings.vaultId}`,original.view);
+      for(const file of this.files)if(this.app.vault.getAbstractFileByPath(file.path)===file)await this.app.vault.delete(file);
+      const directory=this.app.vault.getAbstractFileByPath(folder);if(directory)await this.app.vault.delete(directory,true);
+      // Native note opening creates identity receipts even without dispatch.
+      // Remove only this lab's history from both replicas after saves finish.
+      await product.saving;
+      const disk=await product.loadData();
+      for(const id of ids){delete disk.responseBindings?.[id];delete disk.noteInbox?.[id];}
+      for(const smart of [disk.smartSend,product.smartReplica,product.settings.smartSend])if(smart){
+        const owned=new Set(Object.entries(smart.notes??{}).filter(([,note]:[string,any])=>note.path.startsWith(folder+'/')).map(([id])=>id));
+        for(const id of owned)delete smart.notes[id];
+        for(const key of ['responses','heads','noteEdits','recoveries'])for(const [id,entry] of Object.entries(smart[key]??{}) as [string,any][])if(owned.has(entry.noteId))delete smart[key][id];
+      }
+      await deviceState(`smart-send:${product.deviceId}:${product.settings.vaultId}`,product.smartReplica);
+      await product.saveData(disk);product.lastDiskSnapshot=JSON.stringify(disk);product.sharedBaseline=JSON.stringify(product.sharedSnapshot());
+      if(this.access){
+        for(const threadId of this.ownedThreads){
+          try{await readInlineSnapshot(this.access,threadId);}catch(error){if(error instanceof PendingThreadError)continue;throw error;}
+          await this.access.api('/api/orchestration/dispatch',{type:'thread.delete',commandId:crypto.randomUUID(),threadId,onlyIfUnused:true});
+          try{const snapshot=await readInlineSnapshot(this.access,threadId);if(!snapshot.thread.deletedAt)throw Error('An owned test thread was not deleted.');}catch(error){if(!(error instanceof PendingThreadError))throw error;}
+        }
+        await this.access.close?.();this.access=undefined;
+      }
+      product.refreshFolderIndicators();this.write({phase:'clean',ownedThreadsDeleted:this.ownedThreads.length,version:product.manifest.version,ownedNotesRemoved:!this.app.vault.getFolderByPath(folder)&&this.files.every(file=>this.app.vault.getAbstractFileByPath(file.path)!==file),fixtureBindingsRemoved:ids.every(id=>!product.settings.responseBindings[id]&&!product.responseBindingReplica[id]),fixtureStateRemoved:ids.every(id=>!product.settings.noteInbox[id]),actions});new Notice('Inbox validation fixtures removed.');
+    };
+    const environmentId=product.eventLocalEnvironmentId??await product.localInlineEnvironment();
+    this.access=await product.inlineThreadAccess(environmentId);const access=this.access!;
+    const project=await product.commandProject(environmentId),defaults=await readNewThreadDefaults(access.api,access.origin,project);
+    const createThread=async(title:string)=>{
+      const threadId=crypto.randomUUID();this.ownedThreads.push(threadId);
+      await access.api('/api/orchestration/dispatch',{type:'thread.create',commandId:crypto.randomUUID(),threadId,projectId:project.id,title:'Synthetic inbox validation: '+title,modelSelection:defaults.modelSelection,runtimeMode:defaults.runtimeMode,interactionMode:'default',branch:null,worktreePath:null,createdAt:new Date().toISOString()});
+      return threadId;
+    };
+    const backend=async()=>{const states=[];for(const threadId of this.ownedThreads){const snapshot=await readInlineSnapshot(access,threadId,project.id);states.push({threadId,settled:snapshot.thread.settledOverride==='settled'});}this.backend=states;};
+    product.save=async()=>{await backend();actions.push({at:new Date().toISOString(),state:JSON.parse(JSON.stringify(product.settings.noteInbox)),backend:this.backend});this.write({phase:'actions',version:product.manifest.version,scope:'Installed product; synthetic stream projections; real idle T3 threads; no provider runs/Sync claim',actions});};
     const titles=['Release checklist','Update the documentation','Plan the next feature','Review the agent question','Follow up tomorrow','Completed investigation','Past stream retained'];
     for(let index=0;index<titles.length;index++){
-      const path=`${folder}/${titles[index]}.md`,file=await this.app.vault.create(path,`# ${titles[index]}\n\nSynthetic note for native inbox validation.\n`);created.push(file.path);
-      const id=crypto.randomUUID();ids.push(id);
-      product.settings.responseBindings=updateResponseBindingData(product.settings.responseBindings,{version:4,localOnly:true,nativeProjection:true,responseContainer:true,id,vaultId:product.settings.vaultId,initialOwner:product.deviceId,host:{environmentId:'inbox-fixture',workspaceRoot:'/synthetic',directory:'.t3-obsidian'},notePath:path,threadId:id,messageId:crypto.randomUUID(),projectId:'inbox-fixture',threadEnvironmentId:'inbox-fixture',initialHash:'0'.repeat(64),createdAt:new Date(Date.now()-index*60_000).toISOString()},product.deviceId);
+      const path=`${folder}/${titles[index]}.md`,file=await this.app.vault.create(path,`# ${titles[index]}\n\nSynthetic note for native inbox validation.\n`);created.push(file.path);this.files.push(file);
+      const id=crypto.randomUUID(),threadId=await createThread(titles[index]);ids.push(id);
+      product.settings.responseBindings=updateResponseBindingData(product.settings.responseBindings,{version:4,localOnly:true,nativeProjection:true,responseContainer:true,id,vaultId:product.settings.vaultId,initialOwner:product.deviceId,host:{environmentId,workspaceRoot:project.workspaceRoot,directory:'.t3-obsidian'},notePath:path,threadId,messageId:crypto.randomUUID(),projectId:project.id,threadEnvironmentId:environmentId,initialHash:'0'.repeat(64),createdAt:new Date(Date.now()-index*60_000).toISOString()},product.deviceId);
       responses.push({id,notePath:path,epoch:1,revision:1,active:index===1,input:index===3,complete:index!==1&&index!==3});
     }
+    const extraId=crypto.randomUUID(),extraThread=await createThread('Second thread in Plan');ids.push(extraId);
+    const originalBinding=product.settings.responseBindings[ids[2]].request;
+    product.settings.responseBindings=updateResponseBindingData(product.settings.responseBindings,{...originalBinding,id:extraId,threadId:extraThread,messageId:crypto.randomUUID()},product.deviceId);
+    responses.push({id:extraId,notePath:created[2],epoch:1,revision:1,active:false,input:false,complete:true});
     product.responseBindingReplica=product.settings.responseBindings;
-    const unbound=await this.app.vault.create(`${folder}/Ordinary note without streams.md`,'# This note must not appear in the inbox\n');created.push(unbound.path);
+    const unbound=await this.app.vault.create(`${folder}/Ordinary note without streams.md`,'# This note must not appear in the inbox\n');created.push(unbound.path);this.files.push(unbound);
     product.deviceInline.explorerResponses=()=>[...original.explorer.call(product.deviceInline),...responses];
     // The installed product still owns grouping, rendering, actions and local
     // persistence. Block shared publication of all synthetic fixture records.
@@ -47,6 +97,7 @@ export default class InboxLab extends Plugin {
       const note=inboxNotes(bindings as any,[],new Map(),product.settings.noteInbox??{},product.settings.vaultId,()=>true).find(note=>note.path===created[index])!;
       product.settings.noteInbox=changeNoteInbox(product.settings.noteInbox??{},note,action,product.deviceId);
     }
+    await access.api('/api/orchestration/dispatch',{type:'thread.settle',commandId:crypto.randomUUID(),threadId:this.ownedThreads[5]});await backend();
     product.refreshFolderIndicators();
     await new Promise<void>(resolve=>window.requestAnimationFrame(()=>resolve()));
     const explorer=this.app.workspace.getLeavesOfType('file-explorer')[0]?.view.containerEl;
@@ -67,32 +118,8 @@ export default class InboxLab extends Plugin {
         this.write({phase:'native-filter',version:product.manifest.version,actions});
       }));
     };explorer.addEventListener('click',record,true);toggle.addEventListener('click',record,true);}
-    this.cleanup=async()=>{
-      product.save=original.save;product.deviceInline.explorerResponses=original.explorer;
-      for(const id of ids){delete product.settings.responseBindings[id];delete product.responseBindingReplica[id];delete product.settings.noteInbox[id];}
-      await deviceState(`response-bindings:${product.deviceId}:${product.settings.vaultId}`,product.responseBindingReplica);
-      for(const [id,receipt] of product.completionGlow.receipts)if(receipt.notePath.startsWith(folder+'/'))product.completionGlow.receipts.delete(id);
-      product.completionGlow.persist();
-      await deviceState(`note-inbox:${product.deviceId}:${product.settings.vaultId}`,product.settings.noteInbox);
-      product.inboxViewState=original.view;this.app.saveLocalStorage(`t3-note-inbox-view:${product.settings.vaultId}`,original.view);
-      for(const file of [...this.app.vault.getFolderByPath(folder)?.children??[]])if(file instanceof TFile)await this.app.vault.delete(file);
-      const directory=this.app.vault.getAbstractFileByPath(folder);if(directory)await this.app.vault.delete(directory,true);
-      // Native note opening creates identity receipts even without dispatch.
-      // Remove only this lab's history from both replicas after saves finish.
-      await product.saving;
-      const disk=await product.loadData();
-      for(const id of ids){delete disk.responseBindings?.[id];delete disk.noteInbox?.[id];}
-      for(const smart of [disk.smartSend,product.smartReplica,product.settings.smartSend])if(smart){
-        const owned=new Set(Object.entries(smart.notes??{}).filter(([,note]:[string,any])=>note.path.startsWith(folder+'/')).map(([id])=>id));
-        for(const id of owned)delete smart.notes[id];
-        for(const key of ['responses','heads','noteEdits','recoveries'])for(const [id,entry] of Object.entries(smart[key]??{}) as [string,any][])if(owned.has(entry.noteId))delete smart[key][id];
-      }
-      await deviceState(`smart-send:${product.deviceId}:${product.settings.vaultId}`,product.smartReplica);
-      await product.saveData(disk);product.lastDiskSnapshot=JSON.stringify(disk);product.sharedBaseline=JSON.stringify(product.sharedSnapshot());
-      product.refreshFolderIndicators();this.write({phase:'clean',version:product.manifest.version,ownedNotesRemoved:!this.app.vault.getFolderByPath(folder),fixtureBindingsRemoved:ids.every(id=>!product.settings.responseBindings[id]&&!product.responseBindingReplica[id]),fixtureStateRemoved:ids.every(id=>!product.settings.noteInbox[id]),actions});new Notice('Inbox validation fixtures removed.');
-    };
     const first=this.app.vault.getAbstractFileByPath(created[0]);if(first instanceof TFile)await this.app.workspace.getLeaf(false).openFile(first);
-    this.write({phase:'ready',version:product.manifest.version,scope:'Installed product; synthetic stream projections; no provider/Sync claim',notes:created,streamIds:ids,expected:{pinned:1,working:1,regular:3,snoozed:1,settled:1,unboundExcluded:true}});
+    this.write({phase:'ready',version:product.manifest.version,scope:'Installed product; synthetic stream projections; real idle T3 threads; no provider runs/Sync claim',notes:created,streamIds:ids,expected:{pinned:1,working:1,regular:3,snoozed:1,settled:1,unboundExcluded:true}});
     new Notice('Inbox validation ready. Open the T3 mode in Files.');
   }
 }
