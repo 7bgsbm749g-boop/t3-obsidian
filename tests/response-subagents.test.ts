@@ -118,3 +118,22 @@ test('a resumed child keeps its notice identity distinct from its original task 
  assert.ok(rows.every(row=>row.getAttribute('data-t3-subagent-status')==='running'));
  assert.equal(parseHTML(renderSubagent(child,source,notice)).document.querySelector('.send-to-t3-subagent')?.getAttribute('data-t3-subagent-key'),rows[1].getAttribute('data-t3-subagent-key'));
 });
+
+
+test('a grouped task notice preserves every known completion row and its event time',()=>{
+ const state=snapshot();state.subagents!.task={...state.subagents!.task,status:'completed',completedAt:at(10),displayDetail:'First result'};
+ state.subagents!.second={...state.subagents!.task,id:'second',title:'Second review',childThreadId:'second-child',displayDetail:'Second result'};
+ state.activities.push({id:'batch',kind:'response.notification',turnId:'run',createdAt:at(11),summary:'Both tasks finished',payload:{text:'Both tasks finished',source:{kind:'delegated_task',taskIds:['task','second','task']},outcome:'completed'}});
+ const batch=responseEmissions(state,['run'],text=>text,undefined,source).find(item=>item.id==='batch')!;
+ const doc=parseHTML(batch.body).document,rows=Array.from(doc.querySelectorAll('.send-to-t3-subagent'));
+ assert.deepEqual(rows.map(row=>row.getAttribute('data-t3-subagent-id')),['task','second']);
+ assert.equal(new Set(rows.map(row=>row.getAttribute('data-t3-subagent-key'))).size,2);
+ for(const row of rows){assert.equal(row.getAttribute('aria-description'),'Finished');assert.equal(row.querySelector('time')?.getAttribute('data-t3-notification-at'),'11000');}
+ assert.match(batch.body,/First result/);assert.match(batch.body,/Second result/);assert.doesNotMatch(batch.body,/\[!t3-notification\]/);
+});
+
+test('a partially known batch retains the original notice instead of hiding unknown task outcomes',()=>{
+ const state=snapshot();state.activities.push({id:'partial',kind:'response.notification',turnId:'run',summary:'Other task failed',payload:{text:'The unprojected task failed; retain these details.',source:{kind:'delegated_task',taskIds:['task','unknown']},outcome:'failed'}});
+ const notice=responseEmissions(state,['run'],text=>text,undefined,source).find(item=>item.id==='partial')!;
+ assert.match(notice.body,/The unprojected task failed; retain these details/);assert.match(notice.body,/\[!t3-notification\]/);
+});

@@ -51,8 +51,10 @@ export function notificationSubagents(state:InlineThreadState,source:unknown):In
  if(!isRecord(source))return [];
  const children=Object.values(state.subagents??{});
  const taskIds=source.taskIds;
- const child=source.kind==='delegated_task'&&Array.isArray(taskIds)?children.find(child=>taskIds.includes(child.id)):
-  (source.kind==='subagent'||source.kind==='background_task'&&source.work==='subagent')&&typeof source.childThreadId==='string'?children.find(child=>child.childThreadId===source.childThreadId):undefined;
+ if(source.kind==='delegated_task'&&Array.isArray(taskIds)){
+  const ids=new Set(taskIds);return children.filter(child=>ids.has(child.id));
+ }
+ const child=(source.kind==='subagent'||source.kind==='background_task'&&source.work==='subagent')&&typeof source.childThreadId==='string'?children.find(child=>child.childThreadId===source.childThreadId):undefined;
  if(child)return [child];
  return [];
 }

@@ -65,7 +65,10 @@ export function responseEmissions(state:InlineThreadState,turns:string[],markdow
       if(!body)continue;
     }else{
       const children=notificationSubagents(state,p.source);
-      if(children.length){
+      const taskIds=isRecord(p.source)&&p.source.kind==='delegated_task'&&Array.isArray(p.source.taskIds)?p.source.taskIds:[];
+      const represented=new Set(children.map(child=>child.id));
+      // A partial match cannot replace text describing unknown tasks.
+      if(children.length&&taskIds.every(id=>typeof id==='string'&&represented.has(id))){
         body=children.map(child=>renderSubagent(child,source,{id:activity.id,outcome:typeof p.outcome==='string'?p.outcome:'unknown',createdAt:activity.createdAt})).join('');
         result.push({id:activity.id,turnId:activity.turnId,createdAt:activity.createdAt,sequence:activity.sequence??0,body,active:false,kind:activity.kind});continue;
       }
