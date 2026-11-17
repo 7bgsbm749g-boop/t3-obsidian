@@ -3,6 +3,8 @@ import {resolveJobOptions,type JobOverrides,type ResolvedJobOptions,type InlineD
 import {logEvent,logFailure} from '../app/diagnostics';
 import {App, FuzzySuggestModal, Menu, Modal, Notice, Setting, setIcon} from 'obsidian';
 import {composerModelLabel,type ComposerModel} from './composer-models';
+import {ComposerSuggestions} from './composer-suggestions';
+import {setComposerProviderIcon} from './composer-provider';
 import type {ModelSelection} from './model-defaults';
 import {NoteTabPanel} from '../notes/note-tab-panel';
 import {RequestDeliveryError} from '../app/bridge';
@@ -21,11 +23,13 @@ export interface ChatDestination {
   unavailable?:boolean;
   empty?:boolean;
   detail?:string;
+  status?:string;
 }
 export interface ChatHost {
   draftChanged?(text:string):void;
   contextLabel?:string;
   chooseExisting?(projectKey:string|undefined,choose:(destination:ChatDestination)=>void,back:()=>void,signal?:AbortSignal):Promise<void>;
+  searchFiles?(query:string,projectKey?:string,destination?:ChatDestination):Promise<string[]>;
   getModels?(projectKey?:string,destination?:ChatDestination):Promise<{models:ComposerModel[];selection?:ModelSelection}>;
   getThreadChoiceRestriction?():string|undefined;
   steering?:boolean;
@@ -66,7 +70,7 @@ class ChatProjectModal extends FuzzySuggestModal<{key:string;label:string}> {
 /** The model draft uses only capabilities advertised by the selected T3 machine. */
 class SendModelModal extends Modal {
   private selection?:ModelSelection;
-  constructor(app:App,private models:ComposerModel[],selection:ModelSelection|undefined,private apply:(selection:ModelSelection|undefined)=>void,private defaultLabel='Use T3 default'){super(app);this.selection=selection?structuredClone(selection):undefined;}
+  constructor(app:App,private models:ComposerModel[],selection:ModelSelection|undefined,private apply:(selection:ModelSelection|undefined)=>void,private defaultLabel='Default model'){super(app);this.selection=selection?structuredClone(selection):undefined;}
   onOpen(){
     this.titleEl.setText('Model for this send');this.contentEl.empty();
     new Setting(this.contentEl).setName('Model').addDropdown(dropdown=>{
@@ -105,6 +109,12 @@ export class SendComposer extends NoteTabPanel {
   private check?:{key?:string;controller:AbortController;work:Promise<ChatDestination>};
   private models:ComposerModel[]=[];
   private picker?:AbortController;
+  private suggestions?:ComposerSuggestions;
+  private defaultSelection?:ModelSelection;
+  private modelLoadKey?:string;
+  private modelError?:string;
+  private modelTask?:Promise<void>;
+  modelReady:Promise<void>=Promise.resolve();
   constructor(app:App,private host:ChatHost,private prompt=''){super(app,host.getNotePath());this.projectKey=host.getDefaultProjectKey?.();if(host.steering||host.getThreadChoiceRestriction?.())this.target='default';}
   private cancelCheck(){this.check?.controller.abort(cancelledRequest('Conversation check cancelled.'));this.check=undefined;}
   private checkDestination(){
@@ -118,19 +128,25 @@ export class SendComposer extends NoteTabPanel {
   private button(parent:HTMLElement,label:string,icon:string,run:()=>void,cls=''){
     const button=parent.createEl('button',{cls:`clickable-icon t3-send-control ${cls}`,attr:{type:'button','aria-label':label,title:label}});setIcon(button,icon);button.addEventListener('click',run);return button;
   }
-  private capture(){if(this.field){this.prompt=this.field.value;this.host.draftChanged?.(this.prompt);}}
+  private selectedModel(){const selection=this.overrides.modelSelection??this.defaultSelection;return this.models.find(model=>model.selection.instanceId===selection?.instanceId&&model.selection.model===selection?.model);}
+  private resolvedOptions(){
+    const command=this.prompt.match(/^\/(\S+)/)?.[1];
+    return resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},{...this.overrides,modelSelection:this.overrides.modelSelection??this.defaultSelection,...(command&&this.selectedModel()?.commands.some(item=>item.name.replace(/^\//,'')===command)?{providerCommand:command}:{})});
+  }
+  private capture(){if(this.field){this.prompt=this.field.value;if(this.suggestions)this.overrides.context=this.suggestions.context();this.host.draftChanged?.(this.prompt);}}
   onOpen(){
-    this.capture();this.opened=true;const revision=++this.revision;
+    this.capture();this.suggestions?.dispose();this.suggestions=undefined;this.opened=true;const revision=++this.revision;
     logEvent('ui.destination.opened',{notePath:this.host.getNotePath(),steering:this.host.steering,projectKey:this.projectKey});
     this.titleEl.setText('Send composer');this.titleEl.hidden=true;this.modalEl.classList.add('t3-send-panel');this.contentEl.empty();
     const composer=this.contentEl.createDiv({cls:'t3-send-composer'});
     const context=composer.createDiv({cls:'t3-send-context'});
     setIcon(context.createSpan(),'file-text');context.createSpan({text:this.host.contextLabel??this.host.getNotePath().split('/').at(-1)??'Note',cls:'t3-send-source'});
     const project=this.button(context,'Change project','folder',()=>{
-      this.capture();new ChatProjectModal(this.app,()=>this.host.getProjectChoices(),key=>{if(!this.opened||this.choosing)return;this.projectKey=key;this.target='new';this.destination=undefined;this.overrides.modelSelection=undefined;this.models=[];this.cancelCheck();this.onOpen();},this.host.onProjectChange?.bind(this.host)).open();
+      this.capture();new ChatProjectModal(this.app,()=>this.host.getProjectChoices(),key=>{if(!this.opened||this.choosing)return;this.projectKey=key;this.target='new';this.destination=undefined;this.overrides.modelSelection=undefined;this.overrides.interactionMode=undefined;this.overrides.context=undefined;this.models=[];this.defaultSelection=undefined;this.modelLoadKey=undefined;this.cancelCheck();this.onOpen();},this.host.onProjectChange?.bind(this.host)).open();
     },'t3-send-project');
     project.createSpan({text:this.host.getProjectName(this.projectKey)});setIcon(project.createSpan(),'chevron-down');project.title=this.host.getTargetDescription(this.projectKey);
-    this.field=composer.createEl('textarea',{cls:'t3-send-input',attr:{'aria-label':'Ask about this note or selection',placeholder:'Ask about this context, or leave empty to send it…',rows:'3'}});this.field.value=this.prompt;
+    this.field=composer.createEl('textarea',{cls:'t3-send-input',attr:{'aria-label':'Ask about this note or selection',placeholder:'Ask anything. @ files, $ skills, / commands',rows:'2'}});this.field.value=this.prompt;
+    this.suggestions=new ComposerSuggestions(this.field,composer,{action:name=>{if(name==='model')void this.chooseModel();else{this.overrides.interactionMode=name==='plan'?'plan':'default';this.refreshAvailability?.();new Notice(name==='plan'?'Plan mode enabled':'Normal mode enabled');}},catalog:async()=>{await this.modelReady;return {model:this.selectedModel()};},files:query=>this.host.searchFiles?.(query,this.projectKey,this.target==='new'?undefined:this.destination)??Promise.resolve([]),changed:()=>{this.overrides.context=this.suggestions?.context();this.capture();this.refreshAvailability?.();}},this.overrides.context);
     this.field.addEventListener('input',()=>{this.capture();this.refreshAvailability?.();});
     this.field.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();void this.choose();}});
     const controls=composer.createDiv({cls:'t3-send-controls'});
@@ -139,15 +155,15 @@ export class SendComposer extends NoteTabPanel {
     const streaming=this.button(options,'Stream replies into the editor','text-cursor-input',()=>{this.overrides.inline={...this.overrides.inline,enabled:!resolved().inline.enabled};this.refreshAvailability?.();});streaming.setAttribute('role','switch');
     const format=this.button(options,'Final answer format','pilcrow',()=>{this.overrides.inline={...this.overrides.inline,finalAnswerFormat:resolved().inline.finalAnswerFormat==='formatted'?'raw-markdown':'formatted'};this.refreshAvailability?.();},'t3-send-format');format.createSpan();
     const actions=controls.createDiv({cls:'t3-send-actions'});
-    const model=this.button(actions,'Choose model','sparkles',()=>{void this.chooseModel();},'t3-send-model');
-    model.createSpan({text:this.overrides.modelSelection?composerModelLabel(this.overrides.modelSelection,this.models):this.target==='new'?'T3 default':'Thread model'});setIcon(model.createSpan(),'chevron-down');
+    const model=this.button(actions,'Choose model','bot',()=>{void this.chooseModel();},'t3-send-model');
+    model.empty();const providerIcon=model.createSpan({cls:'t3-send-provider'}),modelLabel=model.createSpan();setIcon(model.createSpan(),'chevron-down');
     const thread=this.button(actions,'Choose thread','message-circle',()=>{
       const menu=new Menu();
       menu.addItem(item=>item.setTitle('New thread').setIcon('plus').setChecked(this.target==='new').onClick(()=>this.select('new')));
       if(this.host.getDefaultThread(this.projectKey)||this.host.steering)menu.addItem(item=>item.setTitle('Previous thread').setIcon('history').setChecked(this.target==='default').onClick(()=>this.select('default')));
       menu.addItem(item=>item.setTitle('Existing thread…').setIcon('messages-square').onClick(()=>{void this.pickExisting();}));const rect=thread.getBoundingClientRect();menu.showAtPosition({x:rect.left,y:rect.bottom});
     },'t3-send-thread');
-    const threadLabel=thread.createSpan();setIcon(thread.createSpan(),'chevron-down');
+    thread.empty();const threadIcon=thread.createSpan({cls:'t3-send-thread-icon'});setIcon(threadIcon,'message-circle');const threadLabel=thread.createSpan();setIcon(thread.createSpan(),'chevron-down');
     const send=this.button(actions,'Send context','arrow-up',()=>{void this.choose();},'t3-send-submit');
     const detail=this.contentEl.createDiv({cls:'t3-send-detail',attr:{role:'status','aria-live':'polite'}});
     const busyDetail=this.contentEl.createDiv({cls:'t3-send-detail',text:'Another send is in progress. This composer will become available when it finishes.',attr:{role:'status'}});
@@ -164,33 +180,50 @@ export class SendComposer extends NoteTabPanel {
     }
     this.refreshAvailability=()=>{
       const disabled=Boolean(this.host.busy||this.choosing),inline=resolved().inline,continuing=Boolean(this.target==='default'&&this.destination?.responseId);
+      const selection=this.overrides.modelSelection??this.defaultSelection;
+      modelLabel.setText(selection?composerModelLabel(selection,this.models):this.modelError?'Model unavailable':'Loading model…');
+      setComposerProviderIcon(providerIcon,this.models.find(item=>item.selection.instanceId===selection?.instanceId&&item.selection.model===selection?.model)?.driver);
+      model.title=this.modelError??[modelLabel.textContent,this.overrides.interactionMode==='plan'?'Plan mode':undefined].filter(Boolean).join(' · ');
       project.disabled=disabled||Boolean(restriction);thread.disabled=disabled||Boolean(restriction);model.disabled=disabled||!this.host.getModels;
       streaming.disabled=disabled||continuing;streaming.setAttribute('aria-checked',String(inline.enabled));streaming.title=continuing?'This running response keeps its streaming choices':`Stream replies into the editor: ${inline.enabled?'On':'Off'}`;
       format.disabled=disabled||continuing||!inline.enabled;const formatLabel=inline.finalAnswerFormat==='formatted'?'Quoted Markdown':'Raw Markdown';format.querySelector('span')!.setText(formatLabel);format.title=`Final answer format: ${formatLabel}`;format.setAttribute('aria-label',format.title);
       threadLabel.setText(this.target==='new'?'New thread':this.destination?.label??'Previous thread');
-      thread.title=this.target==='new'?'Send to a new thread':this.destination?.detail??threadLabel.textContent??'';
+      const status=this.destination?.status??this.destination?.detail?.match(/ · (Idle|Active|Running|Waiting)\b/)?.[1];thread.dataset.state=this.target==='new'?'new':this.destination?.unavailable?'unavailable':status?.toLowerCase()??'idle';setIcon(threadIcon,status&&['Active','Running'].includes(status)?'loader-circle':'message-circle');
+      thread.title=this.target==='new'?'Send to a new thread':[threadLabel.textContent,status,this.destination?.detail].filter(Boolean).join(' · ');thread.setAttribute('aria-description',status??'');
       send.disabled=disabled||this.target!=='new'&&Boolean(this.destination?.unavailable);
       const label=this.prompt.trim()?'Send ask':'Send context';send.setAttribute('aria-label',label);send.title=label;
       this.field!.readOnly=disabled;busyDetail.hidden=!this.host.busy;
-      detail.setText(restriction??(this.target!=='new'?(this.destination?.detail??'Checking selected conversation…'):''));detail.hidden=!detail.textContent;
+      detail.setText(restriction??(this.destination?.unavailable?this.destination.detail??'Thread unavailable':''));detail.hidden=!detail.textContent;
     };
-    this.unwatchBusy?.();this.unwatchBusy=this.host.onBusyChange?.(()=>{if(this.opened&&revision===this.revision)this.refreshAvailability?.();});this.refreshAvailability();this.field.focus();
+    this.unwatchBusy?.();this.unwatchBusy=this.host.onBusyChange?.(()=>{if(this.opened&&revision===this.revision)this.refreshAvailability?.();});this.refreshAvailability();this.modelReady=this.loadModels(revision);this.field.focus();
   }
   private select(target:Destination,destination?:ChatDestination){
     if(!this.opened||this.choosing||this.host.busy)return;
     this.capture();this.target=target;this.destination=destination;this.cancelCheck();this.onOpen();
   }
+  private async loadModels(revision:number){
+    if(!this.host.getModels)return;
+    const destination=this.target==='default'?await this.ready:this.destination;
+    if(!this.opened||revision!==this.revision)return;
+    const key=JSON.stringify([this.projectKey,this.target,destination?.threadId]);
+    if(this.modelLoadKey!==key){
+      this.modelLoadKey=key;this.modelError=undefined;this.defaultSelection=undefined;
+      this.modelTask=this.host.getModels(this.projectKey,this.target==='new'?undefined:destination).then(result=>{
+        if(!this.opened||this.modelLoadKey!==key)return;
+        this.models=result.models;this.defaultSelection=result.selection;
+        if(!this.defaultSelection&&!this.overrides.modelSelection)this.modelError='T3 did not return the selected model.';
+      }).catch(error=>{if(this.opened&&this.modelLoadKey===key){this.modelError=error instanceof Error?error.message:String(error);this.modelLoadKey=undefined;}});
+    }
+    await this.modelTask;if(this.opened&&revision===this.revision)this.refreshAvailability?.();
+  }
   private async chooseModel(){
     if(this.choosing||this.host.busy||!this.host.getModels)return;
     const revision=this.revision;this.capture();
     try{
-      const destination=this.target==='default'?await this.ready:this.destination;
+      await this.modelReady;
       if(!this.opened||revision!==this.revision)return;
-      if(destination?.unavailable)throw Error(destination.detail??'Choose an available thread.');
-      const result=await this.host.getModels(this.projectKey,this.target==='new'?undefined:destination);
-      if(!this.opened||revision!==this.revision)return;this.models=result.models;
-      if(!this.models.length)throw Error('No models are available on this T3 machine. Check its provider settings.');
-      new SendModelModal(this.app,this.models,this.overrides.modelSelection??result.selection,selection=>{if(!this.opened||revision!==this.revision||this.choosing)return;this.overrides.modelSelection=selection;this.onOpen();},this.target==='new'?'Use T3 default':'Keep thread model').open();
+      if(!this.models.length)throw Error(this.modelError??'No models are available on this T3 machine.');
+      new SendModelModal(this.app,this.models,this.overrides.modelSelection??this.defaultSelection,selection=>{if(!this.opened||revision!==this.revision||this.choosing)return;this.overrides.modelSelection=selection;this.onOpen();},this.defaultSelection?'Default · '+composerModelLabel(this.defaultSelection,this.models):'Choose model').open();
     }catch(error){new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`);}
   }
   private async pickExisting(){
@@ -201,15 +234,17 @@ export class SendComposer extends NoteTabPanel {
     catch(error){new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`);}
     finally{this.choosing=false;this.refreshAvailability?.();}
   }
-  onClose(){this.picker?.abort();this.capture();this.opened=false;this.unwatchBusy?.();this.unwatchBusy=undefined;this.cancelCheck();logEvent('ui.destination.closed',{notePath:this.host.getNotePath(),submitted:this.choosing});}
+  onClose(){this.picker?.abort();this.capture();this.suggestions?.dispose();this.suggestions=undefined;this.opened=false;this.unwatchBusy?.();this.unwatchBusy=undefined;this.cancelCheck();logEvent('ui.destination.closed',{notePath:this.host.getNotePath(),submitted:this.choosing});}
   private async choose(){
     if(this.choosing||this.host.busy||!this.opened)return;
     this.capture();const target=this.target,revision=this.revision;this.choosing=true;this.refreshAvailability?.();
-    const resolve=()=>resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},this.overrides);
+    const resolve=()=>this.resolvedOptions();
     let finishPreview:(()=>void)|undefined;let finishPreparing:(()=>void)|undefined;
     try{
       finishPreparing=this.host.beginPreparing?.();
       if(target!=='new')finishPreview=this.host.beginSend?.(resolve());
+      await this.modelReady;
+      if(this.modelError&&!this.overrides.modelSelection)throw Error(this.modelError);
       const restriction=this.host.getThreadChoiceRestriction?.();if(target!=='default'&&restriction)throw new RequestDeliveryError(restriction,false);
       if(target!=='default'&&this.projectKey===undefined&&this.host.steering){this.projectKey=this.host.getAlternativeProjectKey?.();if(this.projectKey===undefined)throw Error('Choose a project before selecting another conversation.');}
       const destination=target==='default'?await this.ready:this.destination;

@@ -10,13 +10,14 @@ interface FixtureOptions {automatic?:boolean;remembered?:boolean;steering?:boole
 async function fixture({automatic=false,remembered=false,steering=false,busy=false,confirmed=remembered,restriction='',prompt=''}:FixtureOptions={}){
  const {document,window}=parseHTML('<html><body></body></html>'),modals:any[]=[],menus:any[]=[],notices:string[]=[],sent:any[]=[],checks:any[]=[],previews:string[]=[],preparing:string[]=[],drafts:string[]=[];
  const proto=window.HTMLElement.prototype as any;
- proto.createEl=function(tag:string,o:any={}){const el=document.createElement(tag);el.textContent=o.text??'';el.className=o.cls??'';for(const [k,v] of Object.entries(o.attr??{}))el.setAttribute(k,String(v));this.appendChild(el);return el;};proto.createDiv=function(o:any){return this.createEl('div',o);};proto.createSpan=function(o:any){return this.createEl('span',o);};proto.empty=function(){this.replaceChildren();};proto.setText=function(t:string){this.textContent=t;};
+ proto.createEl=function(tag:string,o:any={}){const el=document.createElement(tag);el.textContent=o.text??'';el.className=o.cls??'';for(const [k,v] of Object.entries(o.attr??{}))el.setAttribute(k,String(v));this.appendChild(el);return el;};proto.createSvg=function(tag:string,o:any={}){const el=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [k,v] of Object.entries(o.attr??{}))el.setAttribute(k,String(v));this.appendChild(el);return el;};proto.createDiv=function(o:any){return this.createEl('div',o);};proto.createSpan=function(o:any){return this.createEl('span',o);};proto.empty=function(){this.replaceChildren();};proto.setText=function(t:string){this.textContent=t;};
  class Modal{titleEl=document.createElement('h2');contentEl=document.createElement('div');modalEl=document.createElement('div');constructor(public app:any){this.modalEl.className='modal';this.contentEl.className='modal-content';this.modalEl.append(this.titleEl,this.contentEl);}open(){modals.push(this);document.body.append(this.modalEl);(this as any).onOpen?.();}close(){this.modalEl.remove();(this as any).onClose?.();}setPlaceholder(){}}
  class Menu{items:any[]=[];constructor(){menus.push(this);}addItem(f:any){const item:any={setTitle(t:string){this.title=t;return this;},setIcon(){return this;},setChecked(){return this;},onClick(fn:any){this.click=fn;return this;}};f(item);this.items.push(item);return this;}showAtPosition(){}}
  class Setting{constructor(public el:any){}setName(){return this;}addDropdown(fn:any){const el=this.el.createEl('select');Object.defineProperty(el,'value',{value:'',writable:true});fn({addOption(value:string,label:string){const o=document.createElement('option');o.value=value;o.textContent=label;el.append(o);return this;},setValue(value:string){el.value=value;return this;},onChange(change:any){el.addEventListener('change',()=>change(el.value));return this;}});return this;}addButton(fn:any){const el=this.el.createEl('button'),b:any={setButtonText(t:string){el.textContent=t;return this;},setCta(){return this;},onClick(f:any){el.addEventListener('click',f);return this;}};fn(b);return this;}}
- const module={exports:{} as any};runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal,FuzzySuggestModal:Modal,Setting,Menu,setIcon:(el:any,icon:string)=>{el.setAttribute('data-icon',icon);},Notice:class{constructor(t:string){notices.push(t);}}}:require(id),document,window,HTMLElement:window.HTMLElement,Event:window.Event,setTimeout,clearTimeout,performance,AbortController,DOMException,URL,URLSearchParams,Buffer,structuredClone});
+ const module={exports:{} as any};runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal,FuzzySuggestModal:Modal,Setting,Menu,setIcon:(el:any,icon:string)=>{el.setAttribute('data-icon',icon);},Notice:class{constructor(t:string){notices.push(t);}}}:require(id),document,window,HTMLElement:window.HTMLElement,Event:window.Event,setTimeout,clearTimeout,performance,AbortController,DOMException,URL,URLSearchParams,Buffer,structuredClone,crypto:globalThis.crypto});
  const listeners=new Set<()=>void>();let pick:any,fail=false;
- const host:any={steering,get busy(){return busy;},onBusyChange:(f:any)=>{listeners.add(f);return ()=>listeners.delete(f);},getThreadChoiceRestriction:()=>restriction||undefined,hasConfirmedNoteSend:()=>confirmed,getNotePath:()=> 'Synthetic.md',getDefaultProjectKey:()=> 'project',getProjectName:(key:string)=>key??'Synthetic',getTargetDescription:()=> 'Synthetic',getProjectChoices:()=>[{key:'other',label:'Other'}],getDefaultThread:()=>remembered?'previous':undefined,getAlternativeProjectKey:()=> 'project',getDefaultDestination:(key:string,signal:AbortSignal)=>new Promise(resolve=>{checks.push({key,signal,resolve});}),beginPreparing:()=>{preparing.push('show');return ()=>preparing.push('clear');},beginSend:()=>{previews.push('show');return ()=>previews.push('clear');},getInlineDefaults:()=>({enabled:true}),draftChanged:(text:string)=>drafts.push(text),chooseExisting:async(_key:any,choose:any,back:any)=>{pick={choose,back};},getModels:async()=>({models:[{selection:{instanceId:'provider',model:'model'},label:'Model',provider:'Provider',options:[]}]}),sendChat:async(text:string,key:string,resolve:any,_back:any,destination:any)=>{sent.push({text,key,destination,options:resolve(),target:'existing'});if(fail)throw Error('Synthetic failure');},sendToNew:async(text:string,key:string,resolve:any)=>{sent.push({text,key,options:resolve(),target:'new'});if(fail)throw Error('Synthetic failure');}};
+ const host:any={steering,get busy(){return busy;},onBusyChange:(f:any)=>{listeners.add(f);return ()=>listeners.delete(f);},getThreadChoiceRestriction:()=>restriction||undefined,hasConfirmedNoteSend:()=>confirmed,getNotePath:()=> 'Synthetic.md',getDefaultProjectKey:()=> 'project',getProjectName:(key:string)=>key??'Synthetic',getTargetDescription:()=> 'Synthetic',getProjectChoices:()=>[{key:'other',label:'Other'}],getDefaultThread:()=>remembered?'previous':undefined,getAlternativeProjectKey:()=> 'project',getDefaultDestination:(key:string,signal:AbortSignal)=>new Promise(resolve=>{checks.push({key,signal,resolve});}),beginPreparing:()=>{preparing.push('show');return ()=>preparing.push('clear');},beginSend:()=>{previews.push('show');return ()=>previews.push('clear');},getInlineDefaults:()=>({enabled:true}),draftChanged:(text:string)=>drafts.push(text),chooseExisting:async(_key:any,choose:any,back:any)=>{pick={choose,back};},getModels:async()=>({selection:{instanceId:'provider',model:'model'},models:[{selection:{instanceId:'provider',model:'model'},label:'Model',provider:'Provider',driver:'codex',options:[],commands:[{name:'compact',description:'Compact context'}],skills:[{name:'review',path:'/skills/review/SKILL.md',description:'Review the changes'}]}]}),sendChat:async(text:string,key:string,resolve:any,_back:any,destination:any)=>{sent.push({text,key,destination,options:resolve(),target:'existing'});if(fail)throw Error('Synthetic failure');},sendToNew:async(text:string,key:string,resolve:any)=>{sent.push({text,key,options:resolve(),target:'new'});if(fail)throw Error('Synthetic failure');}};
+ window.SVGElement.prototype.createSvg=proto.createSvg;
  const app={workspace:{getLeavesOfType:()=>[],getActiveViewOfType:()=>undefined}};
  const opening=automatic?module.exports.openNoteSendFlow(app,host):Promise.resolve(new module.exports.SendComposer(app,host,prompt).open());await Promise.resolve();
  const modal=modals.at(-1);const button=(label:string)=>modal.contentEl.querySelector(`[aria-label="${label}"]`) as HTMLButtonElement;
@@ -112,4 +113,48 @@ test('a response-derived project updates the visible selector without losing its
  const h=await fixture({steering:true});h.type('Keep the active response context');h.modal.projectKey=undefined;
  h.checks[0].resolve({...continuation,projectKey:'response-project'});await h.modal.ready;
  assert.equal(h.modal.projectKey,'response-project');assert.match(h.button('Change project').textContent!,/response-project/);assert.equal(h.modal.field.value,'Keep the active response context');h.modal.close();
+});
+
+test('opening resolves the actual default model and renders its provider glyph without opening a picker',async()=>{
+ const h=await fixture();await h.modal.modelReady;
+ assert.match(h.button('Choose model').textContent!,/Model/);assert.doesNotMatch(h.button('Choose model').textContent!,/T3 default|Thread model/);
+ assert.ok(h.button('Choose model').querySelector('svg path'));assert.equal(h.button('Choose model').querySelector('[data-icon="sparkles"]'),null);
+});
+test('thread state stays on its control and ordinary selection adds no status footer',async()=>{
+ const h=await fixture();await h.modal.pickExisting();h.pick().choose({...continuation,status:'Running'});await h.modal.modelReady;
+ assert.equal(h.button('Choose thread').dataset.state,'running');assert.match(h.button('Choose thread').title,/Running/);
+ assert.equal(h.modal.contentEl.querySelector('.t3-send-detail').hidden,true);
+});
+test('suggestion Enter chooses a real catalog skill without dispatch; submission freezes its context',async()=>{
+ const h=await fixture();await h.modal.modelReady;
+ const input=h.modal.field;input.setRangeText=(text:string,start:number,end:number)=>{input.value=input.value.slice(0,start)+text+input.value.slice(end);input.selectionStart=start+text.length;};
+ h.type('$rev');await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(input.getAttribute('aria-expanded'),'true');assert.match(h.modal.contentEl.textContent!,/Review the changes/);
+ const event=new h.window.Event('keydown');Object.defineProperty(event,'key',{value:'Enter'});input.dispatchEvent(event);
+ assert.equal(input.value,'$review ');assert.equal(h.sent.length,0);await h.modal.choose();
+ assert.equal(h.sent[0].options.context.records[0].kind,'skill');assert.equal(h.sent[0].options.context.records[0].path,'/skills/review/SKILL.md');
+});
+test('file suggestions search the chosen project and ignore a result after close',async()=>{
+ const h=await fixture();await h.modal.modelReady;let resolve!: (files:string[])=>void;let key:string|undefined;
+ h.host.searchFiles=(_query:string,projectKey:string)=>{key=projectKey;return new Promise<string[]>(done=>{resolve=done;});};
+ h.type('@read');await new Promise(done=>setImmediate(done));assert.equal(key,'project');h.modal.close();resolve(['README.md']);await new Promise(done=>setImmediate(done));
+ assert.equal(h.modal.contentEl.querySelector('.t3-send-suggestions'),null);assert.equal(h.sent.length,0);
+});
+test('a late model catalog from a previous project cannot relabel the current project',async()=>{
+ const h=await fixture();await h.modal.modelReady;let release!: (result:any)=>void;
+ h.host.getModels=(key:string)=>key==='old'?new Promise(done=>{release=done;}):Promise.resolve({selection:{instanceId:'p',model:'current'},models:[{selection:{instanceId:'p',model:'current'},label:'Current model',options:[]}]});
+ h.modal.projectKey='old';h.modal.onOpen();h.modal.projectKey='current';h.modal.onOpen();await h.modal.modelReady;
+ release({selection:{instanceId:'p',model:'stale'},models:[]});await new Promise(done=>setImmediate(done));assert.match(h.button('Choose model').textContent!,/Current model/);
+});
+test('slash model opens the actual model picker and does not send the command',async()=>{
+ const h=await fixture();await h.modal.modelReady;const input=h.modal.field;
+ input.setRangeText=(text:string,start:number,end:number)=>{input.value=input.value.slice(0,start)+text+input.value.slice(end);};
+ h.type('/model');await new Promise(done=>setImmediate(done));const event=new h.window.Event('keydown');Object.defineProperty(event,'key',{value:'Enter'});input.dispatchEvent(event);await new Promise(done=>setImmediate(done));
+ assert.equal(h.sent.length,0);assert.equal(input.value,'');assert.match(h.modals.at(-1).titleEl.textContent!,/Model/);
+});
+test('a selected file context is removed when its token is deleted',async()=>{
+ const h=await fixture();await h.modal.modelReady;h.host.searchFiles=async()=>['README.md'];const input=h.modal.field;
+ input.setRangeText=(text:string,start:number,end:number)=>{input.value=input.value.slice(0,start)+text+input.value.slice(end);};
+ h.type('@README');await new Promise(done=>setImmediate(done));const event=new h.window.Event('keydown');Object.defineProperty(event,'key',{value:'Enter'});input.dispatchEvent(event);
+ assert.equal(h.modal.overrides.context.records[0].path,'README.md');h.type('A different question');assert.equal(h.modal.overrides.context,undefined);await h.modal.choose();assert.equal(h.sent[0].options.context,undefined);
 });
