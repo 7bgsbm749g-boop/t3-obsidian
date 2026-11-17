@@ -644,7 +644,8 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
    (pt-4 at 640px), footer px-2/pb-2, 32px primary action. Breakpoints
    use composer width (620/780), not the desktop window around a narrow leaf. */
 .modal.t3-send-panel { width: min(46rem, calc(100vw - 32px)); max-width: 46rem; padding: 0; border: 1px solid var(--background-modifier-border); border-radius: 16px; overflow: visible; background: var(--background-primary); container-type: inline-size; }
-.modal.send-to-t3-tab-panel.t3-send-panel { inset: auto 16px max(16px, env(safe-area-inset-bottom)); width: calc(100% - 32px); margin-inline: auto; }
+.send-to-t3-panel-host:has(> .t3-send-panel) { container: t3-note-pane / inline-size; }
+.modal.send-to-t3-tab-panel.t3-send-panel { --t3-send-gutter: var(--size-4-3); --t3-send-bottom: var(--size-4-4); inset: auto var(--t3-send-gutter) calc(var(--t3-send-bottom) + env(safe-area-inset-bottom, 0px)); width: calc(100% - 2 * var(--t3-send-gutter)); margin-inline: auto; }
 .t3-send-panel .modal-header, .t3-send-panel .modal-title { display: none; }
 .t3-send-panel .modal-content { margin: 0; padding: 0; overflow: visible; border-radius: inherit; }
 .t3-send-panel .modal-close-button { top: 8px; right: 8px; }
@@ -671,10 +672,11 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 .t3-send-thread[data-state="new"] > span:nth-child(2) { max-width: none; }
 .t3-send-thread > span, .t3-send-model > span, .t3-send-project > span { display: block; }
 .t3-send-thread[data-state="running"] .t3-send-thread-icon, .t3-send-thread[data-state="active"] .t3-send-thread-icon { color: var(--interactive-accent); }
-.t3-send-format > span { position: absolute; left: 28px; top: 0; height: 28px; align-items: center; background: var(--background-modifier-hover); border-radius: 6px; z-index: 1; max-width: 0; opacity: 0;  }
+.t3-send-format > span { position: absolute; left: 28px; top: 0; height: 28px; align-items: center; background: var(--background-modifier-hover); border-radius: 0 6px 6px 0; z-index: 1; max-width: 0; padding-inline: 0; opacity: 0; transition: max-width 150ms ease-out, padding 150ms ease-out, opacity 150ms ease-out; }
 .t3-send-format { position: relative; gap: 0; }
 
-.t3-send-format:is(:hover, :focus-visible) > span { max-width: 140px; opacity: 1; }
+.t3-send-format:is(:hover, :focus-visible) { border-radius: 6px 0 0 6px; background: var(--background-modifier-hover); }
+.t3-send-format:is(:hover, :focus-visible) > span { max-width: 140px; padding-inline: 8px; opacity: 1; }
 .t3-send-control[aria-checked="true"] { color: var(--text-normal); background: var(--background-modifier-hover); }
 .t3-send-controls .t3-send-submit { width: 32px; height: 32px; border-radius: 50%; background: var(--background-modifier-hover); color: var(--text-normal); }
 .t3-send-control:disabled { color: var(--text-faint); opacity: .64; }
@@ -691,6 +693,10 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 .t3-send-suggestion-description { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 12px; }
 .t3-send-suggestions-empty { padding: 14px 12px 12px; color: var(--text-muted); font-size: 12px; }
 @container (min-width: 640px) { .t3-send-composer textarea.t3-send-input { padding-top: 16px; } .t3-send-suggestion { min-height: 28px; } }
+@container t3-note-pane (min-width: 640px) {
+  .modal.send-to-t3-tab-panel.t3-send-panel { --t3-send-gutter: calc(3 * var(--size-4-4)); --t3-send-bottom: var(--size-4-5); }
+  .t3-send-composer textarea.t3-send-input { padding-top: 16px; }
+}
 @container (max-width: 619px) {
   .t3-send-model { max-width: 160px; }
   .t3-send-thread { max-width: 50%; }

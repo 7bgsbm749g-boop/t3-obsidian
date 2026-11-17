@@ -49,6 +49,10 @@ destination controls are specific to this plugin.
 The composer is centered in its note pane and capped at T3's default 46rem
 content width. At narrow widths the model label shortens first; New thread
 remains readable beside the send button.
+The pane gutters are 12px below 640px and 48px above it, with 16px/20px bottom
+spacing, matching the sidebar in PR #22. The format label expands and fades over
+150ms, with 8px side padding and square left corners where it joins the icon.
+Reduced motion disables that transition.
 
 Codex `/feedback` requires an existing thread and uses T3's feedback-upload API
 after explicit Send; it is never submitted merely by choosing a suggestion.
