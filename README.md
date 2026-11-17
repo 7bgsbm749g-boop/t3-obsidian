@@ -107,3 +107,23 @@ Agents can prepare and submit checked note edits through the running plugin. Com
 Your chosen note content and attachments go to the connected T3 computer and its configured model provider. Optional thread hiding changes thread tags and visibility settings through T3’s authenticated API across your connected environments; it needs settings-write access. Optional agent setup writes the bundled MCP tools and changes the selected agent’s launch settings on that computer through the authenticated T3 connection, outside the vault. Obsidian does not run the helper or open an incoming command port. T3 and provider accounts or usage charges are separate from this free plugin. [Report an issue](https://github.com/7bgsbm749g-boop/t3-obsidian/issues) · [MIT license](LICENSE)
 
 Streaming RAM capture: [device-local streaming memory diagnostics](docs/stream-memory-diagnostics.md).
+
+### Plugin updates
+
+T3 Code checks its latest published GitHub release at startup and when Obsidian
+returns to the foreground or comes online. Background checks run at most once
+per six hours. A banner at the top says **Update available for t3-obsidian (vVERSION)**,
+shows the GitHub release description and change list, and offers **Update** and
+**Dismiss**. Long notes scroll while the buttons stay visible. Releases with no
+description show a short fallback message. Dismiss
+hides that release on this device; a newer release can show another banner.
+Use **T3 Code: Check for plugin updates** to check immediately or show a dismissed
+update again. Offline checks stay quiet.
+
+**Update** downloads and validates all release files, saves open notes and response
+recovery data, then reloads only T3 Code. It preserves settings and does not need
+active streams to finish. A failed download leaves the installation unchanged;
+a failed file write attempts to restore the previous runtime. Update errors stay
+in the banner so you can retry. Releases that need a newer Obsidian version show
+an instruction to update Obsidian first. Development builds are compared by their
+numeric source version and are never replaced by an older release.
