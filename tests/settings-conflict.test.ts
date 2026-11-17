@@ -9,7 +9,7 @@ async function harness(initial:any,deviceId=randomUUID()){
   let current=initial,saves=0,local:any={deviceId,mode:'direct'};
   class Base{}
   class Plugin {
-    app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,value:any)=>{local=value;},workspace:{onLayoutReady:()=>{},on:()=>({})}};
+    app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,value:any)=>{local=value;},workspace:{onLayoutReady:()=>{},on:()=>({}),getActiveViewOfType:()=>undefined,getLeavesOfType:()=>[]}};
     async loadData(){return current;}
     async saveData(value:any){current=value;saves++;}
     addSettingTab(){}registerEvent(){}addCommand(){}register(_cleanup:()=>void){}

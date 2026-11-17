@@ -5,6 +5,10 @@ import {sameWorkspacePath} from './folder-link';
 import {filterWorkspaceFolders,workspaceChildPath,workspaceParentPath,type NewWorkspaceFolder} from './workspace-picker';
 
 export class ProjectCreationCancelled extends Error {constructor(){super('Project creation cancelled.');}}
+export const NEW_FOLDER_PROJECT='folder:new';
+export const newProjectKey=(machineId:string)=>`${NEW_FOLDER_PROJECT}:${machineId}`;
+export const isNewProjectKey=(key?:string)=>key===NEW_FOLDER_PROJECT||!!key?.startsWith(NEW_FOLDER_PROJECT+':');
+export const newProjectMachine=(key?:string)=>key?.startsWith(NEW_FOLDER_PROJECT+':')?key.slice(NEW_FOLDER_PROJECT.length+1):undefined;
 
 export function workspaceInsideVault(path:string,root:string):boolean {
   const normalize=(value:string)=>{

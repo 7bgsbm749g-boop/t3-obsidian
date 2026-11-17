@@ -29,14 +29,14 @@ export class NoteTabPanel extends Modal {
     host.classList.add('send-to-t3-panel-host');this.modalEl.classList.add('send-to-t3-tab-panel');
     this.modalEl.setAttribute('role','dialog');this.modalEl.setAttribute('aria-modal','false');
     host.appendChild(this.modalEl);
-    this.keydown=event=>{if(event.key==='Escape'&&this.modalEl.contains(event.target as Node)){event.preventDefault();event.stopPropagation();this.close();}};
+    this.keydown=event=>{if(event.key==='Escape'&&this.modalEl.contains(event.target as Node)){if((event.target as Element).getAttribute?.('aria-expanded')==='true')return;event.preventDefault();event.stopPropagation();this.close();}};
     doc.addEventListener('keydown',this.keydown,true);
     this.leafEvent=this.app.workspace.on('active-leaf-change',leaf=>{if(leaf?.view!==this.panelView)this.close(false);});
     this.fileEvent=this.app.workspace.on('file-open',()=>{if(this.panelView?.file?.path!==this.openedPath)this.close(false);});
     this.viewportChanged=()=>{const height=doc.defaultView?.visualViewport?.height;if(height)this.modalEl.style.setProperty('--t3-panel-viewport-height',`${Math.max(120,height*0.75)}px`);};
     doc.defaultView?.visualViewport?.addEventListener('resize',this.viewportChanged);this.viewportChanged();
     void this.onOpen();
-    this.modalEl.setAttribute('aria-label',this.titleEl?.textContent||this.contentEl.querySelector('h2')?.textContent||'T3 Code');
+    if(!this.modalEl.hasAttribute('aria-labelledby'))this.modalEl.setAttribute('aria-label',this.titleEl?.textContent||this.contentEl.querySelector('h2')?.textContent||'T3 Code');
     this.modalEl.querySelector<HTMLElement>('input:not(:disabled),textarea:not(:disabled),button:not(:disabled):not([hidden])')?.focus({preventScroll:true});
   }
   close(restoreFocus=true){
