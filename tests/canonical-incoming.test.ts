@@ -43,6 +43,55 @@ test('local receipt supplies only selection bookkeeping and verified display fra
  s.messages.at(-1)!.text='Actual canonical text';assert.equal(observeIncoming(s,['turn'],incoming,[local])[0].text,'Actual canonical text');
 });
 
+test('canonical agent authors without a sender thread stay Agent while human and unknown authors stay neutral',()=>{
+ const message:InlineMessage={id:'input',role:'user',text:'Delegated task completed',turnId:'turn',streaming:false};
+ for(const creationSource of ['server','mcp']){
+  assert.equal(incomingLabel({...message,createdBy:'agent',creationSource}),'Agent');
+  assert.equal(incomingLabel({...message,createdBy:'agent',creationSource},true),'Agent');
+ }
+ assert.equal(incomingLabel({...message,createdBy:'agent',senderThreadId:'invalid'}),'Agent');
+ assert.equal(incomingLabel({...message,createdBy:'agent',context:sender}),'Agent · Source agent');
+ assert.equal(incomingLabel({...message,createdBy:'user',senderThreadId:sender.records[0].payload.threadId}),'User');
+ assert.equal(incomingLabel(message),'User');assert.equal(incomingLabel(message,true),'You');
+});
+
+test('dated inputs from Obsidian, T3, agents and delegated tasks retain one fold across live updates and reload',()=>{
+ const origins=[
+  {createdBy:'user',creationSource:'web',local:true,label:'You'},
+  {createdBy:'user',creationSource:'web',local:false,label:'User'},
+  {createdBy:'agent',creationSource:'mcp',local:false,label:'Agent'},
+  {createdBy:'agent',creationSource:'server',local:false,label:'Agent',delegatedCompletion:{parentRunId:'turn',generation:1,taskIds:['synthetic-task']}},
+ ];
+ const keys=(body:string)=>[...body.matchAll(/data-t3-fold="([^"]+)"/g)].map(match=>match[1]);
+ for(const origin of origins){
+  let s=state();s.messages=[{...assistant('Before input.'),streaming:false}];
+  const progress=s.messages[0],initial={messageId:'primary',text:'Original prompt'},timing={startedAt:at(0)};
+  const render=(current:InlineThreadState,inputs:InlineSteering[]=[])=>renderInlineTurn(current,'turn','thread','running','collapse',undefined,{messages:current.messages.filter(m=>m.role==='assistant'),steering:inputs},initial,undefined,timing);
+  const original=render(s);
+  const reservation=origin.local?[{messageId:'input',text:'Change direction.',before:[progress]}]:[];
+  s=event(s,1,'thread.message-sent',{messageId:'input',role:'user',turnId:'turn',text:'Change direction.',streaming:false,createdAt:at(10),createdBy:origin.createdBy,creationSource:origin.creationSource,...('delegatedCompletion' in origin?{delegatedCompletion:origin.delegatedCompletion}:{})});
+  let inputs=observeIncoming(s,['turn'],[],reservation,['primary']);
+  assert.equal(inputs[0].label,origin.label);
+  const waiting=render(s,inputs);assert.deepEqual(keys(waiting),keys(original));
+  s=event(s,2,'thread.message-sent',{messageId:'after',role:'assistant',turnId:'turn',text:'After input.',streaming:false,createdAt:at(11)});
+  inputs=observeIncoming(s,['turn'],inputs,reservation,['primary']);
+  const live=render(s,inputs);
+  const checkpoint=JSON.parse(JSON.stringify(inlineBindingCheckpoint(s)));
+  const restored=restoreInlineBindings(applyThreadItem({messages:[],activities:[]},{kind:'snapshot',snapshot:{thread:JSON.parse(JSON.stringify(s))}}).state,checkpoint);
+  const recovered=render(restored,observeIncoming(restored,['turn'],JSON.parse(JSON.stringify(inputs)),reservation,['primary']));
+  for(const output of [waiting,live,recovered]){
+   assert.equal((output.match(/^> \[!t3-progress\][+-]/gm)??[]).length,1);
+   assert.deepEqual(keys(output),keys(original));
+   assert.equal(output.match(/class="send-to-t3-run-timer"/g)?.length,1);
+   assert.equal(output.split('Change direction.').length-1,1);
+   assert.match(output,new RegExp(`\\[!t3-steering\\] ${origin.label}\\n`));
+   assert.ok(output.indexOf('Original prompt')<output.indexOf('Before input.'));
+   assert.ok(output.indexOf('Before input.')<output.indexOf('Change direction.'));
+  }
+  assert.ok(recovered.indexOf('Change direction.')<recovered.indexOf('After input.'));
+ }
+});
+
 test('plain prose, invalid or conflicting sender records stay neutral; titles cannot inject callouts',()=>{
  const msg:InlineMessage={id:'native',role:'user',text:'Coordination from an agent',turnId:'turn',streaming:false};
  assert.equal(incomingLabel(msg),'User');assert.equal(incomingLabel({...msg,context:{version:1,records:[{...sender.records[0],payload:{kind:'agent',title:'Imposter'}}]}}),'User');

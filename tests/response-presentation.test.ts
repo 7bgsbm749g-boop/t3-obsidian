@@ -348,25 +348,26 @@ test('progress opens at submission and stays open until the final message finish
   }
 });
 
-test('timestamped steering creates measured continuation folds with the final outside',()=>{
+test('timestamped steering keeps one history fold and total duration with the final outside',()=>{
  const messages=[{id:'p',role:'assistant' as const,turnId:'turn',text:'Before steering',createdAt:'2026-10-02T10:00:05Z',streaming:false},{id:'f',role:'assistant' as const,turnId:'turn',text:'Final outside',createdAt:'2026-10-02T10:00:30Z',streaming:false}];
  const conversation={messages,steering:[{messageId:'s',text:'Steer',confirmed:true,createdAt:'2026-10-02T10:00:12Z',before:[messages[0]]}]};
  const output=renderInlineTurn({...state,messages,latestTurn:{turnId:'turn',state:'completed',assistantMessageId:'f',completedAt:'2026-10-02T10:00:30Z'}},'turn','thread','complete','collapse','environment',conversation,undefined,undefined,{startedAt:timing.startedAt,finishedAt:'2026-10-02T10:00:30Z'});
  const failed=renderInlineTurn({...state,messages},'turn','thread','error','collapse','environment',conversation,undefined,undefined,{startedAt:timing.startedAt,finishedAt:'2026-10-02T10:00:30Z'});assert.match(failed,/· Error/);assert.doesNotMatch(failed,/Working for|inline-spinner/);
- const folds=foldsOf(output);assert.equal(folds.length,2);assert.match(folds[0],/Worked for/);assert.match(folds[0],/>12s<\/span>/);assert.match(folds[1],/Continued for/);assert.match(folds[1],/>18s<\/span>/);for(const fold of folds)assert.doesNotMatch(fold,/Final outside/);
+ const folds=foldsOf(output);assert.equal(folds.length,1);assert.match(folds[0],/Worked for/);assert.match(folds[0],/>30s<\/span>/);assert.match(folds[0],/Before steering[\s\S]*Steer/);assert.doesNotMatch(folds[0],/Final outside/);assert.equal(output.split('Final outside').length-1,1);
+ assert.equal(output.match(/class="send-to-t3-run-timer"/g)?.length,1);assert.doesNotMatch(output,/Continued for|inline-spinner/);
 });
 
-test('steering does not offer an activity action into unloaded completed history',()=>{
+test('steering retains the activity action in the shared history and advances it to new work',()=>{
  const progress={id:'p',role:'assistant' as const,turnId:'turn',text:'Before steering',createdAt:'2026-10-02T10:00:05Z',streaming:false};
  const live:InlineThreadState={messages:[progress],activities:[{id:'tool',kind:'tool.completed',turnId:'turn',summary:'Tool',createdAt:'2026-10-02T10:00:06Z',payload:{toolCallId:'tool',status:'completed',data:{toolName:'exec_command',command:'pwd'}}}],latestTurn:{turnId:'turn',state:'running'}};
  const conversation={messages:live.messages,steering:[{messageId:'s',text:'Steer',confirmed:true,createdAt:'2026-10-02T10:00:12Z',before:[progress]}]};
  const renderLive=(steering=conversation.steering)=>renderInlineTurn(live,'turn','thread','running','collapse','environment',{messages:live.messages,steering},undefined,undefined,{startedAt:timing.startedAt});
  assert.match(renderLive([]),/data-t3-open-tool-group/);
  const waiting=renderLive(),presented=presentToolGroups(waiting).display;
- assert.equal(foldsOf(waiting).length,2);
- assert.match(presented,/send-to-t3-response-history/);
- assert.match(presented,/send-to-t3-response-activity" role="status"/);
- assert.doesNotMatch(presented,/data-t3-open-tool-group/);
+ assert.equal(foldsOf(waiting).length,1);
+ assert.doesNotMatch(presented,/send-to-t3-response-history/,'the active shared fold is not unloaded completed history');
+ assert.match(presented,/<button class="send-to-t3-response-activity" type="button"/);
+ assert.match(presented,/data-t3-open-tool-group/);
  live.messages.push({...progress,id:'continued',text:'Continuing',createdAt:'2026-10-02T10:00:13Z'});
  live.activities.push({...live.activities[0],id:'new-tool',createdAt:'2026-10-02T10:00:14Z',payload:{toolCallId:'new-tool',status:'inProgress',data:{toolName:'exec_command',command:'ls'}}});
  const resumed=presentToolGroups(renderLive()).display;

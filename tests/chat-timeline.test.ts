@@ -52,7 +52,7 @@ test('sidebar tool results retain native image and HTML references with their so
  const state=thread(),createdAt='2026-11-16T12:00:10Z';
  state.activities=[{id:'image',kind:'response.image',turnId:'run',summary:'Image',createdAt,payload:{itemId:'image-item',imageSources:[{kind:'file',path:'/synthetic/chart.png'}]}},{id:'html',kind:'response.html',turnId:'run',summary:'Chart',createdAt,payload:{itemId:'html-item',htmlRender:{attachmentId:'synthetic-chart',title:'Chart',height:200}}}];
  const [segment]=chatTimeline(state,{environmentId:'env',threadId:'thread'});
- assert.equal((segment.work.match(/```t3-image/g)??[]).length,1);assert.equal((segment.work.match(/```t3-html/g)??[]).length,1);assert.match(segment.work,/"environmentId":"env","threadId":"thread","runId":"run"/);
+ assert.equal((segment.work.match(/```t3-image/g)??[]).length,1);assert.equal((segment.results?.map(row=>row.text).join('\n').match(/```t3-html/g)??[]).length,1);assert.match(segment.work,/"environmentId":"env","threadId":"thread","runId":"run"/);
  assert.doesNotMatch(chatTimeline(state)[0].work,/```t3-(?:image|html)/);
 });
 test('cold detail snapshots associate null-turn steering and keep later final text below it',()=>{
@@ -64,4 +64,23 @@ test('saved steering observations are bounded, exact and scoped to one source',(
  const value={source:'env/project/thread',inputTurns:{steer:'run'},inputBoundaries:{steer:[{id:'reply',role:'assistant',turnId:'run',text:'Exact prefix.\n\n',streaming:true}]}};
  assert.equal(readChatObservations(value,value.source).inputBoundaries.steer[0].text,'Exact prefix.\n\n');assert.deepEqual(readChatObservations(value,'other').inputTurns,{});
  assert.deepEqual(readChatObservations({...value,inputBoundaries:{steer:[{...value.inputBoundaries.steer[0],text:'x'.repeat(1_000_001)}]}},value.source).inputBoundaries,{});
+});
+
+
+test('waking children keep a completed parent open until the result is delivered',()=>{
+ const state=thread();state.subagents={child:{id:'child',runId:'run',status:'running',origin:'app_owned',completionWake:'always'}};
+ const [waiting]=chatTimeline(state);assert.equal(waiting.active,true);assert.equal(waiting.final,undefined);assert.equal(waiting.timing?.finishedAt,undefined);assert.match(waiting.label,/Waiting for 1 subagent/);
+ state.subagents.child.status='completed';state.subagents.child.completionDelivery={state:'pending'};
+ assert.equal(chatTimeline(state)[0].active,true);
+ state.subagents.child.completionDelivery={state:'delivered'};
+ const [done]=chatTimeline(state);assert.equal(done.active,false);assert.equal(done.final?.id,'answer');assert.equal(done.timing?.finishedAt,end);
+});
+
+test('sidebar keeps generated HTML results outside collapsible work',()=>{
+ const state=thread(),source={environmentId:'env',threadId:'thread'};
+ const html=(id:string,revision:string,title:string)=>({id,summary:title,kind:'response.html',turnId:'run',createdAt:start,sequence:2,payload:{itemId:'page',revision,htmlRender:{attachmentId:'synthetic_html',title,height:300}}});
+ state.activities=[html('old','1','Old page'),html('new','2','Generated page')];
+ const [segment]=chatTimeline(state,source),pages=segment.results!;
+ assert.equal(pages.length,1);assert.match(pages[0].text,/Generated page/);assert.doesNotMatch(pages[0].text,/Old page/);assert.match(pages[0].text,/"environmentId":"env"/);assert.doesNotMatch(segment.work,/synthetic_html/);assert.equal(segment.history!.filter(row=>row.text.includes('```t3-html')).length,0);
+ assert.equal(chatTimeline(state)[0].results?.length,0);
 });

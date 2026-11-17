@@ -7,6 +7,7 @@ import {toolImageSources,withoutToolImageData,replacesToolImages} from '../respo
 import {htmlRenderFromToolItem} from '../responses/html-results';
 import {worktreeHandoff,mergeWorktreeHandoffs} from '../conversations/inline-worktree';
 import {workspacePreparation} from '../projects/worktree-setup';
+import {subagentDisplayFields} from '../responses/response-subagents';
 
 export const T3_PROTOCOL_VERSION=2;
 export const T3_PROTOCOL_HEADER='x-t3-orchestration-protocol';
@@ -65,7 +66,7 @@ export function responseRun(run:WireRun,messages:InlineMessage[]=[]):InlineTurn 
 }
 /** Retain lifecycle evidence without copying child prompts or results. */
 export function responseSubagent(item:InlineSubagent):InlineSubagent {
-  return {id:item.id,runId:item.runId,title:item.title,status:item.status,origin:item.origin,completionWake:item.completionWake,childThreadId:item.childThreadId,remoteChild:item.remoteChild,
+  return {id:item.id,runId:item.runId,title:item.title,status:item.status,origin:item.origin,completionWake:item.completionWake,childThreadId:item.childThreadId,remoteChild:item.remoteChild,...subagentDisplayFields(item),
     ...(item.completionDelivery?{completionDelivery:{state:item.completionDelivery.state,observedByRunId:item.completionDelivery.observedByRunId}}:{})};
 }
 function sessionFor(run:Pick<WireRun,'id'|'status'>|null|undefined,runtimeMode?:string,lastError?:string){
@@ -83,6 +84,7 @@ export function normalizeV2ShellThread(thread:WireThread){
 
 export function itemActivities(item:WireTurnItem,requests:Record<string,WireRuntimeRequest>={}):InlineActivity[]{
   const at=item.startedAt??item.updatedAt,base={turnId:item.runId??null,createdAt:at,sequence:item.ordinal};
+  if(item.type==='subagent')return [{...base,id:`v2:${item.id}`,kind:'response.subagent',summary:item.title??'Subagent',payload:{subagent:responseSubagent({...item,id:item.subagentId??item.id,runId:item.runId??''})}}];
   if(workspacePreparation(item))return [{...base,id:`v2:${item.id}`,kind:'response.worktree-setup',summary:'Worktree setup',payload:{status:terminal(item.status)?item.status==='completed'?'completed':item.status==='failed'?'failed':'stopped':'inProgress',completedAt:item.completedAt,output:item.output}}];
   const htmlRender=htmlRenderFromToolItem(item);
   if(htmlRender)return [{...base,id:`v2:${item.id}`,kind:'response.html',summary:htmlRender.title,payload:{itemId:item.id,revision:item.updatedAt,htmlRender}}];
@@ -103,7 +105,7 @@ export function itemActivities(item:WireTurnItem,requests:Record<string,WireRunt
   const status=terminal(item.status)?item.status==='failed'?'failed':item.status==='interrupted'||item.status==='cancelled'?'stopped':'completed':'inProgress';
   if(['compaction','proposed_plan','todo_list','notification','error'].includes(item.type))return [{...base,id:`v2:${item.id}`,
     kind:item.type==='compaction'?'context-compaction':item.type==='proposed_plan'?'response.proposed-plan':item.type==='todo_list'?'response.plan':'response.notification',
-    summary:item.title??item.type.replace(/_/g,' '),payload:{status,completedAt:item.completedAt,beforeTokenCount:item.beforeTokenCount,afterTokenCount:item.afterTokenCount,text:item.text??item.summary??item.failure?.message,markdown:item.markdown,planId:item.planId,streaming:item.streaming,steps:item.steps,error:item.type==='error'}}];
+    summary:item.title??item.type.replace(/_/g,' '),payload:{status,completedAt:item.completedAt,beforeTokenCount:item.beforeTokenCount,afterTokenCount:item.afterTokenCount,text:item.text??item.summary??item.failure?.message,source:item.source,outcome:item.outcome,markdown:item.markdown,planId:item.planId,streaming:item.streaming,steps:item.steps,error:item.type==='error'}}];
   const images=toolImageSources(item);
   const output=item.type==='dynamic_tool'?withoutToolImageData(item.output):item.output;
   const imageActivity:InlineActivity={...base,sequence:item.ordinal+0.5,id:`v2:${item.id}:images`,kind:'response.image',summary:'Image',payload:{itemId:item.id,revision:item.updatedAt,imageSources:images}};
@@ -138,6 +140,9 @@ export function normalizeV2Snapshot(input:unknown):unknown{
   const pending=controls.filter(i=>itemActivities(i,requests).length===1);
   const failure=items.filter(i=>i.type==='error'&&i.runId===current?.id).at(-1)?.failure;
   const subagents:Record<string,InlineSubagent>=Object.fromEntries(array(p.subagents).map(item=>[item.id,responseSubagent(item)]));
+  for(const item of items)if(item.type==='subagent'&&!subagents[item.subagentId??item.id]){
+    const child=responseSubagent({...item,id:item.subagentId??item.id,runId:item.runId??''});subagents[child.id]=child;
+  }
   const backgroundLiveness=items.some(i=>['subagent','background_task','background_command','monitor'].includes(i.type)&&!terminal(i.status))||Object.values(subagents).some(i=>i.completionWake==='always'&&(!terminal(i.status)||i.completionDelivery?.state==='pending'));
   return {snapshotSequence:snapshot.snapshotSequence,page:{hasMore:snapshot.hasMoreHistory===true},
     thread:{...p.thread,protocolVersion:2,messages,activities,
@@ -203,6 +208,10 @@ export function applyV2ControlEvent(state:InlineThreadState,input:unknown):Inlin
     const request=event.payload;requests[request.id]=request;items=Object.values(controls).filter(item=>item.requestId===request.id);
   }else{
     const item=event.payload,handoff=worktreeHandoff(item);
+    if(item.type==='subagent'){
+      const child=responseSubagent({...item,id:item.subagentId??item.id,runId:item.runId??''});
+      state={...state,subagents:{...state.subagents,[child.id]:{...state.subagents?.[child.id],...Object.fromEntries(Object.entries(child).filter(([,value])=>value!==undefined)),id:child.id,runId:child.runId,status:child.status}}};
+    }
     if(handoff)state={...state,worktreeHandoffs:mergeWorktreeHandoffs(state.worktreeHandoffs,{[handoff.id]:handoff})};
     if(['user_input_request','approval_request'].includes(item.type))controls[item.id]=item;
     if(item.type==='reasoning'){

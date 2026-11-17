@@ -23,6 +23,7 @@ export interface WireTurnItem {
   questionAnswer?:{answers?:unknown};fileName?:string;viewedImagePath?:string;exitCode?:number;
   context?:unknown;attachments?:unknown[];createdBy?:string;creationSource?:string;
   senderThreadId?:string|null;delegatedCompletion?:InlineMessage['delegatedCompletion'];
+  subagentId?:string;childThreadId?:string|null;remoteChild?:unknown;driver?:string;providerInstanceId?:string;progress?:string;result?:string|null;source?:unknown;outcome?:string;detail?:string;
 }
 export interface WireMessage extends Omit<InlineMessage,'turnId'> {runId:string|null;threadId?:string;nodeId?:string;attachments?:unknown[]}
 export interface WireThread {

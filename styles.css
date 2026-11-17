@@ -735,6 +735,25 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 
 .t3-chat-header > .t3-chat-text-action { font-weight: var(--font-semibold); }
 .t3-composer-thumbnail { width: 32px; height: 32px; object-fit: cover; border-radius: var(--radius-s); }
+.send-to-t3-subagent { display:flex; align-items:center; gap:10px; width:100%; min-width:0; box-sizing:border-box; padding:6px 8px; border-radius:6px; color:var(--text-normal); text-align:left; font-family:var(--font-interface); font-size:var(--font-ui-small); text-decoration:none; line-height:1.5; }
+a.send-to-t3-subagent:hover { background:var(--background-modifier-hover); color:var(--text-normal); text-decoration:none; }
+a.send-to-t3-subagent:focus-visible { outline:2px solid var(--interactive-accent); outline-offset:-2px; }
+.send-to-t3-subagent-avatar { position:relative; display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; flex:none; border:1px solid var(--background-modifier-border); border-radius:50%; background:var(--background-secondary); box-shadow:0 0 0 2px var(--background-primary); }
+.send-to-t3-subagent-provider, .send-to-t3-subagent-provider svg { display:block; width:14px; height:14px; }
+.send-to-t3-subagent-avatar .send-to-t3-subagent-badge { position:absolute; right:-3px; bottom:-2px; display:flex; align-items:center; justify-content:center; width:10px; height:10px; border-radius:50%; color:var(--text-on-accent); background:var(--interactive-accent); box-shadow:0 0 0 2px var(--background-primary); }
+.send-to-t3-subagent-avatar .send-to-t3-subagent-badge > svg { width:8px; height:8px; }
+.send-to-t3-subagent[data-t3-subagent-status="completed"] .send-to-t3-subagent-badge { background:var(--color-green); }
+.send-to-t3-subagent[data-t3-subagent-status="failed"] .send-to-t3-subagent-badge { background:var(--text-error); }
+.send-to-t3-subagent-copy { flex:1; min-width:0; }
+.send-to-t3-subagent-heading { display:flex; align-items:baseline; gap:8px; min-width:0; }
+.send-to-t3-subagent-title { font-weight:var(--font-medium); }
+.send-to-t3-subagent-title, .send-to-t3-subagent-detail { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.send-to-t3-subagent-detail { font-size:var(--font-ui-smaller); color:var(--text-muted); }
+.send-to-t3-subagent-remote, .send-to-t3-subagent-status, .send-to-t3-subagent-time, .send-to-t3-subagent-chevron { flex:none; font-size:var(--font-ui-smaller); color:var(--text-muted); }
+.send-to-t3-subagent-time { font-variant-numeric:tabular-nums; }
+.send-to-t3-subagent-chevron > svg { width:14px; height:14px; }
+.send-to-t3-subagent[data-t3-subagent-status="failed"] .send-to-t3-subagent-detail, .send-to-t3-subagent[data-t3-subagent-status="failed"] .send-to-t3-subagent-status { color:var(--text-error); }
+
 /* Tool images use native Markdown processors in live and saved progress. */
 .send-to-t3-image-result .send-to-t3-image-open {
   display: block;

@@ -58,3 +58,15 @@ test('model, effort, permissions and plan changes use the stock thread controls;
  assert.deepEqual(f.dispatch().map(call=>call.body.type),['thread.model-selection.set','thread.runtime-mode.set','thread.interaction-mode.set']);
  await assert.rejects(f.transport.deleteSideChat(target),/side chat/);const side=await f.transport.fork(target);await f.transport.deleteSideChat(side);assert.equal(f.dispatch().at(-1).body.type,'thread.delete');assert.equal(f.dispatch().at(-1).body.threadId,side.threadId);
 });
+
+
+test('bring back rejects unfinished waking subagents in either completed conversation',async()=>{
+ for(const which of ['parent','side']){
+  const f=fixture(),side=await f.transport.fork(target),thread=f.threads.get(which==='parent'?'parent':side.threadId)!;
+  f.threads.get(side.threadId)!.turns={done:{turnId:'done',state:'completed'}};
+  thread.subagents={child:{id:'child',runId:'done',status:'running',origin:'app_owned',completionWake:'always'}};
+  await assert.rejects(f.transport.bringBack(side),/both threads to finish/);
+  thread.subagents.child.status='completed';thread.subagents.child.completionDelivery={state:'delivered'};
+  await f.transport.bringBack(side);assert.equal(f.dispatch().at(-1).body.type,'thread.merge_back');
+ }
+});
