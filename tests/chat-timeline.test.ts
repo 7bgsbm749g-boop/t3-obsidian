@@ -35,11 +35,11 @@ test('waking children keep a completed parent open until the result is delivered
  const [done]=chatTimeline(state);assert.equal(done.active,false);assert.equal(done.final?.id,'answer');assert.equal(done.timing?.finishedAt,end);
 });
 
-test('sidebar keeps the latest generated HTML page in chronological work history',()=>{
+test('sidebar keeps generated HTML results outside collapsible work',()=>{
  const state=thread(),source={environmentId:'env',threadId:'thread'};
  const html=(id:string,revision:string,title:string)=>({id,summary:title,kind:'response.html',turnId:'run',createdAt:start,sequence:2,payload:{itemId:'page',revision,htmlRender:{attachmentId:'synthetic_html',title,height:300}}});
  state.activities=[html('old','1','Old page'),html('new','2','Generated page')];
- const [segment]=chatTimeline(state,source),pages=segment.history!.filter(row=>row.text.includes('```t3-html'));
- assert.equal(pages.length,1);assert.match(pages[0].text,/Generated page/);assert.doesNotMatch(pages[0].text,/Old page/);assert.match(pages[0].text,/"environmentId":"env"/);assert.match(segment.work,/synthetic_html/);
- assert.equal(chatTimeline(state)[0].history?.filter(row=>row.text.includes('```t3-html')).length,0);
+ const [segment]=chatTimeline(state,source),pages=segment.results!;
+ assert.equal(pages.length,1);assert.match(pages[0].text,/Generated page/);assert.doesNotMatch(pages[0].text,/Old page/);assert.match(pages[0].text,/"environmentId":"env"/);assert.doesNotMatch(segment.work,/synthetic_html/);assert.equal(segment.history!.filter(row=>row.text.includes('```t3-html')).length,0);
+ assert.equal(chatTimeline(state)[0].results?.length,0);
 });

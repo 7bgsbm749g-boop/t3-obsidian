@@ -5,7 +5,7 @@ import {responseActivityLabel,responseActivityRow} from '../responses/response-a
 import {delegatedWork} from './inline-delegation';
 import type {SubagentSource} from '../responses/response-subagents';
 
-export interface ChatSegment {id:string;turnId:string;input?:InlineMessage;progress:InlineMessage[];final?:InlineMessage;work:string;history?:Array<{id:string;text:string;kind:'prose'|'work';createdAt?:string;sequence:number}>;activity?:string;label:string;active:boolean;steer:boolean;timing?:{startedAt:string;finishedAt?:string}}
+export interface ChatSegment {id:string;turnId:string;input?:InlineMessage;progress:InlineMessage[];final?:InlineMessage;work:string;results?:Array<{id:string;text:string}>;history?:Array<{id:string;text:string;kind:'prose'|'work';createdAt?:string;sequence:number}>;activity?:string;label:string;active:boolean;steer:boolean;timing?:{startedAt:string;finishedAt?:string}}
 /** A workspace view of canonical runs. Uses the stream box's work presentation,
  * never its Markdown response boundaries, note reservations or final writer. */
 export function chatTimeline(state:InlineThreadState,source?:SubagentSource):ChatSegment[]{
@@ -33,7 +33,10 @@ export function chatTimeline(state:InlineThreadState,source?:SubagentSource):Cha
     if(start)segment.timing={startedAt:start,...(end?{finishedAt:end}:{})};
     segment.label=phase==='error'?'Failed':turn?.state==='interrupted'||turn?.state==='cancelled'?'Stopped':segment.active?(delegated.paused?delegated.label:'Working'):segment.steer?'Continued':'Worked';
     const work=responseWork(state,[segment.turnId],segment.turnId,phase,'collapse',delegated.paused,text=>text,source);
-    const rows=[...work.historyRows,...work.htmlRows].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence).filter(row=>{const at=Date.parse(row.createdAt??'');return !Number.isFinite(at)?last:(!start||at>=Date.parse(start))&&(!next?.input?.createdAt||at<Date.parse(next.input.createdAt));});
+    const inSegment=(row:{createdAt?:string})=>{const at=Date.parse(row.createdAt??'');return !Number.isFinite(at)?last:(!start||at>=Date.parse(start))&&(!next?.input?.createdAt||at<Date.parse(next.input.createdAt));};
+    const rows=work.historyRows.filter(inSegment);
+    // Generated pages are results, not hidden work. Match the editor stream.
+    segment.results=work.htmlRows.filter(inSegment).map(row=>({id:row.id,text:row.body}));
     segment.history=[...segment.progress.map(message=>({id:message.id,text:message.text,kind:'prose' as const,createdAt:message.createdAt,sequence:message.sequence??0})),...rows.map((row,index)=>({id:'work:'+('groupId' in row?row.groupId:row.id??index),text:row.body,kind:'work' as const,createdAt:row.createdAt,sequence:row.sequence}))].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
     segment.activity=segment.active?(work.currentEmission?.body??responseActivityRow(delegated.paused?delegated.label:responseActivityLabel(state,segment.turnId),work.currentTool?.tool.icon,work.activityGroup?.id)):'';
     segment.work=rows.map(row=>row.body).join('\n\n')+(segment.activity?(rows.length?'\n\n':'')+segment.activity:'');

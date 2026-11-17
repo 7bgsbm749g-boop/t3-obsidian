@@ -55,7 +55,13 @@ export class ChatTranscript extends Component {
         if(fragment.el!==historyCursor)row.history.insertBefore(fragment.el,historyCursor);historyCursor=fragment.el.nextSibling;
       }
       if(segment.activity){visible.add('activity');let fragment=row.fragments.get('activity');if(!fragment){fragment=this.fragment(row.history,'t3-chat-activity markdown-rendered');row.fragments.set('activity',fragment);}this.markdown(fragment,segment.activity);row.history.appendChild(fragment.el);}
-      if(segment.final){visible.add('final');let fragment=row.fragments.get('final');if(!fragment){fragment=this.fragment(row.el,'t3-chat-answer markdown-rendered');row.fragments.set('final',fragment);}this.markdown(fragment,segment.final.text);}
+      let resultCursor=row.work.nextSibling;
+      for(const result of segment.results??[]){
+        const id='result:'+result.id;visible.add(id);let fragment=row.fragments.get(id);
+        if(!fragment){fragment=this.fragment(row.el,'t3-chat-result markdown-rendered');row.fragments.set(id,fragment);}this.markdown(fragment,result.text);
+        if(fragment.el!==resultCursor)row.el.insertBefore(fragment.el,resultCursor);resultCursor=fragment.el.nextSibling;
+      }
+      if(segment.final){visible.add('final');let fragment=row.fragments.get('final');if(!fragment){fragment=this.fragment(row.el,'t3-chat-answer markdown-rendered');row.fragments.set('final',fragment);}this.markdown(fragment,segment.final.text);row.el.appendChild(fragment.el);}
       for(const [id,fragment] of row.fragments)if(!visible.has(id)){fragment.revision++;this.removeChild(fragment.component);fragment.el.remove();row.fragments.delete(id);}
       const children=source?[]:Object.values(state.subagents??{}).filter(child=>child.runId===segment.turnId&&child.childThreadId&&!child.remoteChild);
       const childKey=JSON.stringify(children);if(childKey!==row.childKey){row.childKey=childKey;row.children?.remove();row.children=row.history.createDiv({cls:'t3-chat-children'});for(const child of children){const button=row.children.createEl('button',{cls:'clickable-icon t3-chat-child',text:child.title||'Subagent',attr:{type:'button','aria-label':'Open subagent '+(child.title||child.id)}});setIcon(button.createSpan(),'bot');button.createSpan({text:child.status,cls:'t3-chat-child-status'});button.addEventListener('click',()=>this.openChild?.(child));}}

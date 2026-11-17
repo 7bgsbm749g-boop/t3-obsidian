@@ -106,3 +106,14 @@ test('workspace restoration rejects invalid or oversized encoded image drafts',a
   await f.view.setState({...saved,attachments},{});assert.equal(f.view.getState().attachments.length,0);
  }
 });
+
+
+test('generated HTML stays visible outside collapsed work and keeps its DOM node during updates',async()=>{
+ const f=await fixture(),activities=[{id:'html',kind:'response.html',summary:'Page',turnId:'run',payload:{itemId:'page',htmlRender:{attachmentId:'synthetic_html',title:'Generated page',height:300}}}];
+ await f.snapshot({activities,messages:[{id:'reply',role:'assistant',text:'Final answer',turnId:'run',streaming:false}],turns:{run:{turnId:'run',state:'completed'}}});
+ const result=f.contentEl.querySelector('.t3-chat-result')!,work=f.contentEl.querySelector('details') as any;
+ assert.ok(result);assert.equal(result.closest('details'),null);assert.match(result.textContent!,/t3-html/);assert.equal(work.open,false);
+ assert.ok(result.nextElementSibling?.classList.contains('t3-chat-answer'));
+ await f.snapshot({activities,messages:[{id:'reply',role:'assistant',text:'Updated answer',turnId:'run',streaming:false}],turns:{run:{turnId:'run',state:'completed'}}});
+ assert.equal(f.contentEl.querySelector('.t3-chat-result'),result);assert.match(result.nextElementSibling!.textContent!,/Updated answer/);
+});
