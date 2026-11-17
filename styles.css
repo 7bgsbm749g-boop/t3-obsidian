@@ -832,7 +832,7 @@ a.send-to-t3-subagent:focus-visible { outline:2px solid var(--interactive-accent
   z-index: var(--layer-notice);
   width: min(760px, calc(100% - 32px));
   display: flex;
-  align-items: center;
+  flex-direction: column;
   flex: 0 0 auto;
   gap: var(--size-4-3);
   padding: var(--size-4-2) var(--size-4-4);
@@ -845,9 +845,15 @@ a.send-to-t3-subagent:focus-visible { outline:2px solid var(--interactive-accent
   font-size: var(--font-ui-small);
   -webkit-app-region: no-drag;
 }
-.t3-update-banner-message { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.t3-update-banner-header { display: flex; align-items: center; gap: var(--size-4-3); }
+.t3-update-banner-title { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.t3-update-banner-message { overflow-wrap: anywhere; color: var(--text-muted); }
+.t3-update-banner-notes { max-height: min(40vh, 360px); overflow: auto; overflow-wrap: anywhere; }
+.t3-update-banner-notes > :first-child { margin-top: 0; }
+.t3-update-banner-notes > :last-child { margin-bottom: 0; }
+.t3-update-banner-notes pre { white-space: pre-wrap; }
 .t3-update-banner-actions { display: flex; flex: 0 0 auto; gap: var(--size-4-2); }
 @media (max-width: 480px) {
-  .t3-update-banner { flex-wrap: wrap; }
+  .t3-update-banner-header { flex-wrap: wrap; }
   .t3-update-banner-actions { margin-left: auto; }
 }

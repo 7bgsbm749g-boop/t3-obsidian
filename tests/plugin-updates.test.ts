@@ -17,6 +17,10 @@ test('only complete stable releases from the fixed repository are eligible',()=>
  for(const patch of [{browser_download_url:'https://example.com/main.js'},{size:100_000_000},{size:0}]){const value=metadata();Object.assign(value.assets[0],patch);assert.equal(readRelease(value),null);}
  const duplicate=metadata();duplicate.assets.push(duplicate.assets[0]);assert.equal(readRelease(duplicate),null);
 });
+test('GitHub release body is preserved verbatim and absent or invalid notes are empty',()=>{
+ const body='Description.\n\n## What’s Changed\n- Fix one.\n- Fix two.\n';assert.equal(readRelease({...metadata(),body})!.body,body);
+ for(const body of [undefined,null,42,{}])assert.equal(readRelease({...metadata(),body})!.body,'');
+});
 test('release download rejects API failures and malformed metadata',async()=>{
  let url='';assert.equal((await latestRelease(async value=>{url=value;return {status:200,text:JSON.stringify(metadata())};})).version,release.version);assert.equal(url,RELEASE_API);
  await assert.rejects(latestRelease(async()=>({status:429,text:'rate limited'})),/429/);
@@ -46,7 +50,7 @@ test('verification detects lost writes and reports incomplete rollback',async()=
 });
 function controller(){let clock=0,version='0.0.450',dismissed:unknown,checks=0,installs=0,fail=false,latest=release;const rendered:(UpdateState|null)[]=[],notices:string[]=[];const updates=new PluginUpdates({installed:async()=>version,latest:async()=>{checks++;if(fail)throw Error('offline');return latest;},dismissed:()=>dismissed,dismiss:v=>{dismissed=v;},render:s=>rendered.push(s),report:s=>notices.push(s),install:async()=>{installs++;if(fail)throw Error('download failed');}},()=>clock);return {updates,rendered,notices,checks:()=>checks,installs:()=>installs,setFail:(v:boolean)=>{fail=v;},setVersion:(v:string)=>{version=v;},setRelease:(v:string)=>{latest=readRelease(metadata(v))!;},advance:()=>{clock+=6*60*60*1000;}};}
 test('startup/focus checks coalesce and throttle; dismiss survives checks but not the next release',async()=>{
- const f=controller();await Promise.all([f.updates.check(),f.updates.check()]);assert.equal(f.checks(),1);assert.equal(f.rendered.at(-1)?.release.version,release.version);
+ const f=controller();await Promise.all([f.updates.check(),f.updates.check()]);assert.equal(f.checks(),1);assert.equal(f.rendered.at(-1)?.release.version,release.version);assert.equal(f.rendered.at(-1)?.message,'Update available for t3-obsidian (v0.0.451)');
  f.updates.dismiss();assert.equal(f.rendered.at(-1),null);await f.updates.check();assert.equal(f.checks(),1);
  f.advance();await f.updates.check();assert.equal(f.rendered.at(-1),null);await f.updates.check(true);assert.equal(f.rendered.at(-1)?.release.version,release.version);
  f.updates.dismiss();f.setRelease('0.0.452');f.advance();await f.updates.check();assert.equal(f.rendered.at(-1)?.release.version,'0.0.452');

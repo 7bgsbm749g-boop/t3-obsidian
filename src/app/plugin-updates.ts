@@ -5,7 +5,7 @@ export const RELEASE_API=`https://api.github.com/repos/${RELEASE_REPOSITORY}/rel
 const RELEASE_DOWNLOAD=`https://github.com/${RELEASE_REPOSITORY}/releases/download/`;
 const limits={'manifest.json':16_384,'main.js':20_000_000,'styles.css':1_000_000};
 export type ReleaseFile=keyof typeof limits;
-export type Release={version:string;tag:string;assets:Record<ReleaseFile,string>};
+export type Release={version:string;tag:string;body:string;assets:Record<ReleaseFile,string>};
 export type UpdateManifest={id:string;version:string;minAppVersion:string;isDesktopOnly?:boolean};
 export type ReleaseRequest=(url:string)=>Promise<{status:number;text:string}>;
 
@@ -26,8 +26,9 @@ export function readRelease(value:unknown):Release|null{
     const asset:unknown=matches[0];if(!isRecord(asset)||typeof asset.size!=='number'||asset.size<=0||asset.size>limits[name]||asset.browser_download_url!==`${RELEASE_DOWNLOAD}${tag}/${name}`)return null;
     assets[name]=asset.browser_download_url;
   }
-  return {version,tag,assets};
+  return {version,tag,body:typeof value.body==='string'?value.body:'',assets};
 }
+export function updateTitle(version:string){return `Update available for t3-obsidian (v${version})`;}
 async function download(request:ReleaseRequest,url:string,limit:number){
   const response=await request(url);if(response.status!==200)throw Error(`GitHub returned ${response.status}. Try again later.`);
   if(!response.text.length||response.text.length>limit||new TextEncoder().encode(response.text).length>limit)throw Error('The release file is empty or too large.');
@@ -94,7 +95,7 @@ export class PluginUpdates {
     try{
       const release=await this.host.latest(),installed=await this.host.installed();if(this.stopped)return;
       if(release&&newerRelease(release.version,installed)){
-        if(manual||this.host.dismissed()!==release.version)this.show({release,busy:false,message:`T3 Code ${release.version} is available.`});
+        if(manual||this.host.dismissed()!==release.version)this.show({release,busy:false,message:updateTitle(release.version)});
         else this.show(null);
       }else {this.show(null);if(manual)this.host.report('T3 Code is up to date.');}
     }catch(error){if(manual&&!this.stopped)this.host.report(`Could not check for updates. ${error instanceof Error?error.message:'Try again later.'}`);}

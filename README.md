@@ -89,7 +89,10 @@ Streaming RAM capture: [device-local streaming memory diagnostics](docs/stream-m
 
 T3 Code checks its latest published GitHub release at startup and when Obsidian
 returns to the foreground or comes online. Background checks run at most once
-per six hours. A banner at the top offers **Update** and **Dismiss**. Dismiss
+per six hours. A banner at the top says **Update available for t3-obsidian (vVERSION)**,
+shows the GitHub release description and change list, and offers **Update** and
+**Dismiss**. Long notes scroll while the buttons stay visible. Releases with no
+description show a short fallback message. Dismiss
 hides that release on this device; a newer release can show another banner.
 Use **T3 Code: Check for plugin updates** to check immediately or show a dismissed
 update again. Offline checks stay quiet.
