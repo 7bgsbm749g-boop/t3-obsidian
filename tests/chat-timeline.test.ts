@@ -30,7 +30,7 @@ test('sidebar and stream projections share canonical tool and emission rows',()=
 });
 test('composer catalog exposes only available providers and their actual option values',()=>{
  const models=composerModels({providers:[{instanceId:'off',enabled:false,models:[{slug:'hidden'}]},{instanceId:'codex',enabled:true,driver:'codex',displayName:'Codex',models:[{slug:'sol',name:'6.1 Sol',capabilities:{optionDescriptors:[{id:'reasoningEffort',label:'Reasoning',role:'reasoning',type:'select',options:[{id:'xhigh',label:'Extra High'}]}]}}],skills:[{name:'example',path:'/synthetic/SKILL.md',enabled:true}],slashCommands:[{name:'compact'}]}]});
- assert.equal(models.length,1);assert.equal(models[0].skills[0].name,'example');assert.equal(models[0].commands[0].name,'compact');assert.equal(composerModelLabel({instanceId:'codex',model:'sol',options:[{id:'reasoningEffort',value:'xhigh'}]},models),'6.1 Sol Extra High');
+ assert.equal(models.length,1);assert.equal(models[0].driver,'codex');assert.equal(models[0].skills[0].name,'example');assert.equal(models[0].commands[0].name,'compact');assert.equal(composerModelLabel({instanceId:'codex',model:'sol',options:[{id:'reasoningEffort',value:'xhigh'}]},models),'6.1 Sol Extra High');
 });
 test('recovered commentary cannot replace the canonical final answer',()=>{
  const state=thread();state.latestTurn={...state.turns!.run,assistantMessageId:'progress'};

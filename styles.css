@@ -724,6 +724,7 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
 .t3-composer-model { display: inline-flex; align-items: center; gap: var(--size-4-1); max-width: 70%; height: 28px; min-width: 0; padding: 0 var(--size-4-1); background: transparent; box-shadow: none; border: 0; font-size: var(--font-ui-small); color: var(--text-normal); }
 .t3-composer-model span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t3-composer-model svg { width: 16px; height: 16px; flex-shrink: 0; }
+.t3-composer-model .t3-composer-provider { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: none; }
 .t3-composer-controls .t3-composer-submit { width: 32px; height: 32px; border-radius: 50%; background: var(--background-modifier-hover); color: var(--text-normal); }
 .t3-composer-controls button:disabled { color: var(--text-faint); opacity: .6; }
 .t3-composer-attachments { display: flex; flex-wrap: wrap; gap: var(--size-4-1); padding: var(--size-4-2); }

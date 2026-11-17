@@ -3,6 +3,7 @@ import type {OutgoingAttachment,OutgoingContext} from '../connection/send-contra
 import {composerModelLabel,type ComposerModel,type ComposerSettings} from './composer-models';
 import type {RuntimeMode} from './model-defaults';
 import {clockForDocument,type TimerHandle} from '../shared/clock';
+import {renderProviderIcon} from './provider-icons';
 
 export interface ComposerHost {uuid():string;changed(text:string):void;send():Promise<void>;stop():Promise<void>;models():Promise<ComposerModel[]>;configure(settings:ComposerSettings):Promise<void>;files(query:string):Promise<string[]>}
 class ModelChoice extends FuzzySuggestModal<ComposerModel>{
@@ -76,7 +77,10 @@ export class ChatComposer extends Component {
   this.submit.disabled=this.busy||!this.available||!this.running&&!this.hasInput();this.attach.disabled=this.busy||this.locked||!this.available;this.modelButton.disabled=this.busy||this.locked||!this.available;
   this.mic.disabled=this.busy||this.locked||!this.available||!this.speechConstructor();this.mic.title=this.speechConstructor()?'Voice input':'Voice input is not available on this device';
   setIcon(this.submit,this.running&&!this.hasInput()?'square':'arrow-up');this.submit.setAttribute('aria-label',this.running&&!this.hasInput()?'Stop response':this.running?'Steer response':'Send message');this.submit.title=this.submit.getAttribute('aria-label')!;
-  setIcon(this.mic,this.recognition?'mic-off':'mic');this.modelButton.empty();setIcon(this.modelButton,'sparkles');this.modelButton.createSpan({text:composerModelLabel(this.settings.modelSelection,this.catalog)});
+  setIcon(this.mic,this.recognition?'mic-off':'mic');this.modelButton.empty();
+  const selection=this.settings.modelSelection,provider=this.catalog.find(model=>model.selection.instanceId===selection?.instanceId);
+  renderProviderIcon(this.modelButton,provider?.driver,provider?.provider??selection?.instanceId??'');
+  this.modelButton.createSpan({text:composerModelLabel(selection,this.catalog)});
  }
  private hasInput(){return !!this.input.value.trim()||this.attachments.length>0;}
  async addFiles(files:File[]){

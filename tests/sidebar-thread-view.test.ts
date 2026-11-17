@@ -120,3 +120,13 @@ test('model chooser shows the thread selected model and effort label',async()=>{
  await f.snapshot({modelSelection:{instanceId:'codex',model:'gpt-6.1-sol',options:[{id:'reasoningEffort',value:'xhigh'}]}});await Promise.resolve();
  assert.match(f.contentEl.querySelector('[aria-label="Choose model and permissions"]')!.textContent!,/6\.1 Sol Extra High/);
 });
+test('model button follows the selected provider driver, including renamed instances',async()=>{
+ const f=await fixture();let driver='codex';
+ f.owner.host.catalog=async()=>[{selection:{instanceId:'custom-provider',model:'model'},label:'Current model',provider:'Example Agent',driver,options:[],runtimeModes:[],plan:false,commands:[],skills:[]}];
+ await f.snapshot({modelSelection:{instanceId:'custom-provider',model:'model'}});await f.view.composer.refreshModels();
+ const button=f.contentEl.querySelector('[aria-label="Choose model and permissions"]')!;
+ assert.equal(button.querySelector('[data-provider-icon]')!.getAttribute('data-provider-icon'),'codex');assert.ok(button.querySelector('svg path'));
+ const first=button.querySelector('path')!.getAttribute('d');
+ driver='claudeAgent';await f.view.composer.refreshModels();assert.notEqual(button.querySelector('path')!.getAttribute('d'),first);assert.match(button.textContent!,/Current model/);
+ driver='custom-agent';await f.view.composer.refreshModels();assert.equal(button.querySelector('svg'),null);assert.equal(button.querySelector('[data-provider-icon]')!.textContent,'EA');
+});
