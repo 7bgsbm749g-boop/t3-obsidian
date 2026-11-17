@@ -290,3 +290,13 @@ for(const selected of [false,true])for(const ask of ['', 'Explain this.'])test(`
   else {assert.equal(text,ask);assert.ok(resolveCursorInsertion(original,context.insertion)<original.length);}
  }
 });
+
+for(const kind of ['mention','skill'])for(const target of ['new','existing'])test(`feedback with a ${kind} reference cannot fall through to ${target} thread delivery`,async()=>{
+ const h=await fixture();h.plugin.destinationContext=()=>({});h.plugin.withSendAvailability=(host:any)=>host;
+ h.plugin.openManualAction=()=>assert.fail('Feedback must not become an ordinary agent message');h.plugin.sendNote=()=>assert.fail('Feedback must not send the note');h.plugin.existingTarget=()=>assert.fail('Unsupported feedback references must be rejected before resolving or dispatching');h.plugin.inlineThreadAccess=()=>assert.fail('Unsupported references must not upload feedback');
+ const context={version:1,records:[{version:1,contextId:'selected-context',kind,label:'Reference',path:kind==='mention'?'README.md':'/skills/review/SKILL.md',...(kind==='skill'?{name:'review'}:{})}]};
+ const options={version:1,providerCommand:'feedback',modelSelection:{instanceId:'codex',model:'model'},context,inline:{enabled:true,intermediateMode:'collapse',finalAnswerFormat:'formatted'}};
+ const host=h.plugin.noteComposerHost(h.file,'',{view:h.view,editor:h.editor});const prompt='/feedback Test report '+(kind==='mention'?'@README.md':'$review');
+ await assert.rejects(target==='new'?host.sendToNew(prompt,'project',()=>options):host.sendChat(prompt,'project',()=>options,undefined,{threadId:'existing-thread',projectKey:'project',label:'Existing'}),target==='new'?/Start a Codex thread first/:/do not support file or skill references/);
+ assert.equal(h.plugin.settings.pending,undefined);assert.equal(options.context.records.length,1);
+});

@@ -221,3 +221,8 @@ test('cancelling the workspace picker reopens the same composer with its draft, 
  h.host.sendToNew=async()=>{throw new h.exports.ProjectCreationCancelled();};await h.modal.choose();
  assert.equal(h.modal.opened,true);assert.equal(h.modals.at(-1),h.modal);assert.equal(h.modal.field.value,'Keep this unsent question');assert.equal(h.modal.projectKey,'folder:new:vps');assert.equal(h.modal.overrides.modelSelection.model,'chosen-model');assert.equal(h.modal.overrides.inline.enabled,false);assert.equal(h.modal.overrides.inline.finalAnswerFormat,'raw-markdown');assert.equal(h.notices.length,0);assert.equal(h.sent.length,0);assert.equal(h.button('Send ask').disabled,false);h.modal.close();
 });
+
+test('advertised commands retain command routing after whitespace accepted by the suggestion trigger',async()=>{
+ const h=await fixture();await h.modal.modelReady;h.modal.models[0].commands.push({name:'feedback'});h.type(' \n /feedback A test report');await h.modal.choose();
+ assert.equal(h.sent.length,1);assert.equal(h.sent[0].options.providerCommand,'feedback');h.modal.close();
+});

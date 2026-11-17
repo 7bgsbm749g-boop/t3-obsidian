@@ -1,6 +1,7 @@
 import {rememberResponse,prepareSmartSend} from '../src/notes/smart-send';
 import {moveSmartNotes} from '../src/notes/smart-send';
 import {commandId} from '../src/connection/direct';
+import {sendDirect} from '../src/connection/direct';
 import {applyThreadItem} from '../src/conversations/inline-thread';
 import {responseAnchor} from '../src/responses/native-response-projection';
 import {test} from 'node:test';
@@ -936,6 +937,26 @@ for(const enabled of [true,false])test(`explicit existing-thread Ask reuses the 
   assert.equal(request.inlineSteering.jobId,h.id);assert.equal(request.jobOptions.inline.enabled,true);
   assert.match(request.inlineSteering.input.text,/Second instruction/);assert.match(request.inlineSteering.input.text,/\*\*USER ASKS:\*\*\nWhy this change\?/);
   assert.doesNotMatch(request.inlineSteering.input.text,/First instruction|outdated unfiltered draft/);
+ }finally{h.plugin.onunload();}
+});
+
+for(const entry of ['existing-ask','response-steer'])test(`${entry} retains composer model, mode and references through running-response preparation and delivery`,async()=>{
+ const h=await runningSmartSendHarness();
+ try{
+  const modelSelection={instanceId:'chosen-provider',model:'chosen-model',options:[{id:'reasoningEffort',value:'high'}]};
+  const context={version:1 as const,records:[{version:1,contextId:'selected-context',kind:'mention',label:'README.md',path:'README.md'}]};
+  const jobOptions={version:1,modelSelection,interactionMode:'plan',context,inline:{enabled:false,intermediateMode:'remove',finalAnswerFormat:'formatted'}};
+  if(entry==='response-steer')await h.plugin.sendInlineSteering(h.id,'Explain this change',{path:h.file.path},{editor:h.editor,view:h.view},{jobOptions});
+  else await h.plugin.sendResolvedChat('Explain this change',{path:h.file.path},{editor:h.editor,view:h.view},true,{threadId:'smart-thread',expectedProjectKey:'c:project',jobOptions});
+  const request=h.sent.at(-1);assert.equal(h.sent.length,2);assert.equal(request.inlineSteering.jobId,h.id);assert.equal(h.newBlocks(),0);
+  assert.equal(request.jobOptions.modelSelection.model,'chosen-model');assert.equal(request.jobOptions.modelSelection.options[0].value,'high');assert.equal(request.jobOptions.interactionMode,'plan');assert.equal(request.jobOptions.context.records[0].path,'README.md');
+  assert.equal(request.jobOptions.inline.enabled,true);assert.equal(request.jobOptions.inline.finalAnswerFormat,'raw-markdown');assert.equal(jobOptions.inline.enabled,false);assert.equal(jobOptions.inline.finalAnswerFormat,'formatted');
+  const commands:any[]=[];await sendDirect(request,undefined,async()=>{},undefined,{origin:'https://synthetic.example',api:async(path:string,payload?:any)=>{
+   if(path.includes('/threads/'))return {thread:{id:'smart-thread',projectId:h.project.id,session:{status:'running',activeTurnId:'turn'},latestTurn:{turnId:'turn',state:'running'}}};
+   assert.equal(path,'/api/orchestration/dispatch');commands.push(payload);return {sequence:1};
+  }});
+  const turn=commands.find(command=>command.type==='thread.turn.start');assert.ok(turn);assert.deepEqual(turn.modelSelection,modelSelection);assert.equal(turn.interactionMode,'plan');assert.equal(turn.message.context.records[0].path,'README.md');
+  assert.ok(commands.some(command=>command.type==='thread.interaction-mode.set'&&command.interactionMode==='plan'));assert.equal(request.directPlan.observedActiveTurnId,'turn');
  }finally{h.plugin.onunload();}
 });
 

@@ -14,3 +14,10 @@ test('another provider does not upload feedback and an unconfirmed upload is not
   assert.equal(await composerFeedback(call,'selected','thread','/feedback'),undefined);assert.equal(uploads,0);
   await assert.rejects(composerFeedback(async method=>method==='server.getConfig'?{providers:[{instanceId:'selected',driver:'codex'}]}:{},'selected','thread','/feedback'),/did not confirm/);
 });
+
+test('feedback accepted after leading whitespace uploads only the report text',async()=>{
+ const calls:{method:string;input:unknown}[]=[];
+ const call=async(method:string,input:unknown)=>{calls.push({method,input});return method==='server.getConfig'?{providers:[{instanceId:'selected',driver:'codex'}]}:{feedbackId:'confirmed'};};
+ assert.equal(await composerFeedback(call,'selected','thread',' \n /FEEDBACK A test report'),'confirmed');
+ assert.deepEqual(calls[1],{method:'provider.uploadFeedback',input:{threadId:'thread',reason:'A test report'}});
+});

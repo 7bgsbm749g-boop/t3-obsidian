@@ -37,6 +37,8 @@ default route. Holding the destination-selection modifier, using the explicit
 choose-destination command, or opening Ask agent shows the composer. A first send
 also opens it. Progress and final-answer presentation in an already running
 response keep that response's existing policy.
+Model, reasoning, mode and reference choices still travel with a continuation;
+only the response's streaming and answer presentation stay fixed.
 
 The model control resolves the project or thread model when the composer opens,
 including the advertised default reasoning setting. It shows that model and its
@@ -69,4 +71,6 @@ Reduced motion disables that transition.
 
 Codex `/feedback` requires an existing thread and uses T3's feedback-upload API
 after explicit Send; it is never submitted merely by choosing a suggestion.
+It rejects file and skill references without uploading feedback or sending an
+agent message. Remove those references before submitting the report.
 The T3-only usage panel is not advertised as an executable provider command.

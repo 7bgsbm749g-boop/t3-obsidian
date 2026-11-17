@@ -1341,8 +1341,9 @@ export default class SendToT3 extends Plugin {
     if(captured&&!captured.anchor)captured={...captured,insertion:captured.insertion??captureCursorInsertion(captured.editor.getValue(),captured.editor.posToOffset(captured.editor.getCursor()))};
     if(captured)captured=this.canonicalChatContext(captured);
     const send=async(text:string,key:string|undefined,options:ResolvedJobOptions|undefined,destination?:ChatDestination,newThread=false)=>{
-      if(options?.providerCommand==='feedback'&&!options.context?.records?.length){
+      if(options?.providerCommand==='feedback'){
         if(newThread||!destination?.threadId)throw Error('Start a Codex thread first, then choose it before sending feedback.');
+        if(options.context?.records?.length)throw Error('Feedback uploads do not support file or skill references. Remove them before sending feedback.');
         const target=await this.existingTarget(file.path,destination.projectKey??key);if(!target)throw Error('Choose an existing project for feedback.');
         const connection=this.connection(target.project);await this.readChatThread(connection,target.project,destination.threadId);
         const access=await this.inlineThreadAccess(connection.environmentId??await this.localInlineEnvironment());
@@ -3042,7 +3043,8 @@ export default class SendToT3 extends Plugin {
       else {if(document!==source.document)throw Error('The source note changed before steering.');selections=source.ranges.map(([from,to])=>selectionAnchor(document,document.slice(from,to),from,to));}
     }
     const policy=target.hosted?.record.request??target.job!;
-    request.jobOptions=resolveJobOptions({enabled:true,intermediateMode:policy.intermediateMode,keepIntermediate:policy.keepIntermediate,finalAnswerFormat:policy.finalAnswerFormat});
+    // Keep execution choices; only display policy belongs to the running response.
+    request.jobOptions=resolveJobOptions({enabled:true,intermediateMode:policy.intermediateMode,keepIntermediate:policy.keepIntermediate,finalAnswerFormat:policy.finalAnswerFormat},{...request.jobOptions,inline:undefined});
     const destination={jobId:target.id,...(target.hosted?{host:target.hosted.host}:{}),notePath:path};
     const activeTurnId=thread.session?.activeTurnId??thread.latestTurn?.turnId;
     if(!activeTurnId)throw Error('The active response has no exact turn binding. Wait before sending again.');

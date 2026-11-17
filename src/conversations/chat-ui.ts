@@ -131,7 +131,7 @@ export class SendComposer extends NoteTabPanel {
   }
   private selectedModel(){const selection=this.overrides.modelSelection??this.defaultSelection;return this.models.find(model=>model.selection.instanceId===selection?.instanceId&&model.selection.model===selection?.model);}
   private resolvedOptions(){
-    const command=this.prompt.match(/^\/(\S+)/)?.[1]?.toLowerCase();
+    const command=this.prompt.trimStart().match(/^\/(\S+)/)?.[1]?.toLowerCase();
     return resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},{...this.overrides,modelSelection:this.overrides.modelSelection??this.defaultSelection,...(command&&this.selectedModel()?.commands.some(item=>item.name.replace(/^\//,'').toLowerCase()===command)?{providerCommand:command}:{})});
   }
   private capture(){if(this.field){this.prompt=this.field.value;if(this.suggestions)this.overrides.context=this.suggestions.context();this.host.draftChanged?.(this.prompt);}}
