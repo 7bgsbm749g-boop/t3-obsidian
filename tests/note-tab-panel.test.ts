@@ -14,6 +14,7 @@ async function fixture(){
     appendChild(child:Element){child.remove();child.parentElement=this;this.children.push(child);}
     remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(child=>child!==this);this.parentElement=undefined;}
     setAttribute(key:string,value:string){this.attributes.set(key,value);}
+    hasAttribute(key:string){return this.attributes.has(key);}
     contains(target:Element):boolean{return this===target||this.children.some(child=>child.contains(target));}
     querySelector(){return undefined;}
     focus(options:any){this.focusOptions=options;}
@@ -54,6 +55,11 @@ test('a workspace with no note tab retains the native modal',async()=>{
 test('opening gives an enabled panel control keyboard focus without scrolling the note',async()=>{
   const h=await fixture(),panel=h.create(),control=new h.doc.defaultView.HTMLElement();
   panel.modalEl.querySelector=()=>control;panel.open();assert.equal(control.focusOptions.preventScroll,true);panel.close();
+});
+
+test('a supplied accessible title is preserved without creating an Obsidian hover tooltip',async()=>{
+  const h=await fixture(),panel=h.create();panel.modalEl.setAttribute('aria-labelledby','composer-title');panel.open();
+  assert.equal(panel.modalEl.attributes.get('aria-labelledby'),'composer-title');assert.equal(panel.modalEl.attributes.has('aria-label'),false);panel.close();
 });
 
 test('opening another file in the same view closes the old panel without restoring old focus',async()=>{

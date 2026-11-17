@@ -1,6 +1,7 @@
 import {rememberResponse,prepareSmartSend} from '../src/notes/smart-send';
 import {moveSmartNotes} from '../src/notes/smart-send';
 import {commandId} from '../src/connection/direct';
+import {sendDirect} from '../src/connection/direct';
 import {applyThreadItem} from '../src/conversations/inline-thread';
 import {responseAnchor} from '../src/responses/native-response-projection';
 import {test} from 'node:test';
@@ -18,7 +19,10 @@ async function folderMenuHarness(initial?:any){
   let fileMenu:(...args:any[])=>void=()=>{},failSave=false,networkRequests=0;
   class Element {
     text='';cls='';tag='';settings:any[]=[];children:Element[]=[];disabled=false;onclick?:()=>any;oninput?:()=>any;value='';
-    addClass(){}setAttribute(){}
+    classList={add(){},remove(){},contains(){return false;}};attrs:Record<string,string>={};dataset:Record<string,string>={};
+    remove(){}removeAttribute(key:string){delete this.attrs[key];}removeEventListener(name:string){delete this.events[name];}
+    focus(){}addClass(){}setAttribute(key:string,value:string){this.attrs[key]=value;}getAttribute(key:string){return this.attrs[key];}
+    get textContent():string{return this.text+this.children.map(child=>child.textContent).join('');}
     createDiv(options?:any){return this.createEl('div',options);}
     querySelector(tag:string):Element|undefined{return this.children.find(child=>child.tag===tag)??this.children.map(child=>child.querySelector(tag)).find(Boolean);}
     empty(){this.settings=[];this.children=[];}
@@ -26,7 +30,7 @@ async function folderMenuHarness(initial?:any){
     events:Record<string,Function>={};
     addEventListener(name:string,callback:Function){this.events[name]=callback;}
     click(){if(!this.disabled)return this.onclick?.()??this.events.click?.();}
-    createEl(_tag:string,options?:{text?:string;cls?:string}){const child=new Element();child.tag=_tag;child.text=options?.text??'';child.cls=options?.cls??'';this.children.push(child);return child;}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}
+    createEl(_tag:string,options?:{text?:string;cls?:string;attr?:Record<string,string>}){const child=new Element();child.attrs={...options?.attr};child.tag=_tag;child.text=options?.text??'';child.cls=options?.cls??'';this.children.push(child);return child;}createSpan(options:any={}){return Reflect.apply(this.createEl,this,['span',options]);}
   }
   class Control {
     value:any;disabled=false;text='';handler:(value?:any)=>any=()=>{};
@@ -100,9 +104,12 @@ async function folderMenuHarness(initial?:any){
     module,exports:module.exports,window:{innerWidth:1000,innerHeight:700},require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,
     document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},
     fetch:async(url:string,options:any)=>{networkRequests++;assert.equal(options?.method??'GET','GET','Folder linking must never dispatch T3 commands');if(threadsReply===undefined&&projectsReply===undefined)throw Error('Link configuration must not dispatch or scan T3');return new Response(JSON.stringify(url.endsWith('/environment')?{environmentId:'env',label:'Laptop',orchestrationProtocolVersion:2}:{threads:threadsReply,projects:projectsReply}));},
-    Headers,Response,AbortController,DOMException,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:webcrypto,setTimeout,clearTimeout,console,
+    Headers,Response,AbortController,DOMException,URLSearchParams,URL,TextEncoder,TextDecoder,structuredClone,crypto:webcrypto,setTimeout,clearTimeout,console,
   },{timeout:5000});
   const plugin=new module.exports.default();await plugin.onload();
+  // Folder tests isolate routing from the machine catalog, which has its own checks.
+  const destinationContext=plugin.destinationContext.bind(plugin);
+  plugin.destinationContext=(...args:any[])=>({...destinationContext(...args),getModels:async()=>({selection:{instanceId:'fixture',model:'fixture-model'},models:[{selection:{instanceId:'fixture',model:'fixture-model'},label:'Fixture model',provider:'Fixture',options:[],commands:[],skills:[]}]})});
   const open=async()=>{
     const menu=new Menu();fileMenu(menu,folder,'file-explorer-context-menu');
     const entry=menu.items.find(item=>item.title==='Link to T3 Code');assert.ok(entry?.submenu);
@@ -111,7 +118,7 @@ async function folderMenuHarness(initial?:any){
   };
   const setting=(modal:Modal,name:string)=>{const all=(el:Element):Setting[]=>[...el.settings,...el.children.flatMap(all)];const item=all(modal.contentEl).find(item=>item.name===name);assert.ok(item);return item as Setting;};
   const button=(modal:Modal,text:string)=>{const all=(el:Element):any[]=>[el,...el.settings.flatMap(setting=>setting.controls),...el.children.flatMap(all)];const item=all(modal.contentEl).find(control=>control.text===text);assert.ok(item);return item as Control;};
-  return {plugin,open,setting,button,shared,notices,deviceId,project,modals,addFolder,shownMenu:()=>shownMenu,setProjects:(value:any[])=>{projectsReply=value;},setThreads:(value:any[])=>{threadsReply=value;},folderMenu:(root=false)=>{const menu=new Menu();const selected=new Folder();if(root){selected.path='/';selected.name='QLO2';}fileMenu(menu,selected,'file-explorer-context-menu');return menu;},fileMenu:(path:string,mobile:boolean)=>{api.Platform.isMobile=mobile;const menu=new Menu();const file=new File(path);fileMenu(menu,file,'file-explorer-context-menu');return {menu,file};},networkRequests:()=>networkRequests,setFailSave:(value:boolean)=>{failSave=value;}};
+  return {rawDestinationContext:destinationContext,plugin,open,setting,button,shared,notices,deviceId,project,modals,addFolder,shownMenu:()=>shownMenu,setProjects:(value:any[])=>{projectsReply=value;},setThreads:(value:any[])=>{threadsReply=value;},folderMenu:(root=false)=>{const menu=new Menu();const selected=new Folder();if(root){selected.path='/';selected.name='QLO2';}fileMenu(menu,selected,'file-explorer-context-menu');return menu;},fileMenu:(path:string,mobile:boolean)=>{api.Platform.isMobile=mobile;const menu=new Menu();const file=new File(path);fileMenu(menu,file,'file-explorer-context-menu');return {menu,file};},networkRequests:()=>networkRequests,setFailSave:(value:boolean)=>{failSave=value;}};
 }
 
 test('agent folder commands use verified metadata, UI persistence, and the subsequent note send route',async()=>{
@@ -197,25 +204,25 @@ for(const mobile of [false,true])test(`note menu in a linked folder offers new a
     const item=menu.items.find(item=>item.title==='Send to agent');assert.ok(item);
     await item.callback({ctrlKey:true});
     const choices=h.modals.at(-1);assert.ok(choices);
-    assert.equal(choices.constructor.name,'SendDestinationModal');
-    assert.equal(choices.titleEl.text,'T3 Code');
-    assert.deepEqual(choices.contentEl.settings.flatMap((setting:any)=>setting.controls.map((control:any)=>control.text)),['New thread','Existing thread…']);
-    await h.button(choices,'New thread').click();
+    assert.equal(choices.constructor.name,'SendComposer');
+    assert.equal(choices.titleEl.text,'Send composer');
+    assert.equal(choices.target,'new');assert.equal(choices.field.value,'');assert.equal(sent.length,0);
+    await choices.choose();
     assert.equal(sent.length,1);assert.equal(sent[0].file,file);assert.equal(sent[0].project.id,'nested');assert.equal(sent[0].options.threadId,undefined);
     h.plugin.settings.noteThreads.push({notePath:'Notes/Inner/note.md',threadId:'previous-parent-thread',projectId:h.project.id,workspaceRoot:h.project.workspaceRoot,connectionId:'c',selectedAt:'2026-09-28T00:00:00Z'});
     h.setThreads([{id:'thread',projectId:'nested',title:'Existing',updatedAt:'2026-09-19',session:{status:'running',activeTurnId:'turn'},latestTurn:{state:'running'}},
       {id:'foreign',projectId:h.project.id,title:'Remembered project',updatedAt:'2026-09-20'},
       {id:'archived',projectId:'nested',title:'Archived',archivedAt:'2026-09-19'}]);
-    await h.plugin.openNoteSend(file,true);await h.button(h.modals.at(-1),'Existing thread…').click();
+    await h.plugin.openNoteSend(file,true);const composer=h.modals.at(-1);await composer.pickExisting();
     const picker=h.modals.at(-1);assert.equal(picker.getItems().length,1);
     assert.equal(picker.getItems()[0].id,'foreign');
     assert.match(picker.getItemText(picker.getItems()[0]),/Remembered project · Idle/);
     await picker.onChooseItem(picker.getItems()[0]);await idle();
-    assert.equal(sent.length,2);assert.equal(sent[1].options.threadId,'foreign');assert.equal(sent[1].project.id,h.project.id);
+    assert.equal(sent.length,1,'Choosing an existing thread must not send');assert.equal(composer.destination.threadId,'foreign');
     h.plugin.settings.folderLinks[1].projectId=h.project.id;
-    await picker.onChooseItem(picker.getItems()[0]);await idle();
-    assert.equal(sent.length,3,'Changing a folder link does not change the displayed project choice');
-    assert.equal(sent[2].project.id,h.project.id);
+    await composer.choose();
+    assert.equal(sent.length,2,'The explicit send keeps the displayed project choice after folder links change');
+    assert.equal(sent[1].options.threadId,'foreign');assert.equal(sent[1].project.id,h.project.id);
   }finally{h.plugin.onunload();}
 });
 
@@ -442,6 +449,32 @@ test('new-project send lets the user name the project and link a higher Obsidian
     assert.equal(h.plugin.settings.folderLinks[0].folderPath,'Work');
     assert.equal((await h.plugin.chatTarget('Work/other/A.md')).project.title,'Writing tools');
   }finally{h.plugin.onunload();}
+});
+
+test('new-project composer resolves a machine before reading models and pins workspace creation to it',async()=>{
+ const h=await folderMenuHarness();
+ try{
+  const second={id:'other',name:'VPS',url:'https://other.example',environmentId:'other-env'};h.plugin.settings.paired.push(second);
+  const context=h.rawDestinationContext({path:'Notes/A.md'});const choosing=context.chooseProject('folder:new');const machines=h.modals.at(-1);
+  machines.onChooseItem(second);const key=await choosing;assert.equal(key,'folder:new:other');assert.match(context.getProjectName(key),/VPS/);
+  let modelTarget:string|undefined;h.plugin.existingTarget=async(_path:string,key:string)=>{modelTarget=key;throw Error('Selected catalog route inspected');};
+  await assert.rejects(context.getModels(key),/Selected catalog route inspected/);assert.equal(modelTarget,'thread:no-project:other');
+  await assert.rejects(context.getModels('folder:new'),/Choose a machine/);
+  await assert.rejects(context.searchFiles('read',key),/Choose an existing project/);
+  const creates:string[]=[];h.plugin.projectLocation=async(machine:any)=>{creates.push(machine.id);return {browse:async()=>({parentPath:'/projects',entries:[]}),create:async(root:string,title:string)=>({...h.project,id:'new-on-vps',connectionId:machine.id,connectionName:machine.name,title,workspaceRoot:root}),close:()=>{}};};
+  const pending=h.plugin.chatTarget('Notes/A.md',undefined,true,key);const workspace=h.modals.at(-1);await idle();
+  assert.equal(workspace.host.machines().map((machine:any)=>machine.id).join(','),'other');assert.equal(h.setting(workspace,'Machine').controls[0].value,'other');
+  await h.button(workspace,'Create and link').click();const target=await pending;assert.equal(target.project.connectionId,'other');assert.deepEqual(creates,['other']);assert.equal(h.plugin.settings.folderLinks.length,0,'Folder linking still waits for delivery');
+ }finally{h.plugin.onunload();}
+});
+
+test('cancelling the new-project machine picker does not open a workspace or read a catalog',async()=>{
+ const h=await folderMenuHarness();
+ try{
+  h.plugin.settings.paired.push({id:'other',name:'VPS',url:'https://other.example',environmentId:'other-env'});
+  const pending=h.rawDestinationContext({path:'Notes/A.md'}).chooseProject('folder:new');const picker=h.modals.at(-1);picker.close();
+  await assert.rejects(pending,/Project creation cancelled/);assert.equal(h.modals.length,1);assert.equal(h.networkRequests(),0);
+ }finally{h.plugin.onunload();}
 });
 
 for(const path of ['Notes/A.md','A.md',undefined])test(`new project without a folder link from ${path??'chat without a note'}`,async()=>{
@@ -704,7 +737,7 @@ test('first-send selection waits for confirmation and follows the note identity 
   h.plugin.dispatch=async(request:any)=>{sent.push(request);h.plugin.rememberStarted(request,'confirmed-thread');await h.plugin.save();return 'confirmed-thread';};
   await h.plugin.openNoteSend(file);assert.equal(h.modals.length,1);assert.equal(sent.length,0);assert.equal(h.plugin.hasConfirmedNoteSend(file.path),false);
   h.modals[0].close();await h.plugin.openNoteSend(file);assert.equal(h.modals.length,2);assert.equal(sent.length,0);
-  await h.modals[1].choose('new');assert.equal(sent.length,1);assert.equal(h.plugin.hasConfirmedNoteSend(file.path),true);
+  await h.modals[1].choose();assert.equal(sent.length,1);assert.equal(h.plugin.hasConfirmedNoteSend(file.path),true);
   moveSmartNotes(h.plugin.smartData(),file.path,'Notes/Renamed.md');file.path='Notes/Renamed.md';document+='\nFollow-up.';
   assert.equal(h.plugin.hasConfirmedNoteSend('Notes/Fresh.md'),false);assert.equal(h.plugin.hasConfirmedNoteSend('Notes/Copy.md'),false);
   await h.plugin.openNoteSend(file);assert.equal(h.modals.length,2);assert.equal(sent.length,2);assert.equal(sent[1].threadId,'confirmed-thread');
@@ -775,7 +808,7 @@ for(const confirmed of [false,true])test(`import selects its source but only con
   if(confirmed)assert.equal(h.modals.length,modalCount,'confirmed continuation must not open the selector');
   else{
    assert.equal(h.modals.length,modalCount+1,'import alone must leave the first-send selector enabled');assert.equal(sent.length,before);
-   const chooser=h.modals.at(-1);await chooser.ready;await chooser.choose('default');
+   const chooser=h.modals.at(-1);chooser.select('default');await chooser.ready;await chooser.choose();
   }
   assert.equal(sent.length,before+1);
   assert.equal(sent.at(-1).threadId,threadId);assert.equal(sent.at(-1).project.id,h.project.id);
@@ -835,7 +868,7 @@ test('explicit selections always send in full while automatic note context keeps
    const start=document.indexOf(text),end=start+text.length,anchor={text,start,end,before:document.slice(Math.max(0,start-80),start),after:document.slice(end,end+80)};
    await h.plugin.openManualAction(file,question,text,{editor,view,anchor,canonicalAnchor:anchor,snapshot:document},false);
   };
-  await select(selected);assert.equal(sent.length,0);await h.modals.at(-1).choose('new');assert.equal(sent.length,1);
+  await select(selected);assert.equal(sent.length,0);await h.modals.at(-1).choose();assert.equal(sent.length,1);
   const modals=h.modals.length;
   await select(selected);assert.equal(sent.length,2);assert.equal(h.modals.length,modals,'Repeated selection must not be treated as an empty send');
   await select(selected,'Explain the final selected sentence.');assert.equal(sent.length,3);assert.equal(h.modals.length,modals);
@@ -904,6 +937,26 @@ for(const enabled of [true,false])test(`explicit existing-thread Ask reuses the 
   assert.equal(request.inlineSteering.jobId,h.id);assert.equal(request.jobOptions.inline.enabled,true);
   assert.match(request.inlineSteering.input.text,/Second instruction/);assert.match(request.inlineSteering.input.text,/\*\*USER ASKS:\*\*\nWhy this change\?/);
   assert.doesNotMatch(request.inlineSteering.input.text,/First instruction|outdated unfiltered draft/);
+ }finally{h.plugin.onunload();}
+});
+
+for(const entry of ['existing-ask','response-steer'])test(`${entry} retains composer model, mode and references through running-response preparation and delivery`,async()=>{
+ const h=await runningSmartSendHarness();
+ try{
+  const modelSelection={instanceId:'chosen-provider',model:'chosen-model',options:[{id:'reasoningEffort',value:'high'}]};
+  const context={version:1 as const,records:[{version:1,contextId:'selected-context',kind:'mention',label:'README.md',path:'README.md'}]};
+  const jobOptions={version:1,modelSelection,interactionMode:'plan',context,inline:{enabled:false,intermediateMode:'remove',finalAnswerFormat:'formatted'}};
+  if(entry==='response-steer')await h.plugin.sendInlineSteering(h.id,'Explain this change',{path:h.file.path},{editor:h.editor,view:h.view},{jobOptions});
+  else await h.plugin.sendResolvedChat('Explain this change',{path:h.file.path},{editor:h.editor,view:h.view},true,{threadId:'smart-thread',expectedProjectKey:'c:project',jobOptions});
+  const request=h.sent.at(-1);assert.equal(h.sent.length,2);assert.equal(request.inlineSteering.jobId,h.id);assert.equal(h.newBlocks(),0);
+  assert.equal(request.jobOptions.modelSelection.model,'chosen-model');assert.equal(request.jobOptions.modelSelection.options[0].value,'high');assert.equal(request.jobOptions.interactionMode,'plan');assert.equal(request.jobOptions.context.records[0].path,'README.md');
+  assert.equal(request.jobOptions.inline.enabled,true);assert.equal(request.jobOptions.inline.finalAnswerFormat,'raw-markdown');assert.equal(jobOptions.inline.enabled,false);assert.equal(jobOptions.inline.finalAnswerFormat,'formatted');
+  const commands:any[]=[];await sendDirect(request,undefined,async()=>{},undefined,{origin:'https://synthetic.example',api:async(path:string,payload?:any)=>{
+   if(path.includes('/threads/'))return {thread:{id:'smart-thread',projectId:h.project.id,session:{status:'running',activeTurnId:'turn'},latestTurn:{turnId:'turn',state:'running'}}};
+   assert.equal(path,'/api/orchestration/dispatch');commands.push(payload);return {sequence:1};
+  }});
+  const turn=commands.find(command=>command.type==='thread.turn.start');assert.ok(turn);assert.deepEqual(turn.modelSelection,modelSelection);assert.equal(turn.interactionMode,'plan');assert.equal(turn.message.context.records[0].path,'README.md');
+  assert.ok(commands.some(command=>command.type==='thread.interaction-mode.set'&&command.interactionMode==='plan'));assert.equal(request.directPlan.observedActiveTurnId,'turn');
  }finally{h.plugin.onunload();}
 });
 
