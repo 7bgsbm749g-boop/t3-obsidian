@@ -35,40 +35,16 @@ async function download(request:ReleaseRequest,url:string,limit:number){
   return response.text;
 }
 export async function latestRelease(request:ReleaseRequest){const release=readRelease(JSON.parse(await download(request,RELEASE_API,512_000)) as unknown);if(!release)throw Error('The latest release is incomplete or unsupported.');return release;}
-export async function releaseFiles(release:Release,request:ReleaseRequest,id:string,compatible:(version:string)=>boolean,mobile:boolean){
-  const files={} as Record<ReleaseFile,string>;
-  // Validate the manifest before requesting executable assets.
-  files['manifest.json']=await download(request,release.assets['manifest.json'],limits['manifest.json']);
-  const manifest:unknown=JSON.parse(files['manifest.json']);
+export async function releaseManifest(release:Release,request:ReleaseRequest,id:string,compatible:(version:string)=>boolean,mobile:boolean):Promise<UpdateManifest>{
+  const manifest:unknown=JSON.parse(await download(request,release.assets['manifest.json'],limits['manifest.json']));
   if(!isRecord(manifest)||manifest.id!==id||manifest.version!==release.version||typeof manifest.minAppVersion!=='string'||!versionParts(manifest.minAppVersion))throw Error('The release manifest does not match this plugin and version.');
   if(!compatible(manifest.minAppVersion))throw Error(`Update Obsidian to ${manifest.minAppVersion} or later first.`);
   if(mobile&&manifest.isDesktopOnly===true)throw Error('This release requires desktop Obsidian.');
-  files['main.js']=await download(request,release.assets['main.js'],limits['main.js']);
-  files['styles.css']=await download(request,release.assets['styles.css'],limits['styles.css']);
-  return files;
+  return manifest as UpdateManifest;
 }
 
 export interface UpdateFiles {
   read(name:ReleaseFile):Promise<string|null>;
-  write(name:ReleaseFile,text:string):Promise<void>;
-  remove(name:ReleaseFile):Promise<void>;
-}
-/** The manifest is committed last. Failed writes restore the previous runtime;
- * data.json is deliberately outside the file interface. */
-export async function installRelease(files:Record<ReleaseFile,string>,storage:UpdateFiles,ready:()=>Promise<void>){
-  const names:ReleaseFile[]=['main.js','styles.css','manifest.json'],previous={} as Record<ReleaseFile,string|null>;
-  for(const name of names)previous[name]=await storage.read(name);
-  await ready();
-  for(const name of names)if(await storage.read(name)!==previous[name])throw Error('The installed plugin changed during the update. Check again.');
-  const written:ReleaseFile[]=[];
-  try{
-    for(const name of names){written.push(name);await storage.write(name,files[name]);if(await storage.read(name)!==files[name])throw Error(`Could not verify ${name}.`);}
-  }catch(error){
-    const failures:string[]=[];
-    for(const name of written.reverse())try{const old=previous[name];if(old===null)await storage.remove(name);else await storage.write(name,old);if(await storage.read(name)!==old)failures.push(name);}catch{failures.push(name);}
-    if(failures.length)throw Error(`Update failed; could not restore ${failures.join(', ')}. Reinstall T3 Code from its release before restarting Obsidian.`);
-    throw error;
-  }
 }
 
 export type UpdateState={release:Release;busy:boolean;message:string};

@@ -97,10 +97,13 @@ hides that release on this device; a newer release can show another banner.
 Use **T3 Code: Check for plugin updates** to check immediately or show a dismissed
 update again. Offline checks stay quiet.
 
-**Update** downloads and validates all release files, saves open notes and response
-recovery data, then reloads only T3 Code. It preserves settings and does not need
-active streams to finish. A failed download leaves the installation unchanged;
-a failed file write attempts to restore the previous runtime. Update errors stay
-in the banner so you can retry. Releases that need a newer Obsidian version show
-an instruction to update Obsidian first. Development builds are compared by their
-numeric source version and are never replaced by an older release.
+**Update** checks the release manifest, saves open notes and response recovery
+data, then calls Obsidian’s native plugin installer to download and install
+T3 Code. If the old code is still running, notes are saved again before Obsidian’s
+plugin manager reloads it. Settings are preserved, and active streams do not need to finish. The
+installed and running versions are checked after installation. Errors stay in the
+banner so you can retry; if the old plugin has unloaded, a notice shows the error.
+If this Obsidian version does not expose its internal installer, update through
+Community plugins. Releases that need a newer Obsidian version show an instruction
+to update Obsidian first. Development builds are compared by their numeric source
+version and are never replaced by an older release.
