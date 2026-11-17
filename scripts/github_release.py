@@ -1,7 +1,8 @@
-"""Bump PR versions and prepare and publish tagged GitHub releases."""
+"""Validate source versions and prepare and publish tagged GitHub releases."""
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -13,16 +14,18 @@ from release_policy import bump, release_title, require_target
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = {'main.js': 'dist/main.js', 'manifest.json': 'manifest.json', 'styles.css': 'styles.css'}
+VERSION_FILES = ('manifest.json', 'package.json', 'package-lock.json', 'versions.json')
+NUMERIC_VERSION = re.compile(r'0\.0\.(0|[1-9][0-9]*)\Z')
 
 
 def command(*args: str) -> str:
     return subprocess.check_output(args, cwd=ROOT, text=True, timeout=120).strip()
 
 
-def api(path: str, *, missing: bool = False, payload: dict | None = None):
+def api(path: str, *, missing: bool = False, payload: dict | None = None, method: str | None = None):
     args = ['gh', 'api', path]
     if payload is not None:
-        args += ['--method', 'POST', '--input', '-']
+        args += ['--method', method or 'POST', '--input', '-']
     result = subprocess.run(args, cwd=ROOT, input=json.dumps(payload) if payload is not None else None,
                             capture_output=True, text=True, timeout=60)
     if result.returncode:
@@ -42,35 +45,74 @@ def base_version(reference: str) -> str:
 
 
 def version(base: str | None = None) -> str:
-    manifest = json.loads((ROOT / 'manifest.json').read_text())
+    selected = metadata_version({name: json.loads((ROOT / name).read_text()) for name in VERSION_FILES})
+    if base is not None and int(selected.rsplit('.', 1)[1]) <= int(base_version(base).rsplit('.', 1)[1]):
+        raise ValueError('Explicit base validation requires a newer 0.0.BUILD than its target.')
+    return selected
+
+
+def metadata_version(values: dict) -> str:
+    manifest, package, lock, history = (values[name] for name in VERSION_FILES)
     selected = manifest['version']
     require_target(ROOT, selected)
-    package = json.loads((ROOT / 'package.json').read_text())
-    lock = json.loads((ROOT / 'package-lock.json').read_text())
     if not selected == package['version'] == lock['version'] == lock['packages']['']['version']:
         raise ValueError('Align manifest.json, package.json and package-lock.json before releasing.')
-    if json.loads((ROOT / 'versions.json').read_text()).get(selected) != manifest['minAppVersion']:
+    if history.get(selected) != manifest['minAppVersion']:
         raise ValueError('versions.json must include the exact release and minimum Obsidian version.')
-    if base is not None and int(selected.rsplit('.', 1)[1]) <= int(base_version(base).rsplit('.', 1)[1]):
-        raise ValueError('Every PR requires a newer 0.0.BUILD than its target. Run github_release.py bump --base origin/main.')
     return selected
 
 
 def bump_version(base: str) -> str:
     """Update only version metadata; never create a tag or publish."""
-    names = ('manifest.json', 'package.json', 'package-lock.json', 'versions.json')
-    values = {name: json.loads((ROOT / name).read_text()) for name in names}
-    manifest, package, lock, history = (values[name] for name in names)
+    values = {name: json.loads((ROOT / name).read_text()) for name in VERSION_FILES}
+    manifest, package, lock, history = (values[name] for name in VERSION_FILES)
     candidates = [base_version(base), manifest['version'], package['version'], lock['version'], lock['packages']['']['version']]
     candidates.extend(item for item in history if re.fullmatch(r'0\.0\.(0|[1-9][0-9]*)', item))
     for candidate in candidates:
         require_target(ROOT, candidate)
     selected = bump(ROOT, max(candidates, key=lambda item: int(item.rsplit('.', 1)[1])), 'patch')
+    write_version(values, selected)
+    return selected
+
+
+def set_version(values: dict, selected: str) -> None:
+    manifest, package, lock, history = (values[name] for name in VERSION_FILES)
     manifest['version'] = package['version'] = lock['version'] = lock['packages']['']['version'] = selected
     history[selected] = manifest['minAppVersion']
+
+
+def write_version(values: dict, selected: str) -> None:
+    set_version(values, selected)
     for name, value in values.items():
         (ROOT / name).write_text(json.dumps(value, indent=2) + '\n')
-    return selected
+
+
+def pages(path: str) -> list:
+    result = []
+    for page in range(1, 51):
+        rows = api(f'{path}{"&" if "?" in path else "?"}per_page=100&page={page}')
+        if not isinstance(rows, list):
+            raise ValueError('GitHub returned an invalid version inventory.')
+        result.extend(rows)
+        if len(rows) < 100:
+            return result
+    raise ValueError('Version inventory exceeded 5,000 entries. No version was assigned.')
+
+
+def remote_json(repo: str, source: str, name: str) -> dict:
+    if not re.fullmatch(r'[\w.-]+/[\w.-]+', repo) or not re.fullmatch(r'[a-f0-9]{40}', source):
+        raise ValueError('Invalid version source identity.')
+    if name not in (*VERSION_FILES, 'pr-versions.json'):
+        raise ValueError('Unexpected version metadata path.')
+    value = api(f'repos/{repo}/contents/{name}?ref={source}')
+    if (not isinstance(value, dict) or value.get('type') != 'file' or value.get('encoding') != 'base64'
+            or not isinstance(value.get('size'), int) or value['size'] > 1_000_000
+            or not isinstance(value.get('content'), str) or len(value['content']) > 1_400_000):
+        raise ValueError('Cannot read the exact source manifest. No version was assigned.')
+    result = json.loads(base64.b64decode(''.join(value['content'].split()), validate=True))
+    if not isinstance(result, dict):
+        raise ValueError('Version metadata must be a JSON object.')
+    return result
 
 
 def tag_commit(repo: str, selected: str) -> str | None:
@@ -105,7 +147,7 @@ def prepare(repo: str, selected: str, source: str) -> None:
     """Release the scheduled main snapshot without changing source versions."""
     existing = tag_commit(repo, selected)
     if existing is not None and existing != source:
-        raise ValueError('This version already belongs to another commit. Bump the PR version; never move a release tag.')
+        raise ValueError('This version already belongs to another commit. Repair post-merge assignment; never move a release tag.')
     latest = api(f'repos/{repo}/releases/latest', missing=True)
     if (latest is not None and re.fullmatch(r'0\.0\.(0|[1-9][0-9]*)', latest['tag_name'])
             and int(selected.rsplit('.', 1)[1]) < int(latest['tag_name'].rsplit('.', 1)[1])):
@@ -162,10 +204,10 @@ def publish(repo: str, selected: str, source: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['validate', 'bump', 'prepare', 'publish'])
-    parser.add_argument('--base', help='PR target reference. Required for PR validation; bump defaults to origin/main.')
+    parser.add_argument('--base', help='Optional comparison reference; low-level bump defaults to origin/main.')
     args = parser.parse_args()
     if args.base is not None and args.action not in ('validate', 'bump'):
-        parser.error('--base applies only to validate and bump.')
+        parser.error('--base applies only to validation or version allocation.')
     if args.action == 'bump':
         print(bump_version(args.base or 'origin/main'))
         return
@@ -173,7 +215,8 @@ def main() -> None:
     if args.action == 'validate':
         print(selected)
         return
-    repo, source = os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_SHA']
+    repo = os.environ['GITHUB_REPOSITORY']
+    source = command('git', 'rev-parse', 'HEAD') if args.action == 'prepare' else os.environ['GITHUB_SHA']
     if not re.fullmatch(r'[\w.-]+/[\w.-]+', repo) or not re.fullmatch(r'[a-f0-9]{40}', source):
         raise ValueError('Invalid GitHub source identity.')
     if command('git', 'rev-parse', 'HEAD') != source:
@@ -183,6 +226,10 @@ def main() -> None:
         raise ValueError('Release action does not match the event ref.')
     if args.action == 'prepare' and os.environ.get('GITHUB_EVENT_NAME') != 'schedule':
         raise ValueError('Only the nightly schedule can prepare an automatic release.')
+    if args.action == 'prepare':
+        from merge_versions import versioned_snapshot
+        versioned_snapshot(ROOT, source)
+        command('git', 'merge-base', '--is-ancestor', source, 'origin/main')
     (prepare if args.action == 'prepare' else publish)(repo, selected, source)
 
 

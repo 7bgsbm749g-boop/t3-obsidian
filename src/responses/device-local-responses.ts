@@ -12,6 +12,7 @@ import type {ResponseStopReceipt} from './response-stop-receipt';
 import type {ResponseConnectionIssue} from '../connection/sign-in-state';
 import type {LocalResponseSaveResult} from './local-response-save';
 export interface DeviceResponseIO {
+  threadSources?:import('../conversations/shared-thread-stream').SharedThreadStreams;
   localFinalNotes?:LocalFinalNoteIO;
   localBindings?():readonly ResponseRequest[];
   saveLocalBinding?(request:ResponseRequest):Promise<void>;

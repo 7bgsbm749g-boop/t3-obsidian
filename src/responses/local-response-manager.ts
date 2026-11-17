@@ -44,7 +44,7 @@ export class LocalResponseManager {
   private recoveryWork?:Promise<void>;
   private stoppedIds:Set<string>;
   private closed=false;
-  private sources=new SharedThreadStreams();
+  private sources:SharedThreadStreams;
   private moves=new Map<string,{from:Set<string>;to:string}>();
   private blockedLocations=new Set<string>();
   private finalQueues=new Map<string,Set<Runtime>>();
@@ -52,7 +52,7 @@ export class LocalResponseManager {
   private finalWaiters=new Map<Runtime,()=>void>();
   private noteVersions=new Map<string,number>();
   private noteWrites=new Map<string,Promise<unknown>>();
-  constructor(private actor:string,private vaultId:string,private io:DeviceResponseIO,private notes:LocalFinalNoteIO,private now=()=>Date.now(),private makePreview=(record:ResponseRecord,access:()=>ReturnType<DeviceResponseIO['access']>,receive:(update:DirectInlineUpdate)=>void,connection:(issue?:ResponseConnectionIssue)=>void)=>new DirectInlinePreview(record,access,receive,this.sources.forSource(JSON.stringify([record.request.threadEnvironmentId,record.request.projectId,record.request.threadId]),this.io.knownCompleted?.(record.request),()=>this.explicitMessages.get(record.request.id)===(record.request.localMessageId??record.request.messageId)?3:this.io.isVisible?.(record.request.notePath)?2:this.io.isOpen(record.request.notePath)?1:0),undefined,connection)){const stopped=io.loadStops?.();this.stoppedIds=new Set(Array.isArray(stopped)?stopped:[]);}
+  constructor(private actor:string,private vaultId:string,private io:DeviceResponseIO,private notes:LocalFinalNoteIO,private now=()=>Date.now(),private makePreview=(record:ResponseRecord,access:()=>ReturnType<DeviceResponseIO['access']>,receive:(update:DirectInlineUpdate)=>void,connection:(issue?:ResponseConnectionIssue)=>void)=>new DirectInlinePreview(record,access,receive,this.sources.forSource(JSON.stringify([record.request.threadEnvironmentId,record.request.projectId,record.request.threadId]),this.io.knownCompleted?.(record.request),()=>this.explicitMessages.get(record.request.id)===(record.request.localMessageId??record.request.messageId)?3:this.io.isVisible?.(record.request.notePath)?2:this.io.isOpen(record.request.notePath)?1:0),undefined,connection)){this.sources=io.threadSources??new SharedThreadStreams();const stopped=io.loadStops?.();this.stoppedIds=new Set(Array.isArray(stopped)?stopped:[]);}
   has(id:string){return this.jobs.has(id);}
   request(id:string){return this.jobs.get(id)?.request;}
   record(id:string){return this.jobs.get(id)?.record;}
@@ -440,5 +440,5 @@ export class LocalResponseManager {
   deleted(path:string){for(const [notePath,note] of this.recoveryNotes)if(notePath===path||notePath.startsWith(path+'/')){note.version++;note.pending=false;}for(const runtime of this.jobs.values())if(runtime.request.notePath===path||runtime.request.notePath.startsWith(path+'/'))this.stopLocally(runtime.request.id);}
   responses(){return [...this.jobs.values()].filter(runtime=>!runtime.stopped&&!runtime.detached&&(!runtime.done||runtime.update?.completionVerified&&runtime.update.phase==='complete')).map(runtime=>({id:runtime.request.id,notePath:runtime.request.notePath,epoch:1,revision:1,completionId:JSON.stringify([runtime.update?.messageId??runtime.request.localMessageId??runtime.request.messageId,runtime.update?.turnId??'']),completion:completionSource(runtime.request,runtime.update?.turnId?runtime.update.checkpoint?.turns?.[runtime.update.turnId]??(runtime.request.importTurn?.turnId===runtime.update.turnId?runtime.request.importTurn:undefined):undefined),active:!runtime.update?.completionVerified&&runtime.update?.phase!=='error',input:!!runtime.update?.questionsPending||!runtime.update?.completionVerified&&!!runtime.update?.questionActivities?.length,complete:!!runtime.update?.completionVerified&&!runtime.update.questionsPending&&runtime.update.phase==='complete'}));}
   health(){return {...this.sources.status(),attachments:this.jobs.size,saveQueued:[...this.finalQueues.values()].reduce((n,queue)=>n+queue.size,0),saveWorkers:this.finalWorkers.size,pending:[...this.jobs.values()].filter(runtime=>!runtime.done).map(runtime=>({bindingId:runtime.request.id,reason:this.saveResult(runtime)})).slice(0,64)};}
-  dispose(){this.closed=true;this.sources.dispose();for(const resolve of this.finalWaiters.values())resolve();this.finalWaiters.clear();for(const runtime of this.jobs.values())runtime.preview.dispose();this.jobs.clear();this.unsentMessages.clear();this.explicitMessages.clear();this.freshRegistrations.clear();}
+  dispose(){this.closed=true;if(!this.io.threadSources)this.sources.dispose();for(const resolve of this.finalWaiters.values())resolve();this.finalWaiters.clear();for(const runtime of this.jobs.values())runtime.preview.dispose();this.jobs.clear();this.unsentMessages.clear();this.explicitMessages.clear();this.freshRegistrations.clear();}
 }

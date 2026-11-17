@@ -29,29 +29,41 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Test release tooling
-        run: python3 -m unittest scripts.test_github_release scripts.test_release_policy
-      - name: Require an aligned version bump for every PR
-        if: github.event_name == 'pull_request'
-        env:
-          T3_PR_BASE: ${{ github.event.pull_request.base.sha }}
-        run: python3 scripts/github_release.py validate --base "$T3_PR_BASE"
+        run: python3 -m unittest scripts.test_github_release scripts.test_merge_versions scripts.test_release_policy
+      - name: Verify aligned source metadata
+        run: python3 scripts/github_release.py validate
 
   prepare:
     if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
-      group: nightly-release-preparation
+      group: main-version-metadata
+      queue: max
       cancel-in-progress: false
     permissions:
       contents: write
       actions: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: main
+          fetch-depth: 0
           persist-credentials: false
       - name: Test release tooling
-        run: python3 -m unittest scripts.test_github_release scripts.test_release_policy
+        run: python3 -m unittest scripts.test_github_release scripts.test_merge_versions scripts.test_release_policy
+      - name: Reconcile merged PRs and select a completed version snapshot
+        id: versioning
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/merge_versions.py
+      - name: Check out the completed version snapshot
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.versioning.outputs.source }}
+          fetch-depth: 0
+          persist-credentials: false
       - name: Tag the nightly snapshot and start its release build
         env:
           GH_TOKEN: ${{ github.token }}

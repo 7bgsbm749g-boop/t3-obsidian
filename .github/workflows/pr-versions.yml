@@ -1,0 +1,32 @@
+name: Assign merged PR versions
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: main-version-metadata
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  assign:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Test version assignment
+        run: python3 -m unittest scripts.test_merge_versions scripts.test_github_release scripts.test_release_policy
+      - name: Assign versions to unprocessed merged PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/merge_versions.py
