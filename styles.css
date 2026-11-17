@@ -644,7 +644,7 @@ button.send-to-t3-response-activity { display: inline-flex; align-items: center;
    (pt-4 at 640px), footer px-2/pb-2, 32px primary action. Breakpoints
    use composer width (620/780), not the desktop window around a narrow leaf. */
 .modal.t3-send-panel { width: min(46rem, calc(100vw - 32px)); max-width: 46rem; padding: 0; border: 1px solid var(--background-modifier-border); border-radius: 16px; overflow: visible; background: var(--background-primary); container-type: inline-size; }
-.send-to-t3-panel-host:has(> .t3-send-panel) { container: t3-note-pane / inline-size; }
+.send-to-t3-panel-host { container: t3-note-pane / inline-size; }
 .modal.send-to-t3-tab-panel.t3-send-panel { --t3-send-gutter: var(--size-4-3); --t3-send-bottom: var(--size-4-4); inset: auto var(--t3-send-gutter) calc(var(--t3-send-bottom) + env(safe-area-inset-bottom, 0px)); width: calc(100% - 2 * var(--t3-send-gutter)); margin-inline: auto; }
 .t3-send-panel .modal-header, .t3-send-panel .modal-title { display: none; }
 .t3-send-panel .modal-content { margin: 0; padding: 0; overflow: visible; border-radius: inherit; }
