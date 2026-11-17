@@ -20,7 +20,7 @@ async function fixture({automatic=false,remembered=false,steering=false,busy=fal
  window.SVGElement.prototype.createSvg=proto.createSvg;
  const app={workspace:{getLeavesOfType:()=>[],getActiveViewOfType:()=>undefined}};
  const opening=automatic?module.exports.openNoteSendFlow(app,host):Promise.resolve(new module.exports.SendComposer(app,host,prompt).open());await Promise.resolve();
- const modal=modals.at(-1);const button=(label:string)=>modal.contentEl.querySelector(`[aria-label="${label}"]`) as HTMLButtonElement;
+ const modal=modals.at(-1);const button=(label:string)=>Array.from(modal.contentEl.querySelectorAll('button') as NodeListOf<HTMLButtonElement>).find(el=>(el.getAttribute('aria-label')??document.getElementById(el.getAttribute('aria-labelledby')??'')?.textContent)===label)!;
  return {app,exports:module.exports,host,opening,modal,modals,document,window,checks,sent,notices,previews,preparing,drafts,listeners,menus,button,pick:()=>pick,setFail:(v:boolean)=>{fail=v;},setBusy:(v:boolean)=>{busy=v;for(const f of listeners)f();},type:(text:string)=>{modal.field.value=text;modal.field.dispatchEvent(new window.Event('input'));}};
 }
 const continuation={label:'Previous title',threadId:'checked',projectKey:'project',detail:'Previous title · Idle'};
@@ -56,6 +56,9 @@ test('unavailable previous thread cannot submit, but New thread is still availab
 });
 test('switches resolve per send, disable formatting when streaming is off, and preserve defaults',async()=>{
  const h=await fixture();h.button('Final answer format: Quoted Markdown').click();h.button('Stream replies into the editor').click();assert.equal(h.button('Final answer format: Raw Markdown').disabled,true);h.button('Stream replies into the editor').click();await h.modal.choose();assert.equal(h.sent[0].options.inline.finalAnswerFormat,'raw-markdown');assert.equal(h.sent[0].options.inline.enabled,true);assert.equal(h.host.getInlineDefaults().enabled,true);
+});
+test('format switch keeps its accessible name without an Obsidian hover tooltip',async()=>{
+ const h=await fixture();const format=h.button('Final answer format: Quoted Markdown');assert.ok(format);assert.equal(format.hasAttribute('aria-label'),false);assert.equal(format.hasAttribute('title'),false);format.click();assert.equal(h.button('Final answer format: Raw Markdown'),format);h.modal.close();
 });
 test('a model choice is resolved into the submitted request and survives UI redraw',async()=>{
  const h=await fixture();h.type('Question');h.modal.overrides.modelSelection={instanceId:'p',model:'chosen',options:[{id:'effort',value:'high'}]};h.modal.onOpen();assert.match(h.button('Choose model').textContent!,/chosen/);await h.modal.choose();assert.equal(h.sent[0].options.modelSelection.model,'chosen');assert.equal(h.sent[0].text,'Question');

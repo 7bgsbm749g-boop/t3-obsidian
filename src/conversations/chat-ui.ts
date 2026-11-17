@@ -154,6 +154,9 @@ export class SendComposer extends NoteTabPanel {
     const resolved=()=>resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},this.overrides);
     const streaming=this.button(options,'Stream replies into the editor','text-cursor-input',()=>{this.overrides.inline={...this.overrides.inline,enabled:!resolved().inline.enabled};this.refreshAvailability?.();});streaming.setAttribute('role','switch');
     const format=this.button(options,'Final answer format','pilcrow',()=>{this.overrides.inline={...this.overrides.inline,finalAnswerFormat:resolved().inline.finalAnswerFormat==='formatted'?'raw-markdown':'formatted'};this.refreshAvailability?.();},'t3-send-format');format.createSpan();
+    // Obsidian turns aria-label into a hover tooltip. A referenced name keeps
+    // this control accessible without covering its expanding visible label.
+    const formatName=options.createSpan({attr:{id:`t3-send-format-${crypto.randomUUID()}`,hidden:''}});format.setAttribute('aria-labelledby',formatName.id);format.removeAttribute('aria-label');format.removeAttribute('title');
     const actions=controls.createDiv({cls:'t3-send-actions'});
     const model=this.button(actions,'Choose model','bot',()=>{void this.chooseModel();},'t3-send-model');
     model.empty();const providerIcon=model.createSpan({cls:'t3-send-provider'}),modelLabel=model.createSpan();setIcon(model.createSpan(),'chevron-down');
@@ -186,7 +189,7 @@ export class SendComposer extends NoteTabPanel {
       model.title=this.modelError??[modelLabel.textContent,this.overrides.interactionMode==='plan'?'Plan mode':undefined].filter(Boolean).join(' · ');model.setAttribute('aria-description',model.title);
       project.disabled=disabled||Boolean(restriction);thread.disabled=disabled||Boolean(restriction);model.disabled=disabled||!this.host.getModels;
       streaming.disabled=disabled||continuing;streaming.setAttribute('aria-checked',String(inline.enabled));streaming.title=continuing?'This running response keeps its streaming choices':`Stream replies into the editor: ${inline.enabled?'On':'Off'}`;
-      format.disabled=disabled||continuing||!inline.enabled;const formatLabel=inline.finalAnswerFormat==='formatted'?'Quoted Markdown':'Raw Markdown';format.querySelector('span')!.setText(formatLabel);format.removeAttribute('title');format.setAttribute('aria-label',`Final answer format: ${formatLabel}`);
+      format.disabled=disabled||continuing||!inline.enabled;const formatLabel=inline.finalAnswerFormat==='formatted'?'Quoted Markdown':'Raw Markdown';format.querySelector('span')!.setText(formatLabel);formatName.setText(`Final answer format: ${formatLabel}`);
       threadLabel.setText(this.target==='new'?'New thread':this.destination?.label??'Previous thread');
       const status=this.destination?.status??this.destination?.detail?.match(/ · (Idle|Active|Running|Waiting)\b/)?.[1];thread.dataset.state=this.target==='new'?'new':this.destination?.unavailable?'unavailable':status?.toLowerCase()??'idle';setIcon(threadIcon,status&&['Active','Running'].includes(status)?'loader-circle':'message-circle');
       thread.title=this.target==='new'?'Send to a new thread':this.destination?.unavailable?this.destination.detail??'Thread unavailable':[threadLabel.textContent,status].filter(Boolean).join(' · ');thread.setAttribute('aria-description',status??'');
