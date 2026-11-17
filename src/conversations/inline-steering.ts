@@ -105,7 +105,7 @@ export function incomingLabel(message:InlineMessage,local=false):string {
  * T3's detail feed omits start-request events. Use the observed active session,
  * or a unique canonical source lifecycle when recovering null-turn inputs.
  * An authoritative newer primary always wins over these display observations. */
-function displayTurn(state:InlineThreadState,message:InlineMessage,turns:string[]):string|undefined {
+export function incomingDisplayTurn(state:InlineThreadState,message:InlineMessage,turns:string[]):string|undefined {
   const exact=turnForMessage(state,message.id);if(exact)return exact;
   const observed=state.inputTurns?.[message.id];if(observed)return observed;
   const created=Date.parse(message.createdAt??'');if(!Number.isFinite(created))return;
@@ -128,7 +128,7 @@ export function observeIncoming(state:InlineThreadState,turns:string[],saved:Inl
     if(message.role!=='user'||!message.text.trim())continue;
     const reservation=local.find(input=>input.messageId===message.id);
     if(!reservation&&excluded.includes(message.id))continue;
-    const turn=displayTurn(state,message,turns);
+    const turn=incomingDisplayTurn(state,message,turns);
     if(!reservation&&(!turn||!turns.includes(turn)))continue;
     const old=result.find(input=>input.messageId===message.id);
     const index=state.messages.findIndex(item=>item.id===message.id);

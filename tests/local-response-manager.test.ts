@@ -94,6 +94,18 @@ test('reconnect waits for local retirement recovery before opening any source',a
   manager.dispose();h.manager.dispose();
 });
 
+test('note and sidebar readers share the supplied source without disposing each other',async()=>{
+  const h=fixture();let starts=0,stops=0;
+  const pool=new SharedThreadStreams(()=>{starts++;return {stop:()=>{stops++;}};});
+  h.io.threadSources=pool;h.io.access=async()=>({origin:'https://synthetic.invalid',api:async()=>({thread:{id:h.binding.threadId,projectId:h.binding.projectId,messages:[]},snapshotSequence:1})});
+  const key=JSON.stringify([h.binding.threadEnvironmentId,h.binding.projectId,h.binding.threadId]);
+  const sidebar=pool.forSource(key,false,()=>3)(h.binding.threadId,()=>h.io.access(),{item(){},reconnecting(){}});
+  const manager=new LocalResponseManager(randomUUID(),'vault',h.io,h.notes);
+  await manager.register(h.binding);await drain();assert.equal(starts,1);assert.equal(pool.status().readers,2);
+  manager.dispose();assert.equal(stops,0);assert.equal(pool.status().readers,1);
+  sidebar.stop();assert.equal(stops,1);assert.equal(pool.status().readers,0);pool.dispose();h.manager.dispose();
+});
+
 test('an observed rename cannot move a new response created at the reused old path',async()=>{
   const h=fixture();await h.manager.register(h.binding);h.manager.renamed(h.binding.notePath,'Moved.md');
   const next=request();h.write(responseAnchor(next.id));await h.manager.register(next);

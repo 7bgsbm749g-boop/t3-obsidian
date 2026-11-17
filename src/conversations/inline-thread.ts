@@ -9,7 +9,7 @@ import {intermediateMode,runTimer,type IntermediateMode,type RunTiming,type Fina
 import {steeringSegments,type InlineSteering} from './inline-steering';
 import {responseActivityLabel,responseActivityRow} from '../responses/response-activity';
 import {visibleInlineInput} from '../responses/input-presentation';
-import {responseToolGroups,currentResponseToolGroup,renderResponseToolGroup} from '../responses/response-tools';
+import {responseWork} from '../responses/response-work';
 import {applyV2ControlEvent,responseRun} from '../connection/orchestration-v2';
 import {responseEmissions,renderProviderError} from '../responses/response-emissions';
 import {renderSubmittedAnswer,type SubmittedAnswer} from '../responses/response-answers';
@@ -25,11 +25,11 @@ export interface SelectionAnchor {text:string;start:number;end:number;before:str
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;itemId?:string;sequence?:number;updatedAt?:string;createdAt?:string;context?:unknown;createdBy?:string;creationSource?:string;senderThreadId?:string|null;senderThreadTitle?:string;delegatedCompletion?:{parentRunId:string;generation:number;taskIds:string[]}}
 export interface InlineActivity {id:string;kind:string;summary:string;turnId:string|null;createdAt?:string;sequence?:number;payload?:Record<string,unknown>}
 export interface InlineTurn {turnId:string;state:string;messageId?:string;requestedAt?:string;startedAt?:string|null;completedAt?:string|null;assistantMessageId?:string|null;ordinal?:number;delegatedParentRunId?:string;delegatedCompletion?:{disposition:string;delivery?:{messageId:string;generation:number;taskIds:string[]}|null}}
-export interface InlineSubagent {id:string;runId:string;title?:string;status:string;origin?:string;completionWake?:string;completionDelivery?:{state:string;observedByRunId?:string}}
+export interface InlineSubagent {childThreadId?:string|null;remoteChild?:unknown;id:string;runId:string;title?:string;status:string;origin?:string;completionWake?:string;completionDelivery?:{state:string;observedByRunId?:string}}
 export interface InlineStartRequest {messageId:string;requestedAt:string;sequence:number;activeTurnId?:string;turnId?:string;failed?:boolean}
 export interface InlineBinding {turnId:string;kind:'explicit'|'timestamp'|'start'|'steer';sequence?:number}
 export interface InlineBindingCheckpoint {failedContinuations?:Record<string,FailedContinuation>;worktreeSetup?:WorktreeSetup;protocolVersion?:2;bindings?:Record<string,InlineBinding>;starts?:Record<string,InlineStartRequest>;turns?:Record<string,InlineTurn>;subagents?:Record<string,InlineSubagent>;worktreeHandoffs?:Record<string,InlineWorktreeHandoff>;sequence?:number;inputBoundaries?:Record<string,InlineMessage[]>;inputTurns?:Record<string,string>;session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;htmlResults?:InlineActivity[];imageResults?:InlineActivity[]}
-export interface InlineThreadState extends InlineBindingCheckpoint {title?:string;messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;turns?:Record<string,InlineTurn>;historyComplete?:boolean;legacyMessageIds?:string[];v2Requests?:Record<string,WireRuntimeRequest>;v2Controls?:Record<string,WireTurnItem>;checkpoints?:Array<{turnId:string;status:string;checkpointRef:string;assistantMessageId?:string|null;completedAt?:string}>}
+export interface InlineThreadState extends InlineBindingCheckpoint {modelSelection?:import('./model-defaults').ModelSelection;runtimeMode?:string;interactionMode?:'default'|'plan';title?:string;messages:InlineMessage[];activities:InlineActivity[];session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;turns?:Record<string,InlineTurn>;historyComplete?:boolean;legacyMessageIds?:string[];v2Requests?:Record<string,WireRuntimeRequest>;v2Controls?:Record<string,WireTurnItem>;checkpoints?:Array<{turnId:string;status:string;checkpointRef:string;assistantMessageId?:string|null;completedAt?:string}>}
 
 export function selectionAnchor(document:string,text:string,start:number,end:number):SelectionAnchor {
   if(!text.trim()||document.slice(start,end)!==text)throw Error('The selected text changed. Select it again before asking T3.');
@@ -568,8 +568,7 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   htmlBodies.sort((a,b)=>a.at-b.at||(a.sequence??0)-(b.sequence??0));
   let htmlIndex=0;
   const htmlBefore=(at=Infinity,sequence=Infinity)=>{const parts:string[]=[];while(htmlIndex<htmlBodies.length&&(htmlBodies[htmlIndex].at<at||htmlBodies[htmlIndex].at===at&&(htmlBodies[htmlIndex].sequence??0)<=sequence))parts.push(htmlBodies[htmlIndex++].body);return parts.length?parts.join('\n\n')+'\n\n':'';};
-  const toolGroups=responseToolGroups(state,displayedTurns);
-  const emissions=responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim())),phase==='running'?turnId:undefined);
+  const {workRows,historyRows,currentTool,currentEmission,activityGroup}=responseWork(state,displayedTurns,turnId,phase,mode,waiting,text=>quoteResponse(closeOpenFence(text.trim())),mode==='collapse'?imageRows:[]);
   // The session repeats the canonical error item. Show that message once, in
   // its timeline position; older sessions without an item use the same row.
   const lastError=phase==='error'&&(!state.latestTurn||state.latestTurn.turnId===turnId)?state.session?.lastError:undefined;
@@ -578,20 +577,6 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const errorStatus=lastError&&!errorShown?renderProviderError(`session-error:${turnId}`,lastError,state.latestTurn?.completedAt??state.turns?.[turnId]?.completedAt??undefined):'';
   // Each task item stays at its recorded timeline position. Updates to the
   // same item replace it; distinct items keep their own disclosure identity.
-  const timelineEmissions=emissions;
-  let currentTool=phase==='running'&&!waiting?currentResponseToolGroup(state,turnId,toolGroups):undefined;
-  const latestEmission=phase==='running'?timelineEmissions.at(-1):undefined;
-  const currentEmission=!waiting&&latestEmission?.active&&latestEmission.turnId===turnId&&
-    !state.messages.some(message=>message.turnId===turnId&&Date.parse(message.createdAt??'')>Date.parse(latestEmission.createdAt??''))&&
-    (!currentTool||Date.parse(currentTool.tool.createdAt??'')<=Date.parse(latestEmission.createdAt??''))?latestEmission:undefined;
-  if(currentEmission)currentTool=undefined;
-  // Keep command history in place as the live label changes. Moving the same
-  // batch into and out of the activity row removes a row on every new call.
-  const historyGroups=toolGroups;
-  const workRows=historyGroups.map(group=>({groupId:group.id,createdAt:group.createdAt,sequence:group.sequence??0,body:renderResponseToolGroup(group),hasThoughts:!!group.thoughts?.length}));
-  const historyRows=[...workRows,...(mode==='collapse'?imageRows:[]),
-    ...timelineEmissions.filter(item=>item!==currentEmission&&(mode==='collapse'||!['response.plan','response.proposed-plan'].includes(item.kind)))].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
-  const activityGroup=toolGroups.filter(group=>group.turnId===turnId).at(-1);
   const renderBottom=(groupId?:string)=>spinner?`\n\n${waiting?responseActivityRow(delegated.label):currentEmission?.body??responseActivityRow(phase==='running'?responseActivityLabel(state,turnId):pendingLabel,currentTool?.tool.icon,groupId)}`:'';
   const bottom=renderBottom(activityGroup?.id);
   // A late answer resumes below the completed transcript. Keep its indicator

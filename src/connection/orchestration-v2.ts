@@ -65,7 +65,7 @@ export function responseRun(run:WireRun,messages:InlineMessage[]=[]):InlineTurn 
 }
 /** Retain lifecycle evidence without copying child prompts or results. */
 export function responseSubagent(item:InlineSubagent):InlineSubagent {
-  return {id:item.id,runId:item.runId,title:item.title,status:item.status,origin:item.origin,completionWake:item.completionWake,
+  return {id:item.id,runId:item.runId,title:item.title,status:item.status,origin:item.origin,completionWake:item.completionWake,childThreadId:item.childThreadId,remoteChild:item.remoteChild,
     ...(item.completionDelivery?{completionDelivery:{state:item.completionDelivery.state,observedByRunId:item.completionDelivery.observedByRunId}}:{})};
 }
 function sessionFor(run:Pick<WireRun,'id'|'status'>|null|undefined,runtimeMode?:string,lastError?:string){

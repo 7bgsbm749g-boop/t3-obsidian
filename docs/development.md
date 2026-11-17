@@ -68,12 +68,12 @@ an explicit refspec and tag following disabled, then open a PR against `main`
 Do not cherry-pick into a shared integration checkout or install into a real
 vault as a completion step. See [Review and release checks](review-and-release.md).
 
-Every PR needs validation and an aligned numeric version newer than its current
-target. After fetching main, run
-`python3 scripts/github_release.py bump --base origin/main` before committing
-the PR, and keep that source base for feature-labelled test builds. If another
-PR consumes the number, update and bump again before merge. Branch pushes do
-not immediately publish. GitHub schedules a release of its selected main
+Every PR needs validation and aligned numeric metadata. Keep its source version
+unchanged during development and test builds. GitHub Actions assigns an unused
+version and PR receipt automatically after merge, including merges performed by
+the user. Agents do not run a pre-merge bump. See
+[automatic version assignment](review-and-release.md#automatic-post-merge-version-assignment).
+Branch pushes do not immediately publish. GitHub schedules a release of its selected main
 snapshot each night at midnight UTC, skipping an unchanged published commit.
 An explicitly pushed numeric tag can still start an early release; dispatch
 at that same tag can retry its build, attestation and publication.

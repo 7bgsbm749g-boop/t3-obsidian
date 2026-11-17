@@ -1,3 +1,8 @@
+import {SharedThreadStreams} from '../conversations/shared-thread-stream';
+import {pendingQuestions} from '../interaction/questions';
+import {pendingApprovals,approvalOptions} from '../interaction/approvals';
+import {SidebarThreads,type SidebarHost} from '../conversations/sidebar-thread-view';
+import type {SidebarTarget} from '../conversations/sidebar-thread-model';
 import {savedResponseProof} from '../responses/saved-response-proof';
 import {RouteStatus} from '../connection/route-status';
 import {readImportThreads,readImportRuns,readImportRun,readImportPreview,importHistoryState} from '../conversations/import-source';
@@ -200,6 +205,8 @@ export default class SendToT3 extends Plugin {
   private cloudGeneration=0;
   private cloudRefreshing:Promise<CloudAccount>|undefined;
   private readonly localKey = 'send-to-t3-code-device-v1';
+  private conversationSources=new SharedThreadStreams();
+  private sidebarThreads?:SidebarThreads;
   private readonly chatDraftKey = 'send-to-t3-code-chat-draft-v1';
   private deviceId = '';
   private sending = false;
@@ -458,8 +465,26 @@ export default class SendToT3 extends Plugin {
     if(typeof this.registerView==='function'){
     this.codebase=new CodebaseBridge(this.app,this,codebaseTransport((environmentId,reason)=>this.inlineThreadAccess(environmentId,reason==='auth-rejected')),()=>this.settings.folderLinks.map(link=>({...link,environmentId:link.environmentId??this.settings.paired.find(c=>c.id===link.connectionId)?.environmentId??this.eventLocalEnvironmentId})),this.settings.vaultId,{...{environments:()=>[...new Set([...this.settings.paired.map(c=>c.environmentId),...(this.eventLocalEnvironmentId?[this.eventLocalEnvironmentId]:[])])]},load:()=>this.settings.codebase,save:async state=>{this.settings.codebase=state;await this.save();},projectChanged:async(scope,change)=>{await this.updateCodebaseProjectLinks(scope,change);}});
     await this.codebase.install();
+    this.sidebarThreads=new SidebarThreads(this.app,this,{
+      access:environmentId=>this.inlineThreadAccess(environmentId),uuid:randomId,
+      watch:(target,callbacks)=>{const key=JSON.stringify([target.environmentId,target.projectId,target.threadId]);return this.conversationSources.forSource(key,false,()=>3)(target.threadId,()=>this.conversationSources.access(()=>this.inlineThreadAccess(target.environmentId),key),callbacks);},
+      ready:()=>!this.stopped&&!this.chatReadinessError(),
+      projects:()=>this.projects().flatMap(project=>{const environmentId=this.connection(project).environmentId;return environmentId?[{key:projectKey(project),label:this.projectChoiceLabel(project),projectId:project.id,environmentId,workspaceRoot:project.workspaceRoot}]:[];}),
+      threads:async choice=>{const project=this.projects().find(project=>projectKey(project)===choice.key);if(!project)throw Error('This project is no longer available.');return projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id);},
+      created:target=>{if(this.settings.hideObsidianThreads===true){this.threadVisibility?.queue({id:randomId(),threadId:target.threadId,projectId:target.projectId,environmentId:target.environmentId});void this.syncThreadVisibility(true);}},
+      source:()=>this.sidebarNoteSource(),
+      renderRequests:(element,target,state)=>{
+        const disposers:Array<()=>void>=[];
+        this.questions?.observe(target.environmentId,target.threadId,state.activities,state.sequence);
+        for(const request of pendingQuestions(state.activities))if(this.questions){const identity={environmentId:target.environmentId,threadId:target.threadId,requestId:request.requestId},row=element.createDiv({cls:'t3-chat-request'});row.createDiv({text:request.questions.map(question=>question.question).join(' ')});const control=questionButton(this.questions,identity,value=>this.openQuestion(value),element.ownerDocument);row.appendChild(control.button);disposers.push(control.unsubscribe);}
+        for(const request of pendingApprovals(state.activities))if(this.approvals){const identity={environmentId:target.environmentId,threadId:target.threadId,requestId:request.requestId},row=element.createDiv({cls:'t3-chat-request'});row.createDiv({text:request.summary});for(const option of approvalOptions(request.options)){const control=approvalButton(this.approvals,identity,option.decision,element.ownerDocument);row.appendChild(control.button);disposers.push(control.unsubscribe);}}
+        return ()=>{for(const dispose of disposers)dispose();};
+      },
+    } satisfies SidebarHost);
+    this.sidebarThreads.install();
     }
     this.deviceInline=new DeviceResponseManager(this.inlineActor,this.settings.vaultId,{
+      threadSources:this.conversationSources,
       ...deviceNoteIO(this.app),
       localFinalNotes:deviceFinalNoteIO(this.app,()=>!this.stopped),
       rememberResponse:async(request,body,before,after,offset)=>{await this.retainSmartChange(()=>rememberResponse(this.smartData(),request.notePath,request.id,body,before,after,offset));},
@@ -751,6 +776,12 @@ export default class SendToT3 extends Plugin {
       const selection=editor.getSelection();
       const file=view.file;
       if(!file||file.extension.toLowerCase()!=='md')return;
+      const sidebarSource=this.sidebarNoteSource();
+      if(sidebarSource&&this.sidebarThreads){
+        menu.addItem(item=>item.setTitle('Open T3 thread in right sidebar').setIcon('message-circle').onClick(()=>{void this.sidebarThreads!.open(sidebarSource).catch(error=>this.sidebarThreads!.report(error));}));
+        menu.addItem(item=>item.setTitle('Start T3 side chat').setIcon('messages-square').onClick(()=>this.sidebarThreads!.startSideChat(sidebarSource)));
+        menu.addItem(item=>item.setTitle('View T3 subagent…').setIcon('bot').onClick(()=>this.sidebarThreads!.chooseSubagent(sidebarSource)));
+      }
       menu.addItem(item=>item.setTitle('Import T3 run into this note…').setIcon('download').setDisabled(this.busy).onClick(()=>this.openRunImport(file)));
       this.addResponseCatchUpMenu(menu,file,editor.getValue());
       menu.addItem(item=>item.setTitle('Manage T3 streams in this note…').setIcon('list').setDisabled(this.busy).onClick(()=>void this.openImportStreams(file).catch(error=>new Notice(`T3 streams: ${message(error)}`,10000))));
@@ -1053,6 +1084,13 @@ export default class SendToT3 extends Plugin {
     if(this.connecting)return 'T3 is still connecting your computers. Wait for connection sync to finish.';
     if(this.nativeAccount&&!this.connectionSyncComplete)return 'T3 has not connected on this device. Check the sign-in status in T3 Code settings.';
     if(!this.nativeAccount)return 'Sign in to T3 on this device first. Synced project names do not sign this device in.';
+  }
+  private sidebarNoteSource():SidebarTarget|undefined {
+    const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file??this.app.workspace.getActiveFile();
+    const source=file&&this.noteThread(file.path);if(!source)return;
+    const environmentId=source.environmentId??this.settings.paired.find(connection=>connection.id===source.connectionId)?.environmentId;
+    if(!environmentId)return;
+    return {kind:'thread',title:file.basename,threadId:source.threadId,projectId:source.projectId,environmentId};
   }
   private chatNote():{path:string;absolutePath?:string}|undefined {
     const file=this.app.workspace.getActiveViewOfType(MarkdownView)?.file??this.app.workspace.getActiveFile();
@@ -3159,7 +3197,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
-  onunload(){this.connectionSetupOwner.abort();this.disposeUnaryOwners();if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void Promise.allSettled([this.saving,this.diagnostics?.close()]).then(()=>closeSharedStateDatabase());void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){this.connectionSetupOwner.abort();this.disposeUnaryOwners();if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.conversationSources.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void Promise.allSettled([this.saving,this.diagnostics?.close()]).then(()=>closeSharedStateDatabase());void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async setThreadHiding(enabled:boolean){this.settings.hideObsidianThreads=enabled;await this.save();await this.syncThreadVisibility();}
   private syncThreadVisibility(force=false):Promise<void>{
     if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve();

@@ -69,13 +69,11 @@ notes, threads, apps, and helpers after retaining evidence.
 ## Documentation and skills
 
 Documentation and skill-instruction changes use the same commit-and-PR flow,
-without local installation. Review the diff and relevant links. Every PR needs
-an aligned numeric version newer than its current target, including product,
-documentation and workflow changes. Fetch the target, then use
-`python3 scripts/github_release.py bump --base origin/main` before committing
-the PR. Keep an existing PR bump across test builds and further edits unless
-the target catches up. Never put feature-labelled test versions into tracked
-version metadata or public releases.
+without local installation. Review the diff and relevant links. Keep numeric
+version metadata unchanged during development, PR creation and test builds.
+GitHub assigns each merged PR its own unused version automatically after merge,
+including merges done by the user, using the workflow described below. Never put
+feature-labelled test versions into tracked metadata or public releases.
 
 The MCP editing skill and server are bundled product assets. Changes to
 `skills/obsidian-t3/SKILL.md`, `agent/mcp_server.py`, or its transport that change
@@ -92,7 +90,8 @@ Do not merge the PR unless the user requests it.
 
 `push`, `push to GitHub`, and `push to main` authorize source uploads only.
 Feature-branch and main pushes do not immediately publish or create tags.
-Every PR carries a newer numeric `0.0.BUILD` aligned across all version files.
+After merge, GitHub assigns each PR a newer numeric `0.0.BUILD`, aligned across
+all version files and checked against other open PRs and existing release tags.
 The GitHub nightly schedule tags and releases its selected `main` snapshot at
 midnight UTC, skipping an unchanged, already published commit. It never releases
 unmerged PRs or changes a version's existing tag. Explicit early releases remain
@@ -110,10 +109,32 @@ work. See [Review and release checks](docs/review-and-release.md).
 The project remains Alpha. Published versions use numeric `0.0.BUILD`; Alpha is
 the development stage, not a release-title label. Titles use
 `t3-obsidian VERSION`. Keep all version files aligned and preserve published
-history. Every PR needs a version bump; recheck against the current target before
-merge to avoid consuming another PR's number. A bump identifies the source base
-for feature-labelled test builds and does not itself publish. Only explicit user
-direction can end Alpha.
+history. GitHub allocates versions after merge, not during development. Feature-labelled
+test builds use the current numeric source base without reserving a number.
+A merge-time bump does not publish. Only explicit user direction can end Alpha.
+
+### Automatic post-merge versions
+
+Do not bump numeric versions on PR branches. Both user and agent merges are
+handled by `.github/workflows/pr-versions.yml` after a push to `main`. It uses the
+repository's `GITHUB_TOKEN`, with no paid plan, PAT, local worker or agent required.
+The workflow reads current metadata, open PR manifests and release tags, then
+commits a distinct version and receipt for every unprocessed merged PR.
+
+`pr-versions.json` is generated history. Preserve its receipts and cutover time;
+do not edit it or version metadata on development branches. Each assignment is
+one atomic, non-forced update of all metadata and the receipt. Workflow runs and
+nightly preparation share one queued concurrency group. Confirmed concurrent
+updates are retried; uncertain writes stop and reconcile from receipts on rerun.
+The workflow reconciles missed events, so delayed runs do not lose merged PRs.
+
+Normal merge authorization, source review, checks and exact-head guards still
+apply. Do not merge merely to test this workflow. If a run fails after merge,
+inspect it and rerun the assignment workflow on `main`; never ask the user to
+pick a version or manually replay a bump. Nightly release preparation also
+reconciles assignments, then releases only a completed version snapshot.
+An assigned version is not an immediate release or personal-vault installation.
+See [Review and release checks](docs/review-and-release.md).
 
 Personal-vault delivery is separate from development validation, PRs, merges
 and GitHub releases. Deliver only when the user explicitly asks to try a build.

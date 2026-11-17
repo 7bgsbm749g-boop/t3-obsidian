@@ -38,6 +38,39 @@ Use **Settings → T3 Code → Replies** to adjust reply behaviour, and **Projec
 
 **Hide Obsidian threads in T3**, under **Replies**, is off by default. It tags new threads created here with `t3-obsidian` and hides them across connected T3 environments and clients. It also enables T3’s existing hidden-tag filter, including other tags already listed there. Turning it off removes only `t3-obsidian` from that filter; thread tags and other entries remain. Existing threads created outside the plugin are not tagged. New threads can appear briefly before tagging. Unavailable machines and pending tags are checked again when Obsidian reconnects or returns to the foreground.
 
+## Right sidebar conversations
+
+Use **T3 Code: Open thread in right sidebar…** to select a connected project,
+open a regular thread, or start one. Messages sent from this page do not create
+note response bindings or enable note streaming. Existing note follows remain
+under **Manage T3 streams in this note…**.
+
+From a linked note or an open sidebar conversation, use **Start side chat in
+right sidebar**. This creates a hidden T3 side chat from the parent’s latest
+stable point. The context breadcrumb returns to the source conversation.
+**Bring back** adds a finished side chat to the idle parent’s next message.
+The trash control deletes the side chat after confirmation.
+
+Use **View subagent in right sidebar…**, or a child button in a sidebar thread,
+to inspect a subagent that exposes a local child thread. This view is read-only;
+continue or stop the work from its parent. Tasks without a child thread and
+remote child tasks do not offer a local thread page.
+
+All three pages use native Obsidian workspace tabs and theme variables. Close
+the tab to stop its live reader. Closing a side chat tab does not delete its T3
+conversation. Saved layouts retain open targets and unsent drafts. The sidebar
+shows the most recent 200 messages. Approval and question requests still use the
+existing T3 controls; the sidebar does not bypass them.
+
+The transcript shares the note stream’s work, tool, and activity presentation
+and its conversation connection. Prompts appear as right-aligned bubbles;
+completed work folds above the answer. The composer provides image attachments,
+provider/model and reasoning options, permissions, plan mode when supported,
+and file/skill/command suggestions. Enter sends, Shift+Enter inserts a new line,
+and an empty composer shows Stop while a reply runs. Voice input is available
+only on devices with browser speech recognition; T3’s remote transcription
+service is not yet connected.
+
 ## Let agents edit notes
 
 Open **Settings → T3 Code → Agent tools** and choose **Connect MCP**. It sets up enabled, installed Codex, Claude Code, Cursor and OpenCode agents across your connected T3 computers, skipping existing setups. The status shows anything that still needs attention. **Disconnect MCP** removes this plugin’s setup without stopping current sessions or disconnecting T3.
