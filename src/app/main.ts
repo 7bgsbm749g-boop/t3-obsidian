@@ -1,4 +1,8 @@
 import {SharedThreadStreams} from '../conversations/shared-thread-stream';
+import {PluginUpdates,latestRelease} from './plugin-updates';
+import {UpdateBanner} from './update-banner';
+import {installedVersion,requestRelease,updatePlugin,updateStorage} from './update-install';
+import {nativeMarkdownView} from '../shared/native-editor';
 import {pendingQuestions} from '../interaction/questions';
 import {pendingApprovals,approvalOptions} from '../interaction/approvals';
 import {SidebarThreads,type SidebarHost} from '../conversations/sidebar-thread-view';
@@ -343,8 +347,36 @@ export default class SendToT3 extends Plugin {
   private async loadSettings():Promise<StoredSettings|null>{return storedSettings(await this.loadData());}
   private localDraft(){const value:unknown=this.app.loadLocalStorage(this.chatDraftKey);return typeof value==='string'?value:'';}
   private stopContentHash?:()=>void;
+  private pluginUpdates?:PluginUpdates;
+  private startPluginUpdates(){
+    const banner=new UpdateBanner(this.app.workspace.containerEl,()=>void this.pluginUpdates?.update(),()=>this.pluginUpdates?.dismiss());
+    const dismissalKey=`t3-dismissed-update:${this.settings.vaultId}:${this.deviceId}`;
+    this.pluginUpdates=new PluginUpdates({
+      installed:()=>installedVersion(updateStorage(this.app,this.manifest),this.manifest.id),latest:()=>latestRelease(requestRelease),
+      dismissed:()=>{const value:unknown=this.app.loadLocalStorage(dismissalKey);return value;},dismiss:version=>this.app.saveLocalStorage(dismissalKey,version),
+      render:state=>banner.render(state),report:text=>{new Notice(text,10000);},
+      install:async release=>{
+        if(this.busy)throw Error('A send or note operation is in progress. Try again when it finishes.');
+        this.busy=true;
+        try{await updatePlugin(this.app,this.manifest,release,async()=>{
+          await this.saving;
+          const views:MarkdownView[]=[];this.app.workspace.iterateAllLeaves(leaf=>{if(leaf.view instanceof MarkdownView)views.push(leaf.view);});
+          for(const view of views)if(view.file&&view.getMode()!=='preview')await view.save();
+          await nativeResponses(this.app).prepareReload();
+          const health=this.deviceInline?.health();
+          if(!health||health.saveQueued||health.saveWorkers||views.some(view=>nativeMarkdownView(view).dirty||nativeMarkdownView(view).saving))throw Error('A note save is in progress. Try again when it finishes.');
+        },()=>!this.stopped);}finally{this.busy=false;}
+      }
+    });
+    const updates=this.pluginUpdates;this.register(()=>{updates.dispose();banner.dispose();});
+    const root=workspaceDocument(this.app),win=root.defaultView;
+    this.registerDomEvent(root,'visibilitychange',()=>{if(!root.hidden)void updates.check();});
+    if(win){this.registerDomEvent(win,'focus',()=>void updates.check());this.registerDomEvent(win,'online',()=>void updates.check());}
+    void updates.check();
+  }
   async onload() {
     const document=workspaceDocument(this.app);
+    this.addCommand({id:'check-for-plugin-updates',name:'Check for plugin updates',callback:()=>void this.pluginUpdates?.check(true)});
     if(!Platform.isMobile)this.stopContentHash=await (await import('../connection/content-hash-desktop')).installDesktopContentHash();
     if(typeof this.register==='function'&&MarkdownView?.prototype)this.register(nativeResponses(this.app).installLoading(MarkdownView.prototype));
     if(typeof this.registerDomEvent==='function')this.register(watchWorkspaceDocuments(this.app,root=>{
@@ -735,6 +767,7 @@ export default class SendToT3 extends Plugin {
     });
     this.registerEvent(this.app.workspace.on('file-open',()=>{this.prepareConnectionRenewal();this.inlineChat?.flushAvailable();}));
     this.registerEvent(this.app.workspace.on('layout-change',()=>this.inlineChat?.flushAvailable()));
+    this.app.workspace.onLayoutReady(()=>{if(!this.stopped&&this.app.workspace.containerEl)this.startPluginUpdates();});
     if(typeof this.app.vault?.on==='function'){
       const changed=(file:TAbstractFile)=>{this.deviceInline?.changed(file.path);void nativeResponses(this.app).changed(file.path).catch(error=>logFailure('note.projection.file-update',error,{notePath:file.path}));};
       this.registerEvent(this.app.vault.on('create',changed));this.registerEvent(this.app.vault.on('modify',changed));
