@@ -815,3 +815,55 @@ a.send-to-t3-subagent:focus-visible { outline:2px solid var(--interactive-accent
   height: auto;
   border-radius: var(--radius-s);
 }
+
+/* Docked T3 model picker; surfaces and contrast belong to the active vault theme. */
+.t3-model-picker { position: fixed; z-index: var(--layer-popover); left: var(--t3-picker-left); top: var(--t3-picker-top); width: var(--t3-picker-width); height: var(--t3-picker-height); display: flex; flex-direction: column; overflow: visible; border: var(--border-width) solid var(--background-modifier-border); border-radius: var(--radius-l); background: var(--background-primary); color: var(--text-normal); box-shadow: var(--shadow-s); font-size: var(--font-ui-small); }
+.t3-model-picker-body { display: flex; flex: 1; min-height: 0; }
+.t3-model-picker-rail { flex: 0 0 44px; display: flex; flex-direction: column; gap: 4px; padding: 4px; overflow-y: auto; border-right: 1px solid var(--background-modifier-border); }
+.t3-model-picker button { background: none; box-shadow: none; color: var(--text-normal); border: 0; border-radius: var(--radius-s); height: auto; cursor: pointer; font-size: inherit; }
+.t3-model-picker button:hover, .t3-model-picker button:focus-visible { background: var(--background-modifier-hover); }
+.t3-model-picker button:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
+.t3-model-picker button:disabled { opacity: .5; cursor: default; }
+.t3-model-picker-provider { position: relative; display: flex; align-items: center; justify-content: center; min-height: 36px; padding: 6px; flex-shrink: 0; }
+.t3-model-picker-provider[aria-pressed="true"]::after { content: ''; position: absolute; right: 0; width: 3px; height: 20px; border-radius: var(--radius-s); background: var(--interactive-accent); }
+.t3-model-picker .t3-composer-provider { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: none; }
+.t3-model-picker .t3-composer-provider svg { width: 100%; height: 100%; }
+.t3-model-picker-provider .t3-composer-provider, .t3-model-picker-provider .t3-model-picker-icon { width: 20px; height: 20px; }
+.t3-model-picker-models { width: 316px; min-width: 0; display: flex; flex-direction: column; flex: 1; padding: 10px 12px 6px; }
+.t3-model-picker-search { display: flex; align-items: center; gap: 6px; height: 33px; flex-shrink: 0; padding-bottom: 6px; border-bottom: 1px solid var(--background-modifier-border); color: var(--text-muted); }
+.t3-model-picker-search input { width: 100%; min-width: 0; border: 0; box-shadow: none; background: none; padding: 0; height: 26px; font-size: inherit; }
+.t3-model-picker-list { padding-top: 10px; overflow-y: auto; min-height: 0; }
+.t3-model-picker-row { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; min-height: 32px; padding: 6px 8px; margin-bottom: 2px; text-align: left; }
+.t3-model-picker-row[aria-pressed="true"], .t3-model-picker-row[aria-checked="true"] { font-weight: var(--font-semibold); }
+.t3-model-picker-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t3-model-picker-row kbd { margin-left: auto; white-space: nowrap; font-size: var(--font-ui-smaller); color: var(--text-muted); }
+.t3-model-picker-icon { display: inline-flex; width: 14px; height: 14px; flex-shrink: 0; }
+.t3-model-picker-icon svg { width: 100%; height: 100%; }
+.t3-model-picker-options { width: 192px; flex-shrink: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--background-modifier-border); }
+.t3-model-picker-option-header { display: flex; align-items: center; gap: 8px; margin: 10px 12px 0; padding-bottom: 6px; height: 33px; flex-shrink: 0; border-bottom: 1px solid var(--background-modifier-border); color: var(--text-muted); }
+.t3-model-picker-option-header .t3-model-picker-label { text-align: right; font-size: var(--font-ui-smaller); }
+.t3-model-picker-option-content { padding: 10px 8px 6px; overflow-y: auto; min-height: 0; }
+.t3-model-picker-row[role="radio"] .t3-model-picker-icon, .t3-model-picker-default { margin-left: auto; }
+.t3-model-picker-default { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.t3-model-picker-option { min-height: 48px; }
+.t3-model-picker-option .t3-model-picker-label { display: flex; flex-direction: column; }
+.t3-model-picker-option-name { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.t3-model-picker-divider { border-top: 1px solid var(--background-modifier-border); margin: 4px 0; }
+.t3-model-picker-empty { padding: 8px; color: var(--text-muted); }
+.t3-model-picker-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--background-modifier-border); flex-shrink: 0; }
+.t3-model-picker-speed { display: flex; padding: 2px; border-radius: var(--radius-m); background: var(--background-secondary); }
+.t3-model-picker-segment { display: flex; align-items: center; gap: 4px; min-height: 24px; padding: 2px 8px; }
+.t3-model-picker-segment[aria-checked="true"], .t3-model-picker-segment[aria-pressed="true"] { background: var(--background-modifier-hover); }
+.t3-model-picker-permissions { display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 8px; margin-left: auto; }
+.t3-model-picker-footer button { font-size: var(--font-ui-smaller); }
+.t3-model-picker-menu { position: absolute; top: var(--t3-picker-menu-top); left: var(--t3-picker-menu-left); min-width: 180px; max-width: calc(100vw - 16px); max-height: 100%; overflow-y: auto; padding: 4px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: var(--background-primary); box-shadow: var(--shadow-s); z-index: 1; }
+@media (max-width: 495px) {
+ .t3-model-picker-body { flex-wrap: wrap; overflow-y: auto; }
+ .t3-model-picker-rail { max-height: 224px; }
+ .t3-model-picker-models { height: 224px; }
+ .t3-model-picker-options { width: 100%; height: 256px; border-left: 0; border-top: 1px solid var(--background-modifier-border); }
+}
+.t3-model-picker-switch { width: 26px; height: 16px; flex-shrink: 0; border-radius: 8px; padding: 2px; background: var(--background-modifier-border); }
+.t3-model-picker-switch::after { content: ''; display: block; width: 12px; height: 12px; border-radius: 50%; background: var(--text-on-accent); }
+.t3-model-picker-row[aria-checked="true"] .t3-model-picker-switch { background: var(--interactive-accent); }
+.t3-model-picker-row[aria-checked="true"] .t3-model-picker-switch::after { transform: translateX(10px); }
