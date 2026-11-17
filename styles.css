@@ -783,12 +783,14 @@ a.send-to-t3-subagent:focus-visible { outline:2px solid var(--interactive-accent
 .t3-model-picker button:disabled { opacity: .5; cursor: default; }
 .t3-model-picker-provider { position: relative; display: flex; align-items: center; justify-content: center; min-height: 36px; padding: 6px; flex-shrink: 0; }
 .t3-model-picker-provider[aria-pressed="true"]::after { content: ''; position: absolute; right: 0; width: 3px; height: 20px; border-radius: var(--radius-s); background: var(--interactive-accent); }
-.t3-model-picker-provider .t3-provider-icon, .t3-model-picker-provider .t3-model-picker-icon { width: 20px; height: 20px; }
+.t3-model-picker .t3-composer-provider { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: none; }
+.t3-model-picker .t3-composer-provider svg { width: 100%; height: 100%; }
+.t3-model-picker-provider .t3-composer-provider, .t3-model-picker-provider .t3-model-picker-icon { width: 20px; height: 20px; }
 .t3-model-picker-models { width: 316px; min-width: 0; display: flex; flex-direction: column; flex: 1; padding: 10px 12px 6px; }
 .t3-model-picker-search { display: flex; align-items: center; gap: 6px; height: 33px; flex-shrink: 0; padding-bottom: 6px; border-bottom: 1px solid var(--background-modifier-border); color: var(--text-muted); }
 .t3-model-picker-search input { width: 100%; min-width: 0; border: 0; box-shadow: none; background: none; padding: 0; height: 26px; font-size: inherit; }
 .t3-model-picker-list { padding-top: 10px; overflow-y: auto; min-height: 0; }
-.t3-model-picker-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 6px 8px; margin-bottom: 2px; text-align: left; }
+.t3-model-picker-row { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; min-height: 32px; padding: 6px 8px; margin-bottom: 2px; text-align: left; }
 .t3-model-picker-row[aria-pressed="true"], .t3-model-picker-row[aria-checked="true"] { font-weight: var(--font-semibold); }
 .t3-model-picker-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t3-model-picker-row kbd { margin-left: auto; white-space: nowrap; font-size: var(--font-ui-smaller); color: var(--text-muted); }
