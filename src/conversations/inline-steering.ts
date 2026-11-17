@@ -98,7 +98,9 @@ export function incomingLabel(message:InlineMessage,local=false):string {
     const record=senders[0],p=isRecord(record.payload)?record.payload:undefined;
     if(record.version===1&&p?.version===1&&p.kind==='agent'&&typeof p.environmentId==='string'&&uuid.test(p.environmentId)&&typeof p.threadId==='string'&&uuid.test(p.threadId)&&typeof p.title==='string'&&p.title.trim()&&p.title.length<=160)return `Agent · ${p.title}`;
   }
-  return local?'You':'User';
+  // Server-delivered task results and agent steers can omit senderThreadId.
+  // Their canonical author still identifies them without guessing from prose.
+  return message.createdBy==='agent'?'Agent':local?'You':'User';
 }
 
 /** A display association never adopts a provider turn or confirms execution.
@@ -123,9 +125,10 @@ export function incomingDisplayTurn(state:InlineThreadState,message:InlineMessag
  * Display incoming thread messages within tracked response lifecycles only.
  * This does not change execution bindings or follow later primary turns. */
 export function observeIncoming(state:InlineThreadState,turns:string[],saved:InlineSteering[]=[],local:InlineSteering[]=[],excluded:string[]=[]):InlineSteering[]{
-  const result=saved.filter(input=>{const turn=turnForMessage(state,input.messageId);return (!excluded.includes(input.messageId)||local.some(item=>item.messageId===input.messageId))&&(!turn||turns.includes(turn)||local.some(item=>item.messageId===input.messageId));}).map(input=>({...input}));
+  const presented=(message:InlineMessage|undefined)=>{const ids=message?.delegatedCompletion?.taskIds;return !!ids?.length&&ids.every(id=>!!state.subagents?.[id]&&turns.includes(state.subagents[id].runId));};
+  const result=saved.filter(input=>{if(presented(state.messages.find(message=>message.id===input.messageId)))return false;const turn=turnForMessage(state,input.messageId);return (!excluded.includes(input.messageId)||local.some(item=>item.messageId===input.messageId))&&(!turn||turns.includes(turn)||local.some(item=>item.messageId===input.messageId));}).map(input=>({...input}));
   for(const message of state.messages){
-    if(message.role!=='user'||!message.text.trim())continue;
+    if(message.role!=='user'||!message.text.trim()||presented(message))continue;
     const reservation=local.find(input=>input.messageId===message.id);
     if(!reservation&&excluded.includes(message.id))continue;
     const turn=incomingDisplayTurn(state,message,turns);

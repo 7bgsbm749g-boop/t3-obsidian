@@ -2,11 +2,12 @@
 
 The T3 Code bundle includes the following open-source dependencies. Obsidian supplies the editor runtime separately. These notices are also included in the distributed JavaScript bundle.
 
-## T3 Code provider glyphs and composer presentation
+## T3 Code provider glyphs, composer and subagent presentation
 
 Source: T3 Code, commit c52df24d28, apps/web/src/components/Icons.tsx and
 packages/shared/src/searchRanking.ts. Composer layout and menu behavior also
 reference ChatComposer.tsx, ComposerCommandMenu.tsx and composer-logic.ts.
+Subagent row presentation references apps/web/src/components/chat/V2LifecycleRow.tsx.
 
 MIT License
 

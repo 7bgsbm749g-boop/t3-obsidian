@@ -14,7 +14,7 @@ export function reconcileResponseDOM(current:Element,incoming:Element){
     name==='style'&&/^\s*--send-to-t3-shine-state:\s*(running|paused);?\s*$/.test(value);
   for(const attribute of Array.from(current.attributes))if(!incoming.hasAttribute(attribute.name)&&!(preserveOpen&&attribute.name==='open')&&!clientAttribute(attribute.name,attribute.value))current.removeAttribute(attribute.name);
   for(const attribute of Array.from(incoming.attributes))if(!(preserveOpen&&attribute.name==='open')&&current.getAttribute(attribute.name)!==attribute.value)current.setAttribute(attribute.name,attribute.value);
-  const identity=(el:Element)=>el.getAttribute('data-t3-worktree-setup')??el.getAttribute('data-worktree-setup-stage')??el.getAttribute('data-t3-tool-group')??el.getAttribute('data-t3-tool-key')??el.getAttribute('data-t3-tool-id')??(el.hasAttribute('data-t3-answer-id')?`answer:${el.getAttribute('data-t3-answer-id')}`:el.hasAttribute('data-t3-tasks-id')?`tasks:${el.getAttribute('data-t3-tasks-id')}`:null);
+  const identity=(el:Element)=>el.getAttribute('data-t3-subagent-key')??el.getAttribute('data-t3-worktree-setup')??el.getAttribute('data-worktree-setup-stage')??el.getAttribute('data-t3-tool-group')??el.getAttribute('data-t3-tool-key')??el.getAttribute('data-t3-tool-id')??(el.hasAttribute('data-t3-answer-id')?`answer:${el.getAttribute('data-t3-answer-id')}`:el.hasAttribute('data-t3-tasks-id')?`tasks:${el.getAttribute('data-t3-tasks-id')}`:null);
   const keyed=new Map(Array.from(current.children).map(el=>[identity(el),el]).filter(([key])=>!!key) as [string,Element][]);
   const incomingKeys=new Set(Array.from(incoming.children).map(identity).filter(Boolean));
   let cursor=current.firstChild;
@@ -22,7 +22,7 @@ export function reconcileResponseDOM(current:Element,incoming:Element){
     const key=next.nodeType===1?identity(next as Element):null;
     const matching=key?keyed.get(key):undefined;
     if(matching&&matching!==cursor){current.insertBefore(matching,cursor);cursor=matching;}
-    const native=next.nodeType===1&&((next as Element).matches('a, button, .internal-embed, [class*="block-language-"], .math, .mermaid'));
+    const native=next.nodeType===1&&!(next as Element).hasAttribute('data-t3-subagent-key')&&((next as Element).matches('a, button, .internal-embed, [class*="block-language-"], .math, .mermaid'));
     const oldKey=cursor?.nodeType===1?identity(cursor as Element):null;
     if(cursor&&!native&&key===oldKey&&cursor.nodeType===next.nodeType&&(next.nodeType!==1||(cursor as Element).tagName===(next as Element).tagName)){
       if(next.nodeType===1)reconcileResponseDOM(cursor as Element,next as Element);

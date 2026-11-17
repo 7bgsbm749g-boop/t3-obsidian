@@ -59,4 +59,12 @@ remain separate timeline items, and final-only history preferences retain plans.
 The design-parity replay reads baseline comparison artifacts from its parent
 evidence directory: `t3-summary.json`, `t3-worklog.css`, and `baseline-group.html`.
 These are source replay inputs, not fabricated screenshots. It also checks task
-order, compaction, continuation folds, approvals and question navigation.
+order, compaction, continuation history, approvals and question navigation.
+
+Steering from Obsidian, T3 and agents stays inside one response history fold,
+including timestamped inputs and delegated-task results. The fold retains its
+live identity and total response timer across input and recovery; completion
+closes the history and leaves the final answer outside. Canonical agent inputs
+without a sender thread use the label **Agent**, while known sender titles keep
+their existing labels. These display rules do not change run ownership or task
+completion checks. Previously saved completed responses are not rewritten.

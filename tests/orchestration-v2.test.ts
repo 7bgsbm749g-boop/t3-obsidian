@@ -70,7 +70,7 @@ test('native v2 sender identity survives snapshots and live absolute message rep
  const unknown=event(initial(),11,'message.updated',{...input,senderThreadTitle:undefined}).messages[0];
  assert.equal(incomingLabel(unknown),'Agent · 2c9cb7b6');
  assert.equal(incomingLabel({...unknown,createdBy:'user'}),'User');
- assert.equal(incomingLabel({...unknown,senderThreadId:'invalid'}),'User');
+ assert.equal(incomingLabel({...unknown,senderThreadId:'invalid'}),'Agent');
 });
 
 test('sender titles use only exact same-environment shell IDs and survive paged history',async()=>{

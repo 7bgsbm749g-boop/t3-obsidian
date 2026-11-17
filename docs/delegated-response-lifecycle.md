@@ -28,11 +28,11 @@ The final combined parent reply uses the existing final-save path. Question
 answers and steering retain their own exact bindings. Job observations also
 wait for the delegated work before reporting the parent result.
 
-The metadata contains no child prompts or reports. This change does not add
-child stream viewing or allow the response binding to change threads. Those
-features need a separate display controller and source validation. In
-particular, viewing a child must not change the parent final save or acknowledge
-the child's completion on behalf of the parent agent.
+Lifecycle metadata contains no full child prompts or reports. The separate
+[subagent display](subagents-in-stream.md) retains bounded previews and opens
+read-only child views after source validation. It does not change the response
+binding's thread. Viewing a child must not change the parent final save or
+acknowledge the child's completion on behalf of the parent agent.
 
 Regression checks cover multiple child deliveries, both message/run event
 orders, terminal-before-acknowledgement gaps, checkpoint recovery, nested

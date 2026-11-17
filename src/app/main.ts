@@ -62,6 +62,7 @@ import {isResponseCommand,validateResponseCommand} from '../responses/response-c
 import {installStreamBlockControls} from '../responses/stream-block-controls';
 import {responseMoveHistory} from '../responses/response-move';
 import {incomingLabel} from '../conversations/inline-steering';
+import {installSubagentLinks} from '../responses/response-subagents';
 import {isT3MessageId} from '../connection/t3-message-id';
 import {ProjectDiscovery,type ProjectSource,type ProjectSnapshot} from '../projects/project-discovery';
 import {composerFeedback} from '../conversations/composer-feedback';
@@ -555,13 +556,14 @@ export default class SendToT3 extends Plugin {
     const watchShine=(root:Document)=>{if(root.body&&!shineDocuments.has(root)){indicatorRoots.add(root.body);shineDocuments.set(root,installActivityShine(root));}};
     if(typeof Reflect.get(document,'querySelectorAll')==='function')this.register(watchWorkspaceDocuments(this.app,root=>{
       const presentation=installResponsePresentation(root,setIcon);watchShine(root);
+      const subagentLinks=installSubagentLinks(root,async reference=>{if(!this.sidebarThreads)throw Error('The subagent sidebar is unavailable.');await this.sidebarThreads.openSubagent(reference);},error=>new Notice(message(error),10000));
       const controls=installStreamBlockControls(this.app,root,setIcon,error=>new Notice(`T3: ${message(error)}`,10000),()=>this.openSettings(),async(id,view)=>{
         if(this.stopped||!view.file||this.deviceInline?.responseStatus(id)?.runTerminal)return;
         const hosted=this.deviceInline?.stoppableResponses(view.file.path).find(response=>response.id===id);
         await this.inlineChat!.stopAt(id,view.editor,view,hosted?.hostTarget);
       });
       this.folderIndicators?.refresh();
-      return ()=>{controls();presentation();shineDocuments.get(root)?.();shineDocuments.delete(root);indicatorRoots.delete(root.body);this.folderIndicators?.refresh();};
+      return ()=>{subagentLinks();controls();presentation();shineDocuments.get(root)?.();shineDocuments.delete(root);indicatorRoots.delete(root.body);this.folderIndicators?.refresh();};
     }));
     this.register(()=>{for(const dispose of shineDocuments.values())dispose();shineDocuments.clear();});
     const questionStorage=`${this.localKey}-questions-${this.settings.vaultId}`;

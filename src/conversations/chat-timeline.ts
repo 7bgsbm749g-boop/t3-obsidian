@@ -4,13 +4,12 @@ import {visibleInlineInput} from '../responses/input-presentation';
 import {responseWork} from '../responses/response-work';
 import {responseActivityLabel,responseActivityRow} from '../responses/response-activity';
 import {delegatedWork} from './inline-delegation';
-import {imageResultKey,renderImageResult,responseImageResults} from '../responses/image-results';
-import {htmlResultKey,renderHtmlResult,responseHtmlResults} from '../responses/html-results';
+import type {SubagentSource} from '../responses/response-subagents';
 
-export interface ChatSegment {id:string;turnId:string;input?:InlineMessage;progress:InlineMessage[];final?:InlineMessage;work:string;history?:Array<{id:string;text:string;kind:'prose'|'work';createdAt?:string;sequence:number}>;activity?:string;label:string;active:boolean;steer:boolean;timing?:{startedAt:string;finishedAt?:string}}
+export interface ChatSegment {id:string;turnId:string;input?:InlineMessage;progress:InlineMessage[];final?:InlineMessage;work:string;results?:Array<{id:string;text:string}>;history?:Array<{id:string;text:string;kind:'prose'|'work';createdAt?:string;sequence:number}>;activity?:string;label:string;active:boolean;steer:boolean;timing?:{startedAt:string;finishedAt?:string}}
 /** A workspace view of canonical runs. Uses the stream box's work presentation,
  * never its Markdown response boundaries, note reservations or final writer. */
-export function chatTimeline(state:InlineThreadState,source?:{environmentId:string;threadId:string}):ChatSegment[]{
+export function chatTimeline(state:InlineThreadState,source?:SubagentSource):ChatSegment[]{
   const result:ChatSegment[]=[],groups=new Map<string,InlineMessage[]>();
   const messages=state.messages.filter(message=>['user','assistant'].includes(message.role)&&!message.delegatedCompletion).slice(-200)
     .sort((a,b)=>a.createdAt&&b.createdAt?a.createdAt.localeCompare(b.createdAt)||(a.sequence??0)-(b.sequence??0):0);
@@ -42,7 +41,8 @@ export function chatTimeline(state:InlineThreadState,source?:{environmentId:stri
   for(const [index,segment] of result.entries()){
     const turn=state.turns?.[segment.turnId]??(state.latestTurn?.turnId===segment.turnId?state.latestTurn:undefined);
     const next=result.slice(index+1).find(item=>item.turnId===segment.turnId),last=!next;
-    segment.active=last&&(state.session?.activeTurnId===segment.turnId||['running','starting','preparing','waiting'].includes(turn?.state??'')||!turn&&segment.progress.some(message=>message.streaming));
+    const delegated=delegatedWork(state,[segment.turnId]);
+    segment.active=last&&(delegated.waiting||delegated.running||state.session?.activeTurnId===segment.turnId||['running','starting','preparing','waiting'].includes(turn?.state??'')||!turn&&segment.progress.some(message=>message.streaming));
     const phase=segment.active?'running':turn?.state==='error'||turn?.state==='failed'?'error':'complete';
     if(last&&phase==='complete'&&(turn?.state==='completed'||!turn)){
       const selected=inlineTurnMessages(state,segment.turnId).at(-1);
@@ -53,15 +53,12 @@ export function chatTimeline(state:InlineThreadState,source?:{environmentId:stri
     }
     const start=segment.input?.createdAt??turn?.startedAt??turn?.requestedAt,end=next?.input?.createdAt??(!segment.active?turn?.completedAt:undefined);
     if(start)segment.timing={startedAt:start,...(end?{finishedAt:end}:{})};
-    segment.label=phase==='error'?'Failed':turn?.state==='interrupted'||turn?.state==='cancelled'?'Stopped':segment.active?'Working':segment.steer?'Continued':'Worked';
-    const delegated=delegatedWork(state,[segment.turnId]);
-    const images=source?state.activities.filter(activity=>activity.turnId===segment.turnId).flatMap(activity=>responseImageResults(activity,source.environmentId,source.threadId).map(reference=>({id:'image:'+imageResultKey(reference),createdAt:activity.createdAt,sequence:activity.sequence??0,body:renderImageResult(reference)}))):[];
-    const html=source?responseHtmlResults(state.activities,[segment.turnId],source.environmentId,source.threadId).map(reference=>{
-      const activity=state.activities.find(activity=>activity.kind==='response.html'&&activity.payload?.itemId===reference.itemId);
-      return {id:'html:'+htmlResultKey(reference),createdAt:activity?.createdAt,sequence:activity?.sequence??0,body:renderHtmlResult(reference)};
-    }):[];
-    const work=responseWork(state,[segment.turnId],segment.turnId,phase,'collapse',delegated.paused,text=>text,[...images,...html]);
-    const rows=work.historyRows.filter(row=>{const at=Date.parse(row.createdAt??'');return !Number.isFinite(at)?last:(!start||at>=Date.parse(start))&&(!next?.input?.createdAt||at<Date.parse(next.input.createdAt));});
+    segment.label=phase==='error'?'Failed':turn?.state==='interrupted'||turn?.state==='cancelled'?'Stopped':segment.active?(delegated.paused?delegated.label:'Working'):segment.steer?'Continued':'Worked';
+    const work=responseWork(state,[segment.turnId],segment.turnId,phase,'collapse',delegated.paused,text=>text,source);
+    const inSegment=(row:{createdAt?:string})=>{const at=Date.parse(row.createdAt??'');return !Number.isFinite(at)?last:(!start||at>=Date.parse(start))&&(!next?.input?.createdAt||at<Date.parse(next.input.createdAt));};
+    const rows=work.historyRows.filter(inSegment);
+    // Generated pages are results, not hidden work. Match the editor stream.
+    segment.results=work.htmlRows.filter(inSegment).map(row=>({id:row.id,text:row.body}));
     segment.history=[...segment.progress.map(message=>({id:message.id,text:message.text,kind:'prose' as const,createdAt:message.createdAt,sequence:message.sequence??0})),...rows.map((row,index)=>({id:'work:'+('groupId' in row?row.groupId:row.id??index),text:row.body,kind:'work' as const,createdAt:row.createdAt,sequence:row.sequence}))].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
     segment.activity=segment.active?(work.currentEmission?.body??responseActivityRow(delegated.paused?delegated.label:responseActivityLabel(state,segment.turnId),work.currentTool?.tool.icon,work.activityGroup?.id)):'';
     segment.work=rows.map(row=>row.body).join('\n\n')+(segment.activity?(rows.length?'\n\n':'')+segment.activity:'');
