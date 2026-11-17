@@ -19,9 +19,10 @@ test('model selections are frozen with the resolved job without mutating the com
  assert.equal(resolved.modelSelection?.options?.[0].value,'high');
 });
 
-test('composer catalogs expose only available provider models and their advertised options',async()=>{
+test('composer catalogs mark unavailable models so sends can expose only available models and advertised options',async()=>{
  const {composerModels,composerModelLabel}=await import('../src/conversations/composer-models');
- const models=composerModels({providers:[{enabled:false,instanceId:'disabled',models:[{slug:'wrong'}]},{enabled:true,availability:'unavailable',instanceId:'offline',models:[{slug:'wrong'}]},{enabled:true,instanceId:'active',displayName:'Provider',slashCommands:[{name:'compact'},{name:'usage-limits'}],models:[{slug:'model',shortName:'Model',capabilities:{optionDescriptors:[{id:'reasoningEffort',label:'Effort',role:'reasoning',type:'select',options:[{id:'high',label:'High'}]}]}}]}]});
+ const catalog=composerModels({providers:[{enabled:false,instanceId:'disabled',models:[{slug:'wrong'}]},{enabled:true,availability:'unavailable',instanceId:'offline',models:[{slug:'wrong'}]},{enabled:true,instanceId:'active',displayName:'Provider',slashCommands:[{name:'compact'},{name:'usage-limits'}],models:[{slug:'model',shortName:'Model',capabilities:{optionDescriptors:[{id:'reasoningEffort',label:'Effort',role:'reasoning',type:'select',options:[{id:'high',label:'High'}]}]}}]}]});
+ assert.equal(catalog.find(model=>model.selection.instanceId==='offline')?.disabled,true);const models=catalog.filter(model=>!model.disabled);
  assert.deepEqual(models[0].commands.map(command=>command.name),['compact']);assert.equal(models.length,1);assert.equal(models[0].selection.instanceId,'active');assert.equal(models[0].options[0].options[0].id,'high');
  assert.equal(composerModelLabel({...models[0].selection,options:[{id:'reasoningEffort',value:'high'}]},models),'Model High');
 });

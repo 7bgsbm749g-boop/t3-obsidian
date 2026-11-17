@@ -279,8 +279,7 @@ export class SendComposer extends NoteTabPanel {
       if(target==='new')await this.host.sendToNew(this.prompt,this.projectKey,resolve);
       else await this.host.sendChat(this.prompt,this.projectKey,resolve,undefined,{...destination!,preparation:undefined});
     }catch(error){
-      if(error instanceof ProjectCreationCancelled)return;
-      logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target});new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`,10000);
+      if(!(error instanceof ProjectCreationCancelled)){logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target});new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`,10000);}
       if(!this.opened&&!(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)))this.open();
     }finally{finishPreview?.();finishPreparing?.();this.choosing=false;this.refreshAvailability?.();}
   }

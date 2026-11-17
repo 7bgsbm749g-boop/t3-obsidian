@@ -5,7 +5,7 @@ import {build} from './build-fixture';
 import {runInNewContext} from './obsidian-context';
 import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url);
-const compiled=build({entryPoints:['src/conversations/chat-ui.ts'],bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
+const compiled=build({stdin:{contents:"export * from './src/conversations/chat-ui'; export {ProjectCreationCancelled} from './src/projects/project-create-ui';",resolveDir:process.cwd(),sourcefile:'chat-ui-fixture.ts'},bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
 interface FixtureOptions {automatic?:boolean;remembered?:boolean;steering?:boolean;busy?:boolean;confirmed?:boolean;restriction?:string;prompt?:string}
 async function fixture({automatic=false,remembered=false,steering=false,busy=false,confirmed=remembered,restriction='',prompt=''}:FixtureOptions={}){
  const {document,window}=parseHTML('<html><body></body></html>'),modals:any[]=[],menus:any[]=[],notices:string[]=[],sent:any[]=[],checks:any[]=[],previews:string[]=[],preparing:string[]=[],drafts:string[]=[];
@@ -212,6 +212,12 @@ test('new project waits for its machine choice and then loads and submits only t
 
 test('cancelled machine selection retains the previous project, model and draft',async()=>{
  const h=await fixture();await h.modal.modelReady;h.type('Keep this');h.modal.overrides.modelSelection={instanceId:'old',model:'old-model'};
- h.host.chooseProject=async()=>{throw Error('Cancelled machine choice');};await h.modal.changeProject('folder:new');
+ h.host.chooseProject=async()=>{throw new h.exports.ProjectCreationCancelled();};await h.modal.changeProject('folder:new');
  assert.equal(h.modal.projectKey,'project');assert.equal(h.modal.field.value,'Keep this');assert.equal(h.modal.overrides.modelSelection.model,'old-model');assert.equal(h.sent.length,0);h.modal.close();
+});
+
+test('cancelling the workspace picker reopens the same composer with its draft, machine and options',async()=>{
+ const h=await fixture();await h.modal.modelReady;h.modal.projectKey='folder:new:vps';h.type('Keep this unsent question');h.modal.overrides.modelSelection={instanceId:'vps-provider',model:'chosen-model'};h.modal.overrides.inline={enabled:false,finalAnswerFormat:'raw-markdown'};
+ h.host.sendToNew=async()=>{throw new h.exports.ProjectCreationCancelled();};await h.modal.choose();
+ assert.equal(h.modal.opened,true);assert.equal(h.modals.at(-1),h.modal);assert.equal(h.modal.field.value,'Keep this unsent question');assert.equal(h.modal.projectKey,'folder:new:vps');assert.equal(h.modal.overrides.modelSelection.model,'chosen-model');assert.equal(h.modal.overrides.inline.enabled,false);assert.equal(h.modal.overrides.inline.finalAnswerFormat,'raw-markdown');assert.equal(h.notices.length,0);assert.equal(h.sent.length,0);assert.equal(h.button('Send ask').disabled,false);h.modal.close();
 });
