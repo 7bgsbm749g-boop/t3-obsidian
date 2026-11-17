@@ -890,7 +890,7 @@ a.send-to-t3-subagent:focus-visible { outline:2px solid var(--interactive-accent
   font-size: var(--font-ui-small);
   -webkit-app-region: no-drag;
 }
-.t3-update-banner-header { grid-column: 1 / -1; min-width: 0; }
+.t3-update-banner-header { grid-column: 1 / -1; min-width: 0; padding-bottom: var(--size-4-1); }
 .t3-update-banner-title { overflow-wrap: anywhere; }
 .t3-update-banner-message { grid-column: 1 / -1; overflow-wrap: anywhere; color: var(--text-muted); }
 .t3-update-banner-notes { grid-column: 1; grid-row: 2; min-height: 0; overflow: auto; overflow-wrap: anywhere; }
