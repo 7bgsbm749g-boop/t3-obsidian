@@ -138,6 +138,7 @@ export class SendComposer extends NoteTabPanel {
     this.capture();this.suggestions?.dispose();this.suggestions=undefined;this.opened=true;const revision=++this.revision;
     logEvent('ui.destination.opened',{notePath:this.host.getNotePath(),steering:this.host.steering,projectKey:this.projectKey});
     this.titleEl.setText('Send composer');this.titleEl.hidden=true;this.modalEl.classList.add('t3-send-panel');this.contentEl.empty();
+    this.titleEl.id||=`t3-send-title-${crypto.randomUUID()}`;this.modalEl.setAttribute('aria-labelledby',this.titleEl.id);this.modalEl.removeAttribute('aria-label');
     const composer=this.contentEl.createDiv({cls:'t3-send-composer'});
     const context=composer.createDiv({cls:'t3-send-context'});
     setIcon(context.createSpan(),'file-text');context.createSpan({text:this.host.contextLabel??this.host.getNotePath().split('/').at(-1)??'Note',cls:'t3-send-source'});
@@ -145,7 +146,8 @@ export class SendComposer extends NoteTabPanel {
       this.capture();new ChatProjectModal(this.app,()=>this.host.getProjectChoices(),key=>{if(!this.opened||this.choosing)return;this.projectKey=key;this.target='new';this.destination=undefined;this.overrides.modelSelection=undefined;this.overrides.interactionMode=undefined;this.overrides.context=undefined;this.models=[];this.defaultSelection=undefined;this.modelLoadKey=undefined;this.cancelCheck();this.onOpen();},this.host.onProjectChange?.bind(this.host)).open();
     },'t3-send-project');
     project.createSpan({text:this.host.getProjectName(this.projectKey)});setIcon(project.createSpan(),'chevron-down');project.title=this.host.getTargetDescription(this.projectKey);
-    this.field=composer.createEl('textarea',{cls:'t3-send-input',attr:{'aria-label':'Ask about this note or selection',placeholder:'Ask anything. @ files, $ skills, / commands',rows:'2'}});this.field.value=this.prompt;
+    const promptName=composer.createSpan({text:'Ask about this note or selection',attr:{id:`t3-send-prompt-${crypto.randomUUID()}`,hidden:''}});
+    this.field=composer.createEl('textarea',{cls:'t3-send-input',attr:{'aria-labelledby':promptName.id,placeholder:'Ask anything. @ files, $ skills, / commands',rows:'2'}});this.field.value=this.prompt;
     this.suggestions=new ComposerSuggestions(this.field,composer,{action:name=>{if(name==='model')void this.chooseModel();else{this.overrides.interactionMode=name==='plan'?'plan':'default';this.refreshAvailability?.();new Notice(name==='plan'?'Plan mode enabled':'Normal mode enabled');}},catalog:async()=>{await this.modelReady;return {model:this.selectedModel()};},files:query=>this.host.searchFiles?.(query,this.projectKey,this.target==='new'?undefined:this.destination)??Promise.resolve([]),changed:()=>{this.overrides.context=this.suggestions?.context();this.capture();this.refreshAvailability?.();}},this.overrides.context);
     this.field.addEventListener('input',()=>{this.capture();this.refreshAvailability?.();});
     this.field.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();void this.choose();}});
