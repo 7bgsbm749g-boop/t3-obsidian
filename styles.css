@@ -824,3 +824,30 @@ a.send-to-t3-subagent:focus-visible { outline:2px solid var(--interactive-accent
 .t3-model-picker-switch::after { content: ''; display: block; width: 12px; height: 12px; border-radius: 50%; background: var(--text-on-accent); }
 .t3-model-picker-row[aria-checked="true"] .t3-model-picker-switch { background: var(--interactive-accent); }
 .t3-model-picker-row[aria-checked="true"] .t3-model-picker-switch::after { transform: translateX(10px); }
+.t3-update-banner {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + var(--header-height, 40px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--layer-notice);
+  width: min(760px, calc(100% - 32px));
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: var(--size-4-3);
+  padding: var(--size-4-2) var(--size-4-4);
+  padding-top: max(var(--size-4-2), env(safe-area-inset-top));
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  -webkit-app-region: no-drag;
+}
+.t3-update-banner-message { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.t3-update-banner-actions { display: flex; flex: 0 0 auto; gap: var(--size-4-2); }
+@media (max-width: 480px) {
+  .t3-update-banner { flex-wrap: wrap; }
+  .t3-update-banner-actions { margin-left: auto; }
+}
