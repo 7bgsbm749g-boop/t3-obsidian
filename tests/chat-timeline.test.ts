@@ -24,3 +24,22 @@ test('composer catalog exposes only available providers and their actual option 
  const models=composerModels({providers:[{instanceId:'off',enabled:false,models:[{slug:'hidden'}]},{instanceId:'codex',enabled:true,driver:'codex',displayName:'Codex',models:[{slug:'sol',name:'6.1 Sol',capabilities:{optionDescriptors:[{id:'reasoningEffort',label:'Reasoning',role:'reasoning',type:'select',options:[{id:'xhigh',label:'Extra High'}]}]}}],skills:[{name:'example',path:'/synthetic/SKILL.md',enabled:true}],slashCommands:[{name:'compact'}]}]});
  assert.equal(models.length,1);assert.equal(models[0].skills[0].name,'example');assert.equal(models[0].commands[0].name,'compact');assert.equal(composerModelLabel({instanceId:'codex',model:'sol',options:[{id:'reasoningEffort',value:'xhigh'}]},models),'6.1 Sol Extra High');
 });
+
+
+test('waking children keep a completed parent open until the result is delivered',()=>{
+ const state=thread();state.subagents={child:{id:'child',runId:'run',status:'running',origin:'app_owned',completionWake:'always'}};
+ const [waiting]=chatTimeline(state);assert.equal(waiting.active,true);assert.equal(waiting.final,undefined);assert.equal(waiting.timing?.finishedAt,undefined);assert.match(waiting.label,/Waiting for 1 subagent/);
+ state.subagents.child.status='completed';state.subagents.child.completionDelivery={state:'pending'};
+ assert.equal(chatTimeline(state)[0].active,true);
+ state.subagents.child.completionDelivery={state:'delivered'};
+ const [done]=chatTimeline(state);assert.equal(done.active,false);assert.equal(done.final?.id,'answer');assert.equal(done.timing?.finishedAt,end);
+});
+
+test('sidebar keeps the latest generated HTML page in chronological work history',()=>{
+ const state=thread(),source={environmentId:'env',threadId:'thread'};
+ const html=(id:string,revision:string,title:string)=>({id,summary:title,kind:'response.html',turnId:'run',createdAt:start,sequence:2,payload:{itemId:'page',revision,htmlRender:{attachmentId:'synthetic_html',title,height:300}}});
+ state.activities=[html('old','1','Old page'),html('new','2','Generated page')];
+ const [segment]=chatTimeline(state,source),pages=segment.history!.filter(row=>row.text.includes('```t3-html'));
+ assert.equal(pages.length,1);assert.match(pages[0].text,/Generated page/);assert.doesNotMatch(pages[0].text,/Old page/);assert.match(pages[0].text,/"environmentId":"env"/);assert.match(segment.work,/synthetic_html/);
+ assert.equal(chatTimeline(state)[0].history?.filter(row=>row.text.includes('```t3-html')).length,0);
+});

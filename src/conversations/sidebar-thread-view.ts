@@ -1,7 +1,7 @@
-import type {OutgoingContext} from '../connection/send-contracts';
+import type {OutgoingAttachment,OutgoingContext} from '../connection/send-contracts';
 import {FuzzySuggestModal,ItemView,Modal,Notice,Setting,setIcon,type App,type Plugin,type WorkspaceLeaf} from 'obsidian';
 import {ChatTranscript} from './chat-transcript';
-import {ChatComposer} from './chat-composer';
+import {ChatComposer,readDraftAttachments} from './chat-composer';
 import {readComposerSettings,type ComposerModel,type ComposerSettings} from './composer-models';
 import type {SidebarSendOptions,SidebarProject} from './sidebar-thread-model';
 import {applyThreadItem,type InlineThreadState,type InlineSubagent} from './inline-thread';
@@ -106,24 +106,25 @@ class DeleteSideChat extends Modal {
 export class SidebarThreadView extends ItemView {
   target?:SidebarTarget;
   private project?:ProjectChoice;private state:InlineThreadState={messages:[],activities:[]};
-  private monitor?:{stop():void};private epoch=0;private closed=true;private sending=false;private online=false;
-  private draftContext?:OutgoingContext;private draft='';private sequence=-1;private settings:ComposerSettings={};private root?:string;
+  private monitor?:{stop():void};private parentMonitor?:{stop():void};private epoch=0;private closed=true;private sending=false;private online=false;
+  private draftAttachments:OutgoingAttachment[]=[];private draftContext?:OutgoingContext;private draft='';private sequence=-1;private settings:ComposerSettings={};private root?:string;
   private pending?:{text:string;commandId:string;messageId:string;threadId:string;options:SidebarSendOptions};
   private transcript?:ChatTranscript;private composer?:ChatComposer;private status?:HTMLElement;private title?:HTMLElement;private backButton?:HTMLButtonElement;private breadcrumb?:HTMLElement;
   private requests?:HTMLElement;private requestKey='';private disposeRequests?:()=>void;private parentBusy=false;
   constructor(leaf:WorkspaceLeaf,readonly owner:SidebarThreads,private kind:SidebarKind){super(leaf);}
   getViewType(){return TYPES[this.kind];}getDisplayText(){return this.target?.title??LABELS[this.kind];}getIcon(){return this.kind==='subagent'?'bot':this.kind==='side-chat'?'messages-square':'message-circle';}
-  getState(){return {target:this.target,project:this.project,draft:this.draft,pending:this.pending,settings:this.settings,context:this.composer?.options().context??this.draftContext};}
+  getState(){return {target:this.target,project:this.project,draft:this.draft,pending:this.pending,settings:this.settings,attachments:this.composer?.options().attachments??this.draftAttachments,context:this.composer?.options().context??this.draftContext};}
   async setState(state:Record<string,unknown>,result:import('obsidian').ViewStateResult){
     this.target=sidebarTarget(state.target);if(this.target?.kind!==this.kind)this.target=undefined;
     const project=state.project;this.project=isRecord(project)?this.owner.host.projects().find(choice=>choice.key===project.key):undefined;
     this.draft=typeof state.draft==='string'?state.draft.slice(0,120_000):'';
+    this.draftAttachments=readDraftAttachments(state.attachments);
     this.settings=readComposerSettings(state.settings);this.draftContext=isRecord(state.context)&&Array.isArray(state.context.records)?{version:1,records:state.context.records.filter(isRecord).slice(0,100)}:undefined;
     this.pending=isRecord(state.pending)&&typeof state.pending.text==='string'&&typeof state.pending.commandId==='string'&&typeof state.pending.messageId==='string'?state.pending as unknown as typeof this.pending:undefined;
     await super.setState(state,result);if(!this.closed){this.layout();this.connect();}
   }
   async onOpen(){this.closed=false;this.layout();this.connect();}
-  async onClose(){this.closed=true;this.epoch++;this.monitor?.stop();this.clearComponents();}
+  async onClose(){this.closed=true;this.epoch++;this.monitor?.stop();this.parentMonitor?.stop();this.clearComponents();}
   private clearComponents(){this.disposeRequests?.();this.disposeRequests=undefined;if(this.transcript)this.removeChild(this.transcript);if(this.composer)this.removeChild(this.composer);this.transcript=undefined;this.composer=undefined;this.requestKey='';}
   private action(parent:HTMLElement,label:string,icon:string|undefined,run:()=>void|Promise<void>){const button=parent.createEl('button',{cls:icon?'clickable-icon t3-chat-icon':'clickable-icon t3-chat-text-action',attr:{type:'button','aria-label':label,title:label}});if(icon)setIcon(button,icon);else button.setText(label);button.addEventListener('click',()=>{void Promise.resolve().then(run).catch(error=>this.owner.report(error));});return button;}
   private layout(){
@@ -145,14 +146,14 @@ export class SidebarThreadView extends ItemView {
         models:async()=>{const target=this.target??this.draftTarget();if(!target)return [];return this.owner.host.catalog?this.owner.host.catalog(target):this.owner.transport.catalog(target,this.root??this.project?.workspaceRoot);},
         configure:async settings=>{if(this.target)await this.owner.transport.configure(this.target,settings);this.settings=settings;this.app.workspace.requestSaveLayout();},
         files:async query=>{const target=this.target??this.draftTarget(),cwd=this.root??this.project?.workspaceRoot;if(!target||!cwd)return [];return this.owner.host.files?this.owner.host.files(target,cwd,query):this.owner.transport.files(target,cwd,query);},
-      },this.draft);this.addChild(this.composer);this.composer.restoreContext(this.pending?.options?.context??this.draftContext);if(this.pending?.options?.attachments)this.composer.restoreAttachments(this.pending.options.attachments);
+      },this.draft);this.addChild(this.composer);this.composer.restoreContext(this.pending?.options?.context??this.draftContext);this.composer.restoreAttachments(this.pending?.options?.attachments??this.draftAttachments);
     }
     this.updateControls();
   }
   private draftTarget():SidebarTarget|undefined{return this.project?{kind:'thread',threadId:'draft',environmentId:this.project.environmentId,projectId:this.project.projectId,title:'New thread'}:undefined;}
   private setStatus(text?:string){if(this.status){this.status.hidden=!text;this.status.setText(text??'');}}
   private connect(){
-    this.monitor?.stop();this.monitor=undefined;const epoch=++this.epoch;this.state={messages:[],activities:[]};this.sequence=-1;this.online=false;
+    this.monitor?.stop();this.monitor=undefined;this.parentMonitor?.stop();this.parentMonitor=undefined;this.parentBusy=!!this.target?.parent;const epoch=++this.epoch;this.state={messages:[],activities:[]};this.sequence=-1;this.online=false;
     if(!this.target){this.root=this.project?.workspaceRoot;this.setStatus(this.project?undefined:'Choose a connected T3 thread.');if(this.project&&!this.settings.modelSelection)void this.owner.transport.defaults(this.project).then(defaults=>{if(this.closed||epoch!==this.epoch||this.settings.modelSelection)return;this.settings=defaults;this.updateControls();void this.composer?.refreshModels().catch(()=>{});}).catch(()=>{});this.updateControls();return;}
     this.setStatus('Connecting…');const target=this.target;
     const callbacks:ThreadStreamCallbacks={
@@ -175,7 +176,24 @@ export class SidebarThreadView extends ItemView {
       failure:error=>{if(!this.closed&&epoch===this.epoch){this.online=false;this.setStatus(error.message);this.updateControls();}},
     };
     this.monitor=this.owner.host.watch?this.owner.host.watch(target,callbacks):this.owner.watch(target.threadId,()=>this.owner.host.access(target.environmentId),callbacks);
-    if(target.parent)void this.owner.transport.snapshot(target.parent).then(({thread})=>{if(this.closed||epoch!==this.epoch)return;this.parentBusy=sidebarRunning(thread);this.breadcrumb?.setText('Context from · '+(thread.title||'Parent thread'));this.updateControls();}).catch(()=>{});
+    if(target.parent){
+      const parent:SidebarTarget={...target.parent,kind:'thread',title:'Parent thread'};
+      let state:InlineThreadState={messages:[],activities:[]},sequence=-1,parentOnline=false;
+      const unavailable=()=>{if(this.closed||epoch!==this.epoch)return;parentOnline=false;this.parentBusy=true;this.updateControls();};
+      const parentCallbacks:ThreadStreamCallbacks={item:item=>{
+        if(this.closed||epoch!==this.epoch)return;
+        const next=item.kind==='snapshot'?item.snapshot.snapshotSequence:item.kind==='event'?item.event.sequence:undefined;
+        if(typeof next==='number'){if(next<sequence||item.kind==='event'&&next===sequence)return;sequence=next;}
+        if(item.kind==='snapshot'){
+          const thread=item.snapshot.thread;if(thread.id!==parent.threadId||thread.projectId!==parent.projectId||thread.archivedAt||thread.deletedAt){unavailable();return;}
+          parentOnline=true;
+        }
+        if(!parentOnline)return;
+        state=applyThreadItem(state,item).state;this.parentBusy=sidebarRunning(state);
+        this.breadcrumb?.setText('Context from \u00b7 '+(state.title||'Parent thread'));this.updateControls();
+      },reconnecting:unavailable,failure:unavailable};
+      this.parentMonitor=this.owner.host.watch?this.owner.host.watch(parent,parentCallbacks):this.owner.watch(parent.threadId,()=>this.owner.host.access(parent.environmentId),parentCallbacks);
+    }
     this.updateControls();
   }
   private updateControls(){
@@ -194,7 +212,7 @@ export class SidebarThreadView extends ItemView {
       this.pending??={text,commandId:this.owner.host.uuid(),messageId:this.owner.host.uuid(),threadId:this.owner.host.uuid(),options};this.app.workspace.requestSaveLayout();
       if(this.target)await this.owner.transport.send(this.target,text,this.pending.commandId,this.pending.messageId,this.pending.options);
       else{this.target=this.owner.host.create?await this.owner.host.create(this.project!,text,options):await this.owner.transport.launch(this.project!,text,this.pending.commandId,this.pending.threadId,this.pending.messageId,this.pending.options);this.project=undefined;this.owner.host.created?.(this.target);this.connect();}
-      this.pending=undefined;this.draftContext=undefined;this.draft='';this.composer?.clear();this.app.workspace.requestSaveLayout();
+      this.pending=undefined;this.draftContext=undefined;this.draftAttachments=[];this.draft='';this.composer?.clear();this.app.workspace.requestSaveLayout();
     }catch(error){this.owner.report(error);}finally{this.sending=false;this.updateControls();}
   }
 }

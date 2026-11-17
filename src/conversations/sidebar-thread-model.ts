@@ -1,4 +1,5 @@
 import {acquireT3UnaryRpc} from '../connection/t3-rpc';
+import {delegatedWork} from './inline-delegation';
 import {readNewThreadDefaults} from './model-defaults';
 import {composerModels,type ComposerSettings} from './composer-models';
 import type {OutgoingAttachment,OutgoingContext} from '../connection/send-contracts';
@@ -22,7 +23,11 @@ export function subagentTarget(parent:ThreadTarget,child:InlineSubagent):Sidebar
   if(!child.childThreadId||child.remoteChild)return;
   return {...parent,threadId:child.childThreadId,title:child.title||'Subagent',kind:'subagent',parent};
 }
-export function sidebarRunning(state:InlineThreadState){return threadIsActive(state)||Object.values(state.turns??{}).some(turn=>['running','starting','preparing','waiting'].includes(turn.state));}
+export function sidebarRunning(state:InlineThreadState){
+  const turns={...state.turns,...(state.latestTurn?{[state.latestTurn.turnId]:state.latestTurn}:{})};
+  const work=delegatedWork(state,[...new Set([...Object.keys(turns),...Object.values(state.subagents??{}).map(child=>child.runId)])]);
+  return threadIsActive(state)||Object.values(turns).some(turn=>['running','starting','preparing','waiting'].includes(turn.state))||work.waiting||work.running;
+}
 
 /** All mutations check fresh canonical identity. This transport has no note IO,
  * response reservations, or stream registrations. */

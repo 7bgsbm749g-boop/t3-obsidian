@@ -2,8 +2,20 @@ import {Component,FuzzySuggestModal,Modal,Notice,Setting,setIcon,type App} from 
 import type {OutgoingAttachment,OutgoingContext} from '../connection/send-contracts';
 import {composerModelLabel,type ComposerModel,type ComposerSettings} from './composer-models';
 import type {RuntimeMode} from './model-defaults';
+import {isRecord} from '../shared/values';
 import {clockForDocument,type TimerHandle} from '../shared/clock';
 
+/** Keep only bounded, locally encoded image drafts from workspace state. */
+export function readDraftAttachments(value:unknown):OutgoingAttachment[]{
+ if(!Array.isArray(value)||value.length>4)return [];
+ let bytes=0;const result:OutgoingAttachment[]=[];
+ for(const item of value){
+  if(!isRecord(item)||typeof item.id!=='string'||!item.id||typeof item.dataUrl!=='string'||!/^data:image\/(?:png|jpeg|gif|webp);base64,/.test(item.dataUrl))return [];
+  bytes+=item.dataUrl.length;if(bytes>14*1024*1024)return [];
+  result.push({...item} as unknown as OutgoingAttachment);
+ }
+ return result;
+}
 export interface ComposerHost {uuid():string;changed(text:string):void;send():Promise<void>;stop():Promise<void>;models():Promise<ComposerModel[]>;configure(settings:ComposerSettings):Promise<void>;files(query:string):Promise<string[]>}
 class ModelChoice extends FuzzySuggestModal<ComposerModel>{
  constructor(app:App,private choices:ComposerModel[],private choose:(model:ComposerModel)=>void){super(app);this.setPlaceholder('Choose provider and model');}
@@ -78,7 +90,7 @@ export class ChatComposer extends Component {
    if(files.some(file=>!['image/png','image/jpeg','image/gif','image/webp'].includes(file.type)))throw Error('Choose PNG, JPEG, GIF, or WebP images.');
    if([...this.attachments.map(file=>file.sizeBytes??0),...files.map(file=>file.size)].reduce((a,b)=>a+b,0)>10*1024*1024)throw Error('Keep attached images below 10 MiB in total.');
    const prepared:OutgoingAttachment[]=[];for(const file of files){const dataUrl=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();this.readers.add(reader);reader.onloadend=()=>this.readers.delete(reader);reader.onabort=()=>reject(Error('Image loading cancelled.'));reader.onload=()=>typeof reader.result==='string'?resolve(reader.result):reject(Error('Cannot decode this image.'));reader.onerror=()=>reject(Error('Cannot read this image.'));reader.readAsDataURL(file);});prepared.push({id:this.host.uuid(),name:file.name,mimeType:file.type,sizeBytes:file.size,dataUrl,type:'image'});}
-   if(this.dead)return;this.attachments.push(...prepared);this.drawAttachments();this.controls();
+   if(this.dead)return;this.attachments.push(...prepared);this.drawAttachments();this.controls();this.host.changed(this.input.value);
   }catch(error){this.failure(error);}
  }
  private drawAttachments(){this.chips.empty();for(const item of this.attachments){const chip=this.chips.createSpan({cls:'t3-composer-attachment',text:item.name});if(item.dataUrl)chip.createEl('img',{cls:'t3-composer-thumbnail',attr:{src:item.dataUrl,alt:item.name??'Attached image'}});this.icon(chip,'x','Remove '+item.name,()=>{if(this.busy||this.locked)return;this.attachments=this.attachments.filter(value=>value.id!==item.id);this.host.changed(this.input.value);this.drawAttachments();this.controls();});}}

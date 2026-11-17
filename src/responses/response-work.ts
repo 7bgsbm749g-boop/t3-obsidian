@@ -1,6 +1,7 @@
 import type {InlineThreadState} from '../conversations/inline-thread';
 import {responseToolGroups,currentResponseToolGroup,renderResponseToolGroup} from './response-tools';
 import {responseImageResults,renderImageResult} from './image-results';
+import {responseHtmlResults,renderHtmlResult} from './html-results';
 import {responseEmissions} from './response-emissions';
 import type {IntermediateMode} from './response-presentation';
 import type {SubagentSource} from './response-subagents';
@@ -9,6 +10,10 @@ import type {SubagentSource} from './response-subagents';
  * same tool/thought/emission ordering and current-activity ownership. No IO. */
 export function responseWork(state:InlineThreadState,turns:string[],turnId:string,phase:string,mode:IntermediateMode,waiting:boolean,markdown:(text:string)=>string,source?:SubagentSource){
   const imageRows=source?state.activities.filter(activity=>turns.includes(activity.turnId??'')).flatMap(activity=>responseImageResults(activity,source.environmentId,source.threadId).map((reference,index)=>({id:`${activity.id}:image:${index}`,createdAt:activity.createdAt,sequence:activity.sequence??0,body:renderImageResult(reference)}))):[];
+  const htmlRows=source?responseHtmlResults(state.activities,turns,source.environmentId,source.threadId).map(reference=>{
+    const activity=[...state.activities].reverse().find(activity=>activity.kind==='response.html'&&activity.turnId===reference.runId&&activity.payload?.itemId===reference.itemId);
+    return {id:`${reference.runId}:html:${reference.itemId}`,createdAt:activity?.createdAt,sequence:activity?.sequence??0,body:renderHtmlResult(reference)};
+  }):[];
   const toolGroups=responseToolGroups(state,turns);
   const emissions=responseEmissions(state,turns,markdown,phase==='running'?turnId:undefined,source);
   let currentTool=phase==='running'&&!waiting?currentResponseToolGroup(state,turnId,toolGroups):undefined;
@@ -19,5 +24,5 @@ export function responseWork(state:InlineThreadState,turns:string[],turnId:strin
   if(currentEmission)currentTool=undefined;
   const workRows=toolGroups.map(group=>({groupId:group.id,createdAt:group.createdAt,sequence:group.sequence??0,body:renderResponseToolGroup(group),hasThoughts:!!group.thoughts?.length}));
   const historyRows=[...workRows,...(mode==='collapse'?imageRows:[]),...emissions.filter(item=>item!==currentEmission&&(mode==='collapse'||!['response.plan','response.proposed-plan'].includes(item.kind)))].sort((a,b)=>(Date.parse(a.createdAt??'')||0)-(Date.parse(b.createdAt??'')||0)||a.sequence-b.sequence);
-  return {imageRows,toolGroups,workRows,historyRows,currentTool,currentEmission,activityGroup:toolGroups.filter(group=>group.turnId===turnId).at(-1)};
+  return {htmlRows,imageRows,toolGroups,workRows,historyRows,currentTool,currentEmission,activityGroup:toolGroups.filter(group=>group.turnId===turnId).at(-1)};
 }

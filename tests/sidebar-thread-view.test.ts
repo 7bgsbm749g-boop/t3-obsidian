@@ -11,16 +11,16 @@ async function fixture(kind='thread'){
  proto.createDiv=function(options:any){return this.createEl('div',options);};proto.createSpan=function(options:any){return this.createEl('span',options);};proto.empty=function(){this.replaceChildren();};proto.addClass=function(value:string){this.classList.add(value);};proto.setText=function(value:string){this.textContent=value;};proto.toggleClass=function(value:string,on:boolean){this.classList.toggle(value,on);};
  class Component{load(){}unload(){}addChild(){}removeChild(){}register(){}registerDomEvent(){}}
  class ItemView extends Component{app:any;contentEl:any;constructor(leaf:any){super();this.app=app;this.contentEl=leaf.contentEl;}async setState(){}}
- const app:any={workspace:{requestSaveLayout(){},getActiveViewOfType(){},getLeavesOfType(){return [];}}},module={exports:{} as any},notices:string[]=[],watches:any[]=[],sent:any[]=[];
- runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:()=>({ItemView,Component,FuzzySuggestModal:class{},Modal:class{},Setting:class{},setIcon:()=>{},Notice:class{constructor(text:string){notices.push(text);}},MarkdownRenderer:{render:async(_app:any,text:string,el:any)=>{if(text.startsWith('<'))el.innerHTML=text;else el.textContent=text;}}}),console,setTimeout,clearTimeout,performance,URL,URLSearchParams,AbortController,document});
+ let saves=0;const app:any={workspace:{requestSaveLayout(){saves++;},getActiveViewOfType(){},getLeavesOfType(){return [];}}},module={exports:{} as any},notices:string[]=[],watches:any[]=[],sent:any[]=[];
+ runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:()=>({ItemView,Component,FuzzySuggestModal:class{},Modal:class{},Setting:class{},setIcon:()=>{},Notice:class{constructor(text:string){notices.push(text);}},MarkdownRenderer:{render:async(_app:any,text:string,el:any)=>{if(text.startsWith('<'))el.innerHTML=text;else el.textContent=text;}}}),console,setTimeout,clearTimeout,performance,URL,URLSearchParams,AbortController,document,FileReader:class{result='data:image/png;base64,c3ludGhldGlj';onload?:()=>void;onloadend?:()=>void;readAsDataURL(){queueMicrotask(()=>{this.onload?.();this.onloadend?.();});}}});
  const contentEl=document.createElement('div');document.body.appendChild(contentEl);
  let serial=0,fail=false;
- const owner:any={host:{uuid:()=>`id-${++serial}`,projects:()=>[]},watch:(_id:any,_access:any,callbacks:any)=>{const entry={callbacks,stopped:false};watches.push(entry);return {stop:()=>{entry.stopped=true;}};},transport:{snapshot:async(target:any)=>({thread:{id:target.threadId,projectId:'project',title:'Parent',messages:[],activities:[]}}),send:async(...args:any[])=>{sent.push(args);if(fail)throw Error('Unconfirmed');}},report:(error:Error)=>notices.push(error.message)};
+ const owner:any={host:{uuid:()=>`id-${++serial}`,projects:()=>[]},watch:(_id:any,_access:any,callbacks:any)=>{const entry={id:_id,callbacks,stopped:false};watches.push(entry);return {stop:()=>{entry.stopped=true;}};},transport:{snapshot:async(target:any)=>({thread:{id:target.threadId,projectId:'project',title:'Parent',messages:[],activities:[]}}),send:async(...args:any[])=>{sent.push(args);if(fail)throw Error('Unconfirmed');}},report:(error:Error)=>notices.push(error.message)};
  const view=new module.exports.SidebarThreadView({contentEl},owner,kind);await view.onOpen();
  const target={kind,threadId:'thread',projectId:'project',environmentId:'env',title:'Synthetic',...(kind==='thread'?{}:{parent:{threadId:'parent',projectId:'project',environmentId:'env'}})};
  await view.setState({target},{});
- const snapshot=async(extra:any={})=>{watches.at(-1).callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:5,thread:{id:'thread',projectId:'project',messages:[{id:'user',role:'user',text:'Question',turnId:'run',streaming:false},{id:'reply',role:'assistant',text:'Answer',turnId:'run',streaming:true}],activities:[],...extra}}});await Promise.resolve();await Promise.resolve();};
- return {exports:module.exports,app,window,view,contentEl,watches,snapshot,sent,notices,setFail:(value:boolean)=>{fail=value;},input:(text:string)=>{const field=contentEl.querySelector('textarea')!;field.value=text;field.dispatchEvent(new window.Event('input'));}};
+ const snapshot=async(extra:any={})=>{[...watches].reverse().find(watch=>watch.id==='thread').callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:5,thread:{id:'thread',projectId:'project',messages:[{id:'user',role:'user',text:'Question',turnId:'run',streaming:false},{id:'reply',role:'assistant',text:'Answer',turnId:'run',streaming:true}],activities:[],...extra}}});await Promise.resolve();await Promise.resolve();};
+ return {exports:module.exports,app,window,view,saves:()=>saves,contentEl,watches,snapshot,sent,notices,setFail:(value:boolean)=>{fail=value;},input:(text:string)=>{const field=contentEl.querySelector('textarea')!;field.value=text;field.dispatchEvent(new window.Event('input'));}};
 }
 test('native pages share transcript, preserve composer during updates, reject stale/wrong-source data and stop on close',async()=>{
  const f=await fixture();await f.snapshot();f.input('Retained draft');const field=f.contentEl.querySelector('textarea');assert.match(f.contentEl.textContent!,/Question.*Answer/s);
@@ -75,4 +75,34 @@ test('Enter sends; Shift+Enter and input composition do not send',async()=>{
  const f=await fixture();await f.snapshot();f.input('Keyboard send');const input=f.contentEl.querySelector('textarea')!;
  const key=(shiftKey:boolean,isComposing:boolean)=>{const event=new f.window.Event('keydown',{bubbles:true,cancelable:true});Object.assign(event,{key:'Enter',shiftKey,isComposing});input.dispatchEvent(event);};
  key(true,false);key(false,true);await Promise.resolve();assert.equal(f.sent.length,0);key(false,false);await Promise.resolve();await Promise.resolve();assert.equal(f.sent.length,1);
+});
+
+
+test('side chat follows live parent status, fails closed on reconnect, and releases both subscriptions',async()=>{
+ const f=await fixture('side-chat'),parent=f.watches.find(watch=>watch.id==='parent');
+ await f.snapshot({messages:[{id:'reply',role:'assistant',text:'Finished',turnId:'run',streaming:false}],turns:{run:{turnId:'run',state:'completed'}}});
+ const button=f.contentEl.querySelector<HTMLButtonElement>('[aria-label="Bring back"]')!;
+ assert.equal(button.disabled,true);
+ const update=(sequence:number,extra:any={})=>parent.callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:sequence,thread:{id:'parent',projectId:'project',messages:[],activities:[],...extra}}});
+ update(1,{session:{status:'running',activeTurnId:'parent-run'}});assert.equal(button.disabled,true);
+ update(2,{session:{status:'ready',activeTurnId:null}});assert.equal(button.disabled,false);
+ update(1,{session:{status:'running',activeTurnId:'stale'}});assert.equal(button.disabled,false);
+ parent.callbacks.reconnecting(Error('Offline'));assert.equal(button.disabled,true);
+ update(3);assert.equal(button.disabled,false);
+ await f.view.onClose();assert.ok(f.watches.every(watch=>watch.stopped));update(4,{title:'Late'});assert.doesNotMatch(f.contentEl.textContent!,/Late/);
+});
+
+test('sidebar attachment reads save the layout and survive a pre-send workspace restore',async()=>{
+ const f=await fixture();await f.snapshot();f.input('Draft with image');const before=f.saves();
+ await f.view.composer.addFiles([{name:'synthetic.png',type:'image/png',size:9}]);assert.ok(f.saves()>before);
+ const saved=JSON.parse(JSON.stringify(f.view.getState()));assert.equal(saved.attachments.length,1);assert.equal(saved.pending,undefined);
+ await f.view.setState(saved,{});assert.ok(f.contentEl.querySelector('img.t3-composer-thumbnail'));assert.equal(f.view.getState().draft,'Draft with image');
+ await f.snapshot();await f.view.send();assert.deepEqual(JSON.parse(JSON.stringify(f.sent[0][4].attachments)),saved.attachments);assert.equal(f.view.getState().attachments.length,0);
+});
+
+test('workspace restoration rejects invalid or oversized encoded image drafts',async()=>{
+ const f=await fixture(),saved=f.view.getState();
+ for(const attachments of [[null],[{id:'image',dataUrl:'https://untrusted.invalid/image.png'}],Array(5).fill({id:'image',dataUrl:'data:image/png;base64,eA=='})]){
+  await f.view.setState({...saved,attachments},{});assert.equal(f.view.getState().attachments.length,0);
+ }
 });
