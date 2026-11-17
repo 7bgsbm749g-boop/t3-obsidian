@@ -2,6 +2,33 @@
 
 The T3 Code bundle includes the following open-source dependencies. Obsidian supplies the editor runtime separately. These notices are also included in the distributed JavaScript bundle.
 
+## T3 Code provider glyphs and subagent row presentation
+
+Source: T3 Code, commit c52df24d28, apps/web/src/components/Icons.tsx and
+apps/web/src/components/chat/V2LifecycleRow.tsx.
+
+MIT License
+
+Copyright (c) 2026 T3 Tools Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 ## @codemirror/autocomplete 6.20.3, @codemirror/commands 6.10.0, @codemirror/lang-css 6.3.1, @codemirror/lang-html 6.4.12, @codemirror/lang-java 6.0.2, @codemirror/lang-javascript 6.2.5, @codemirror/lang-json 6.0.2, @codemirror/lang-php 6.0.2, @codemirror/lang-python 6.2.1, @codemirror/lang-rust 6.0.2, @codemirror/lang-sql 6.10.0, @codemirror/lang-xml 6.1.0, @codemirror/language 6.12.4, @codemirror/legacy-modes 6.5.4, @codemirror/lint 6.9.7, @codemirror/state 6.7.6, @codemirror/view 6.43.13
 
 MIT License

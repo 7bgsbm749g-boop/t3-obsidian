@@ -18,17 +18,17 @@ async function fixture(kind='thread',parentRunning=false){
  runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:()=>({ItemView,Component,FuzzySuggestModal:class{},Modal:class{},Setting:class{},setIcon:()=>{},Notice:class{constructor(text:string){notices.push(text);}},MarkdownRenderer:{render:async(_app:any,text:string,el:any)=>{if(text.startsWith('<'))el.innerHTML=text;else el.textContent=text;}}}),console,setTimeout,clearTimeout,performance,URL,URLSearchParams,AbortController,document,FileReader,TextEncoder});
  const contentEl=document.createElement('div');document.body.appendChild(contentEl);
  let serial=0,fail=false;
- const owner:any={host:{uuid:()=>`id-${++serial}`,projects:()=>[]},watch:(_id:any,_access:any,callbacks:any)=>{const entry={callbacks,stopped:false};watches.push(entry);return {stop:()=>{entry.stopped=true;}};},transport:{snapshot:async(target:any)=>({thread:{id:target.threadId,projectId:'project',title:'Parent',messages:[],activities:[],...(parentRunning?{session:{status:'running',activeTurnId:'parent-run'}}:{})}}),send:async(...args:any[])=>{sent.push(args);if(fail)throw Error('Unconfirmed');}},report:(error:Error)=>notices.push(error.message)};
+ const owner:any={host:{uuid:()=>`id-${++serial}`,projects:()=>[]},watch:(_id:any,_access:any,callbacks:any)=>{const entry={id:_id,callbacks,stopped:false};watches.push(entry);if(_id==='parent')queueMicrotask(()=>callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:0,thread:{id:'parent',projectId:'project',messages:[],activities:[],session:{status:parentRunning?'running':'ready',activeTurnId:parentRunning?'parent-run':null}}}}));return {stop:()=>{entry.stopped=true;}};},transport:{snapshot:async(target:any)=>({thread:{id:target.threadId,projectId:'project',title:'Parent',messages:[],activities:[],...(parentRunning?{session:{status:'running',activeTurnId:'parent-run'}}:{})}}),send:async(...args:any[])=>{sent.push(args);if(fail)throw Error('Unconfirmed');}},report:(error:Error)=>notices.push(error.message)};
  const view=new module.exports.SidebarThreadView({contentEl},owner,kind);await view.onOpen();
  const target={kind,threadId:'thread',projectId:'project',environmentId:'env',title:'Synthetic',...(kind==='thread'?{}:{parent:{threadId:'parent',projectId:'project',environmentId:'env'}})};
  await view.setState({target},{});
- const snapshot=async(extra:any={})=>{watches.at(-1).callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:5,thread:{id:'thread',projectId:'project',messages:[{id:'user',role:'user',text:'Question',turnId:'run',streaming:false},{id:'reply',role:'assistant',text:'Answer',turnId:'run',streaming:true}],activities:[],...extra}}});await Promise.resolve();await Promise.resolve();};
+ const snapshot=async(extra:any={})=>{[...watches].reverse().find(watch=>watch.id==='thread').callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:5,thread:{id:'thread',projectId:'project',messages:[{id:'user',role:'user',text:'Question',turnId:'run',streaming:false},{id:'reply',role:'assistant',text:'Answer',turnId:'run',streaming:true}],activities:[],...extra}}});await Promise.resolve();await Promise.resolve();};
  return {exports:module.exports,app,window,view,contentEl,watches,snapshot,sent,notices,saves:()=>saves,owner,setFail:(value:boolean)=>{fail=value;},input:(text:string)=>{const field=contentEl.querySelector('textarea')!;field.value=text;field.dispatchEvent(new window.Event('input'));}};
 }
 test('native pages share transcript, preserve composer during updates, reject stale/wrong-source data and stop on close',async()=>{
  const f=await fixture();await f.snapshot();f.input('Retained draft');const field=f.contentEl.querySelector('textarea');assert.match(f.contentEl.textContent!,/Question.*Answer/s);
  await f.snapshot({messages:[{id:'reply',role:'assistant',text:'Updated',turnId:'run',streaming:true}]});assert.equal(f.contentEl.querySelector('textarea'),field);assert.equal(field!.value,'Retained draft');
- f.watches.at(-1).callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:4,thread:{id:'thread',projectId:'project',messages:[],activities:[]}}});assert.match(f.contentEl.textContent!,/Updated/);
+ [...f.watches].reverse().find(watch=>watch.id==='thread').callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:4,thread:{id:'thread',projectId:'project',messages:[],activities:[]}}});assert.match(f.contentEl.textContent!,/Updated/);
  await f.view.onClose();assert.equal(f.watches.at(-1).stopped,true);await f.snapshot({title:'Late'});assert.doesNotMatch(f.contentEl.textContent!,/Late/);
 });
 test('failed send retains draft and exact command IDs; successful retry clears it',async()=>{
@@ -36,7 +36,7 @@ test('failed send retains draft and exact command IDs; successful retry clears i
 });
 test('subagent page has no composer; native child links appear only for available local threads',async()=>{
  const f=await fixture('subagent');await f.snapshot({subagents:{one:{id:'one',runId:'run',title:'Visible child',status:'running',childThreadId:'child'},two:{id:'two',runId:'run',title:'No child',status:'running'}}});
- assert.equal(f.contentEl.querySelector('textarea'),null);assert.match(f.contentEl.textContent!,/Visible child/);assert.doesNotMatch(f.contentEl.textContent!,/No child/);await f.view.send();assert.equal(f.sent.length,0);
+ assert.equal(f.contentEl.querySelector('textarea'),null);assert.match(f.contentEl.textContent!,/Visible child/);assert.match(f.contentEl.textContent!,/No child/);assert.equal(f.contentEl.querySelectorAll('a.send-to-t3-subagent').length,1);await f.view.send();assert.equal(f.sent.length,0);
 });
 test('wrong project snapshot disables sending and never renders its messages',async()=>{
  const f=await fixture();await f.snapshot({projectId:'other'});f.input('Do not send');assert.doesNotMatch(f.contentEl.textContent!,/Question/);assert.equal(f.contentEl.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.disabled,true);await f.view.send();assert.equal(f.sent.length,0);
@@ -81,7 +81,7 @@ test('Enter sends; Shift+Enter and input composition do not send',async()=>{
 });
 test('Bring back reaches the fresh transport check after the parent was initially busy',async()=>{
  const f=await fixture('side-chat',true);await f.snapshot({latestTurn:{turnId:'run',state:'completed'},session:{status:'ready',activeTurnId:null}});
- const button=f.contentEl.querySelector<HTMLButtonElement>('[aria-label="Bring back"]')!;assert.equal(button.disabled,false);
+ const button=f.contentEl.querySelector<HTMLButtonElement>('[aria-label="Bring back"]')!;assert.equal(button.disabled,true);f.watches.find(watch=>watch.id==='parent').callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:1,thread:{id:'parent',projectId:'project',messages:[],activities:[],session:{status:'ready',activeTurnId:null}}}});assert.equal(button.disabled,false);
  let calls=0;f.owner.transport.bringBack=async()=>{calls++;};button.click();await Promise.resolve();await Promise.resolve();assert.equal(calls,1);
 });
 test('unsent image drafts request a save, survive view restoration and clear on removal',async()=>{
@@ -106,10 +106,10 @@ test('live steering boundaries survive canonical snapshots and workspace restora
  const turn={turnId:'run',state:'running',messageId:'user',requestedAt:createdAt,startedAt:createdAt};
  await f.snapshot({messages:[input,reply],session:{status:'running',activeTurnId:'run'},turns:{run:turn}});
  const steer={messageId:'steer',role:'user',text:'Steer here',turnId:null,streaming:false,createdAt:steeredAt};
- f.watches.at(-1).callbacks.item({kind:'event',event:{sequence:6,type:'thread.message-sent',payload:steer}});
+ [...f.watches].reverse().find(watch=>watch.id==='thread').callbacks.item({kind:'event',event:{sequence:6,type:'thread.message-sent',payload:steer}});
  const completed={...reply,text:'Before steering.\n\nAfter steering.',streaming:false,updatedAt:completedAt};
  const snapshot={messages:[input,completed,{...steer,id:'steer'}],session:{status:'ready',activeTurnId:null},turns:{run:{...turn,state:'completed',assistantMessageId:'reply',completedAt}}};
- f.watches.at(-1).callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:7,thread:{id:'thread',projectId:'project',activities:[],...snapshot}}});await Promise.resolve();await Promise.resolve();
+ [...f.watches].reverse().find(watch=>watch.id==='thread').callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:7,thread:{id:'thread',projectId:'project',activities:[],...snapshot}}});await Promise.resolve();await Promise.resolve();
  const saved=f.view.getState();assert.equal(saved.observations.inputBoundaries.steer[0].text,'Before steering.\n\n');
  assert.ok(f.contentEl.textContent!.indexOf('After steering.')>f.contentEl.textContent!.indexOf('Steer here'));
  const restored=await fixture();await restored.view.setState(saved,{});await restored.snapshot(snapshot);
@@ -129,4 +129,44 @@ test('model button follows the selected provider driver, including renamed insta
  const first=button.querySelector('path')!.getAttribute('d');
  driver='claudeAgent';await f.view.composer.refreshModels();assert.notEqual(button.querySelector('path')!.getAttribute('d'),first);assert.match(button.textContent!,/Current model/);
  driver='custom-agent';await f.view.composer.refreshModels();assert.equal(button.querySelector('svg'),null);assert.equal(button.querySelector('[data-provider-icon]')!.textContent,'EA');
+});
+
+test('side chat follows live parent status, fails closed on reconnect, and releases both subscriptions',async()=>{
+ const f=await fixture('side-chat',true),parent=f.watches.find(watch=>watch.id==='parent');
+ await f.snapshot({messages:[{id:'reply',role:'assistant',text:'Finished',turnId:'run',streaming:false}],turns:{run:{turnId:'run',state:'completed'}}});
+ const button=f.contentEl.querySelector<HTMLButtonElement>('[aria-label="Bring back"]')!;
+ assert.equal(button.disabled,true);
+ const update=(sequence:number,extra:any={})=>parent.callbacks.item({kind:'snapshot',snapshot:{snapshotSequence:sequence,thread:{id:'parent',projectId:'project',messages:[],activities:[],...extra}}});
+ update(1,{session:{status:'running',activeTurnId:'parent-run'}});assert.equal(button.disabled,true);
+ update(2,{session:{status:'ready',activeTurnId:null}});assert.equal(button.disabled,false);
+ update(1,{session:{status:'running',activeTurnId:'stale'}});assert.equal(button.disabled,false);
+ parent.callbacks.reconnecting(Error('Offline'));assert.equal(button.disabled,true);
+ update(3);assert.equal(button.disabled,false);
+ await f.view.onClose();assert.ok(f.watches.every(watch=>watch.stopped));update(4,{title:'Late'});assert.doesNotMatch(f.contentEl.textContent!,/Late/);
+});
+
+test('sidebar attachment reads save the layout and survive a pre-send workspace restore',async()=>{
+ const f=await fixture();await f.snapshot();f.input('Draft with image');const before=f.saves();
+ await f.view.composer.addFiles([{name:'synthetic.png',type:'image/png',size:9}]);assert.ok(f.saves()>before);
+ const saved=JSON.parse(JSON.stringify(f.view.getState()));assert.equal(saved.attachments.length,1);assert.equal(saved.pending,undefined);
+ await f.view.setState(saved,{});assert.ok(f.contentEl.querySelector('img.t3-composer-thumbnail'));assert.equal(f.view.getState().draft,'Draft with image');
+ await f.snapshot();await f.view.send();assert.deepEqual(JSON.parse(JSON.stringify(f.sent[0][4].attachments)),saved.attachments);assert.equal(f.view.getState().attachments.length,0);
+});
+
+test('workspace restoration rejects invalid or oversized encoded image drafts',async()=>{
+ const f=await fixture(),saved=f.view.getState();
+ for(const attachments of [[null],[{id:'image',dataUrl:'https://untrusted.invalid/image.png'}],Array(5).fill({id:'image',dataUrl:'data:image/png;base64,eA=='})]){
+  await f.view.setState({...saved,attachments},{});assert.equal(f.view.getState().attachments.length,0);
+ }
+});
+
+
+test('generated HTML stays visible outside collapsed work and keeps its DOM node during updates',async()=>{
+ const f=await fixture(),activities=[{id:'html',kind:'response.html',summary:'Page',turnId:'run',payload:{itemId:'page',htmlRender:{attachmentId:'synthetic_html',title:'Generated page',height:300}}}];
+ await f.snapshot({activities,messages:[{id:'reply',role:'assistant',text:'Final answer',turnId:'run',streaming:false}],turns:{run:{turnId:'run',state:'completed'}}});
+ const result=f.contentEl.querySelector('.t3-chat-result')!,work=f.contentEl.querySelector('details') as any;
+ assert.ok(result);assert.equal(result.closest('details'),null);assert.match(result.textContent!,/t3-html/);assert.equal(work.open,false);
+ assert.ok(result.nextElementSibling?.classList.contains('t3-chat-answer'));
+ await f.snapshot({activities,messages:[{id:'reply',role:'assistant',text:'Updated answer',turnId:'run',streaming:false}],turns:{run:{turnId:'run',state:'completed'}}});
+ assert.equal(f.contentEl.querySelector('.t3-chat-result'),result);assert.match(result.nextElementSibling!.textContent!,/Updated answer/);
 });

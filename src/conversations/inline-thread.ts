@@ -13,7 +13,7 @@ import {responseWork} from '../responses/response-work';
 import {applyV2ControlEvent,responseRun} from '../connection/orchestration-v2';
 import {responseEmissions,renderProviderError} from '../responses/response-emissions';
 import {renderSubmittedAnswer,type SubmittedAnswer} from '../responses/response-answers';
-import {responseImageResults,renderImageResult,resultActivitySuperseded} from '../responses/image-results';
+import {resultActivitySuperseded} from '../responses/image-results';
 import {responseHtmlResults,renderHtmlResult} from '../responses/html-results';
 import {containerStart,responseFrame,responseIds,responseBoundaries} from '../responses/response-container';
 import {delegatedWork} from './inline-delegation';
@@ -25,7 +25,7 @@ export interface SelectionAnchor {text:string;start:number;end:number;before:str
 export interface InlineMessage {id:string;role:string;text:string;turnId:string|null;streaming:boolean;itemId?:string;sequence?:number;updatedAt?:string;createdAt?:string;context?:unknown;createdBy?:string;creationSource?:string;senderThreadId?:string|null;senderThreadTitle?:string;delegatedCompletion?:{parentRunId:string;generation:number;taskIds:string[]}}
 export interface InlineActivity {id:string;kind:string;summary:string;turnId:string|null;createdAt?:string;sequence?:number;payload?:Record<string,unknown>}
 export interface InlineTurn {turnId:string;state:string;messageId?:string;requestedAt?:string;startedAt?:string|null;completedAt?:string|null;assistantMessageId?:string|null;ordinal?:number;delegatedParentRunId?:string;delegatedCompletion?:{disposition:string;delivery?:{messageId:string;generation:number;taskIds:string[]}|null}}
-export interface InlineSubagent {childThreadId?:string|null;remoteChild?:unknown;id:string;runId:string;title?:string;status:string;origin?:string;completionWake?:string;completionDelivery?:{state:string;observedByRunId?:string}}
+export interface InlineSubagent {childThreadId?:string|null;remoteChild?:unknown;id:string;runId:string;title?:string;status:string;origin?:string;completionWake?:string;completionDelivery?:{state:string;observedByRunId?:string};createdAt?:string;startedAt?:string|null;completedAt?:string|null;updatedAt?:string;driver?:string;providerInstanceId?:string;model?:string|null;modelSelection?:unknown;effort?:string;displayDetail?:string;result?:string|null;progress?:string}
 export interface InlineStartRequest {messageId:string;requestedAt:string;sequence:number;activeTurnId?:string;turnId?:string;failed?:boolean}
 export interface InlineBinding {turnId:string;kind:'explicit'|'timestamp'|'start'|'steer';sequence?:number}
 export interface InlineBindingCheckpoint {failedContinuations?:Record<string,FailedContinuation>;worktreeSetup?:WorktreeSetup;protocolVersion?:2;bindings?:Record<string,InlineBinding>;starts?:Record<string,InlineStartRequest>;turns?:Record<string,InlineTurn>;subagents?:Record<string,InlineSubagent>;worktreeHandoffs?:Record<string,InlineWorktreeHandoff>;sequence?:number;inputBoundaries?:Record<string,InlineMessage[]>;inputTurns?:Record<string,string>;session?:{status:string;activeTurnId:string|null;lastError?:string|null};latestTurn?:InlineTurn;htmlResults?:InlineActivity[];imageResults?:InlineActivity[]}
@@ -560,15 +560,14 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
   const timer=timing?' '+runTimer(timing):'';
   const spinner=['running','sending','importing'].includes(phase)?' <span class="send-to-t3-inline-spinner" aria-label="Loading"></span>':'';
   const displayedTurns=[...new Set([turnId,...all.map(message=>message.turnId).filter((id):id is string=>!!id)])];
-  const imageRows=environmentId?state.activities.filter(activity=>displayedTurns.includes(activity.turnId??'')).flatMap(activity=>responseImageResults(activity,environmentId,threadId).map(reference=>({createdAt:activity.createdAt,sequence:activity.sequence??0,body:renderImageResult(reference)}))):[];
+  const {imageRows,workRows,historyRows,currentTool,currentEmission,activityGroup}=responseWork(state,displayedTurns,turnId,phase,mode,waiting,text=>quoteResponse(closeOpenFence(text.trim())),environmentId?{environmentId,threadId}:undefined);
   const htmlResults=responseHtmlResults(state.activities,displayedTurns,environmentId,threadId);
   const htmlBodies:Array<{body:string;at:number;sequence?:number}>=htmlResults.map(reference=>({body:renderHtmlResult(reference),at:Date.parse(state.activities.find(activity=>activity.kind==='response.html'&&activity.payload?.itemId===reference.itemId)?.createdAt??'')||0}));
   if(mode!=='collapse')htmlBodies.push(...imageRows.map(row=>({body:row.body,at:Date.parse(row.createdAt??'')||0,sequence:row.sequence})));
-  if(mode!=='collapse')htmlBodies.push(...responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim()))).filter(item=>item.kind==='response.proposed-plan'||item.kind==='response.plan'&&(retain||phase!=='complete')).map(item=>({body:item.body,at:Date.parse(item.createdAt??'')||0,sequence:item.sequence})));
+  if(mode!=='collapse')htmlBodies.push(...responseEmissions(state,displayedTurns,text=>quoteResponse(closeOpenFence(text.trim())),undefined,environmentId?{environmentId,threadId}:undefined).filter(item=>item.kind==='response.proposed-plan'||item.kind==='response.plan'&&(retain||phase!=='complete')).map(item=>({body:item.body,at:Date.parse(item.createdAt??'')||0,sequence:item.sequence})));
   htmlBodies.sort((a,b)=>a.at-b.at||(a.sequence??0)-(b.sequence??0));
   let htmlIndex=0;
   const htmlBefore=(at=Infinity,sequence=Infinity)=>{const parts:string[]=[];while(htmlIndex<htmlBodies.length&&(htmlBodies[htmlIndex].at<at||htmlBodies[htmlIndex].at===at&&(htmlBodies[htmlIndex].sequence??0)<=sequence))parts.push(htmlBodies[htmlIndex++].body);return parts.length?parts.join('\n\n')+'\n\n':'';};
-  const {workRows,historyRows,currentTool,currentEmission,activityGroup}=responseWork(state,displayedTurns,turnId,phase,mode,waiting,text=>quoteResponse(closeOpenFence(text.trim())),mode==='collapse'?imageRows:[]);
   // The session repeats the canonical error item. Show that message once, in
   // its timeline position; older sessions without an item use the same row.
   const lastError=phase==='error'&&(!state.latestTurn||state.latestTurn.turnId===turnId)?state.session?.lastError:undefined;
@@ -615,36 +614,23 @@ export function renderInlineTurn(state:InlineThreadState,turnId:string,threadId:
     // Initial questions and continuation prompts share steering's history
     // placement. Keep their exact input record separate from turn bindings.
     const history:string[]=[...(initialInput?[renderInitialInput(initialInput,timing?.startedAt)]:[])];let final='';
-    const completedSegments:string[]=[];let segmentStart=timing?.startedAt,segmentNumber=0;
-    const segmentFold=(contents:string[],end?:string,last=false)=>{
-      const finished=!!end,caption=last&&phase==='error'?'Error':last&&phase==='interrupted'?'Interrupted':last&&phase==='cancelled'?'Stopped':finished?(segmentNumber?'Continued for':'Worked for'):'Working for';
-      const duration=segmentStart?runTimer({startedAt:segmentStart,...(end?{finishedAt:end}:{})}):'';
-      const key=encodeURIComponent(`${threadId}:${segmentStart??turnId}:${segmentNumber}`)+(finished?':complete':':active');
-      return `> [!t3-progress]${finished?'-':'+'} **${label} · ${caption}**${duration?' '+duration:''}${!finished?spinner:''} <span class="send-to-t3-fold-key" data-t3-fold="${key}"></span>`+(contents.length?'\n>\n'+contents.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
-    };
     let toolIndex=0;
     const toolsBefore=(at=Infinity,sequence=Infinity)=>{while(toolIndex<historyRows.length){const row=historyRows[toolIndex],time=Date.parse(row.createdAt??'')||0;if(time>at||time===at&&row.sequence>sequence)break;history.push(historyRows[toolIndex++].body);}};
     for(const [index,piece] of pieces.entries()){
       const message=state.messages.find(message=>message.id===piece.messageId)??all.find(message=>message.id===piece.messageId),createdAt=piece.createdAt??message?.createdAt;if(createdAt)toolsBefore(Date.parse(createdAt),message?.sequence??Infinity);
       if(index===finalIndex)final=assistant(piece.text,piece.messageId);
-      else if(piece.role==='user'){
-        if(!piece.answer&&createdAt&&segmentStart&&Number.isFinite(Date.parse(createdAt))&&Date.parse(createdAt)>=Date.parse(segmentStart)){
-          completedSegments.push(segmentFold(history,createdAt));history.length=0;segmentStart=createdAt;segmentNumber++;
-        }
-        history.push(renderInput(piece));
-      }
+      else if(piece.role==='user')history.push(renderInput(piece));
       else if(piece.text.trim())history.push(growing(piece.messageId)?quoteStreamingResponse(piece.text):quoteResponse(closeOpenFence(piece.text.trim())));
     }
     toolsBefore();
-    // Completed folds become lazy history in native views. Only offer a group
-    // action when its target remains in this active segment's rendered body.
+    // Only offer a group action when its target is in this fold's history.
     const currentHistoryGroup=workRows.find(row=>row.groupId===activityGroup?.id);
     const activity=renderBottom(currentHistoryGroup&&history.includes(currentHistoryGroup.body)?activityGroup?.id:undefined);
     if(activity)history.push(activity.trim());
-    // A steering input starts its own measured continuation segment. Final
-    // answer selection above keeps the existing exact response boundary.
-    const fold=completedSegments.length?[...completedSegments,segmentFold(history,phase==='running'||phase==='sending'?undefined:timing?.finishedAt,true)].join('\n\n'):
-      `> [!t3-progress]${finalReady?'-':'+'} ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`)+(finalReady?':complete':':active')}"></span>`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
+    // Inputs from every source share one response fold and its total timer.
+    // Steering and automatic continuations must not replace its live identity.
+    // Completion alone changes the key so the finished history defaults closed.
+    const fold=`> [!t3-progress]${finalReady?'-':'+'} ${title}${timer}${spinner} <span class="send-to-t3-fold-key" data-t3-fold="${encodeURIComponent(`${threadId}:${timing?.startedAt??turnId}:0`)+(finalReady?':complete':':active')}"></span>`+(history.length?'\n>\n'+history.join('\n\n').split('\n').map(line=>line?`> ${line}`:'>').join('\n'):'');
     const status=handoffError||errorStatus||approvals;
     return fold+(htmlBodies.length?'\n\n'+htmlBodies.map(value=>value.body).join('\n\n'):'')+(final?'\n\n'+final:'')+(status?'\n\n'+status:'')+(questions?'\n\n'+questions:'')+'\n';
   }

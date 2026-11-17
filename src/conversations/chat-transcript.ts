@@ -4,6 +4,7 @@ import {chatTimeline,type ChatSegment} from './chat-timeline';
 import {reconcileResponseDOM} from '../responses/response-dom';
 import {clockForDocument} from '../shared/clock';
 import {elapsedRun} from '../responses/response-presentation';
+import type {SubagentSource} from '../responses/response-subagents';
 
 interface Fragment {el:HTMLElement;component:Component;text:string;revision:number}
 interface SegmentView {el:HTMLElement;input?:Fragment;work:HTMLDetailsElement;summary:HTMLElement;history:HTMLElement;fragments:Map<string,Fragment>;phase?:boolean;timing?:ChatSegment['timing'];children?:HTMLElement;childKey?:string}
@@ -32,7 +33,7 @@ export class ChatTranscript extends Component {
       for(const node of Array.from(row.el.querySelectorAll<HTMLElement>('[data-t3-tool-icon]')))if(!node.firstChild)setIcon(node,node.dataset.t3ToolIcon??'wrench');
     }).catch(error=>{this.removeChild(component);this.failure(error);});
   }
-  update(state:InlineThreadState,source?:{environmentId:string;threadId:string}){
+  update(state:InlineThreadState,source?:SubagentSource){
     if(this.closed)return;let cursor=this.el.firstChild;const pinned=this.el.scrollHeight-this.el.scrollTop-this.el.clientHeight<64,seen=new Set<string>();
     for(const segment of chatTimeline(state,source)){
       seen.add(segment.id);let row=this.rows.get(segment.id);
@@ -54,9 +55,15 @@ export class ChatTranscript extends Component {
         if(fragment.el!==historyCursor)row.history.insertBefore(fragment.el,historyCursor);historyCursor=fragment.el.nextSibling;
       }
       if(segment.activity){visible.add('activity');let fragment=row.fragments.get('activity');if(!fragment){fragment=this.fragment(row.history,'t3-chat-activity markdown-rendered');row.fragments.set('activity',fragment);}this.markdown(fragment,segment.activity);row.history.appendChild(fragment.el);}
-      if(segment.final){visible.add('final');let fragment=row.fragments.get('final');if(!fragment){fragment=this.fragment(row.el,'t3-chat-answer markdown-rendered');row.fragments.set('final',fragment);}this.markdown(fragment,segment.final.text);}
+      let resultCursor=row.work.nextSibling;
+      for(const result of segment.results??[]){
+        const id='result:'+result.id;visible.add(id);let fragment=row.fragments.get(id);
+        if(!fragment){fragment=this.fragment(row.el,'t3-chat-result markdown-rendered');row.fragments.set(id,fragment);}this.markdown(fragment,result.text);
+        if(fragment.el!==resultCursor)row.el.insertBefore(fragment.el,resultCursor);resultCursor=fragment.el.nextSibling;
+      }
+      if(segment.final){visible.add('final');let fragment=row.fragments.get('final');if(!fragment){fragment=this.fragment(row.el,'t3-chat-answer markdown-rendered');row.fragments.set('final',fragment);}this.markdown(fragment,segment.final.text);row.el.appendChild(fragment.el);}
       for(const [id,fragment] of row.fragments)if(!visible.has(id)){fragment.revision++;this.removeChild(fragment.component);fragment.el.remove();row.fragments.delete(id);}
-      const children=Object.values(state.subagents??{}).filter(child=>child.runId===segment.turnId&&child.childThreadId&&!child.remoteChild);
+      const children=source?[]:Object.values(state.subagents??{}).filter(child=>child.runId===segment.turnId&&child.childThreadId&&!child.remoteChild);
       const childKey=JSON.stringify(children);if(childKey!==row.childKey){row.childKey=childKey;row.children?.remove();row.children=row.history.createDiv({cls:'t3-chat-children'});for(const child of children){const button=row.children.createEl('button',{cls:'clickable-icon t3-chat-child',text:child.title||'Subagent',attr:{type:'button','aria-label':'Open subagent '+(child.title||child.id)}});setIcon(button.createSpan(),'bot');button.createSpan({text:child.status,cls:'t3-chat-child-status'});button.addEventListener('click',()=>this.openChild?.(child));}}
       const activity=row.fragments.get('activity')?.el;if(row.children&&activity&&row.children.nextSibling!==activity)row.history.insertBefore(row.children,activity);
       if(row.el!==cursor)this.el.insertBefore(row.el,cursor);cursor=row.el.nextSibling;
