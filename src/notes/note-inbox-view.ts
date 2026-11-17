@@ -1,99 +1,120 @@
-import {Menu,Notice,TFile,setIcon,type App} from 'obsidian';
+import {Notice,TFile,setIcon,type App,type EventRef,type Menu,type WorkspaceLeaf} from 'obsidian';
+import {NativeInboxTree,nativeExplorerTree,type NativeExplorerTree,type NativeTreeItem} from './native-inbox-tree';
 import {INBOX_SECTIONS,type InboxAction,type InboxNote,type InboxSection} from './note-inbox';
 
-const labels:Record<InboxSection,string>={pinned:'Pinned',working:'Working',regular:'Inbox',snoozed:'Snoozed',settled:'Settled'};
-const icons:Record<InboxSection,string>={pinned:'pin',working:'loader-circle',regular:'circle',snoozed:'alarm-clock',settled:'check'};
+const SHELVES=['working','snoozed','settled'] as const;
+type Shelf=typeof SHELVES[number];
+const labels:Record<Shelf,string>={working:'Working',snoozed:'Snoozed',settled:'Settled'};
 // T3 Code's wordmark, MIT © 2026 T3 Tools Inc. See THIRD_PARTY_NOTICES.md.
 const T3_PATH='M33.4509 93V47.56H15.5309V37H64.3309V47.56H46.4109V93H33.4509ZM86.7253 93.96C82.832 93.96 78.9653 93.4533 75.1253 92.44C71.2853 91.3733 68.032 89.88 65.3653 87.96L70.4053 78.04C72.5386 79.5867 75.0186 80.8133 77.8453 81.72C80.672 82.6267 83.5253 83.08 86.4053 83.08C89.6586 83.08 92.2186 82.44 94.0853 81.16C95.952 79.88 96.8853 78.12 96.8853 75.88C96.8853 73.7467 96.0586 72.0667 94.4053 70.84C92.752 69.6133 90.0853 69 86.4053 69H80.4853V60.44L96.0853 42.76L97.5253 47.4H68.1653V37H107.365V45.4L91.8453 63.08L85.2853 59.32H89.0453C95.9253 59.32 101.125 60.8667 104.645 63.96C108.165 67.0533 109.925 71.0267 109.925 75.88C109.925 79.0267 109.099 81.9867 107.445 84.76C105.792 87.48 103.259 89.6933 99.8453 91.4C96.432 93.1067 92.0586 93.96 86.7253 93.96Z';
 export interface InboxViewState {enabled:boolean;collapsed:InboxSection[]}
 export function loadInboxViewState(value:unknown):InboxViewState {
   const raw=value as Partial<InboxViewState>|null;
-  return {enabled:raw?.enabled===true,collapsed:Array.isArray(raw?.collapsed)?INBOX_SECTIONS.filter(section=>raw.collapsed?.includes(section)):['snoozed','settled']};
+  return {enabled:raw?.enabled===true,collapsed:Array.isArray(raw?.collapsed)?SHELVES.filter(section=>raw.collapsed?.includes(section)):[...SHELVES]};
 }
 export interface InboxHost {notes():InboxNote[];change(note:InboxNote,action:InboxAction):Promise<void>;state():InboxViewState;saveState(state:InboxViewState):void}
-interface Explorer {root:HTMLElement;tree:HTMLElement;button:HTMLButtonElement;panel:HTMLElement;list:HTMLElement;search:HTMLInputElement;signature?:string}
-/** One mode inside each native file explorer. No workspace view replacement,
- * vault scan, note rewrite, or private explorer method patch is needed. */
+interface Explorer {root:HTMLElement;tree:HTMLElement;toolbar:HTMLElement;tab:HTMLElement;restoreFiles:()=>void;view:NativeExplorerTree;button:HTMLButtonElement;projection?:NativeInboxTree;headers:Map<Shelf,HTMLElement>;spacer?:HTMLElement;frame?:number;observer:MutationObserver}
+/** The existing file explorer renders the notes and handles their interactions.
+ * Only its native virtual children are filtered and grouped for this mode. */
 export class NoteInboxView {
-  private explorers=new Map<HTMLElement,Explorer>();private stopped=false;private wake?:number;
-  constructor(private app:App,private host:InboxHost){}
+  private explorers=new Map<HTMLElement,Explorer>();private stopped=false;private scheduled=false;private wake?:number;private menuEvent:EventRef;
+  constructor(private app:App,private host:InboxHost){
+    this.menuEvent=app.workspace.on('file-menu',(menu,file,source)=>{
+      if(!this.host.state().enabled||!(file instanceof TFile)||source!=='file-explorer-context-menu')return;
+      const note=this.host.notes().find(note=>note.path===file.path);if(note)this.menu(menu,note);
+    });
+  }
   refresh(){
     if(this.stopped)return;
-    const roots=new Set(this.app.workspace.getLeavesOfType('file-explorer').map(leaf=>leaf.view.containerEl));
-    for(const [root,explorer] of this.explorers)if(!roots.has(root)||!root.contains(explorer.tree)||!root.contains(explorer.button)){this.remove(explorer);this.explorers.delete(root);}
-    const notes=this.host.notes();
-    for(const root of roots){
-      let explorer=this.explorers.get(root);
+    const leaves=this.app.workspace.getLeavesOfType('file-explorer'),roots=new Set(leaves.map(leaf=>leaf.view.containerEl)),notes=this.host.notes();
+    for(const [root,explorer] of this.explorers)if(!roots.has(root)||!root.contains(explorer.tree)||!explorer.toolbar.contains(explorer.button)||explorer.tab.parentElement!==explorer.toolbar){this.remove(explorer);this.explorers.delete(root);}
+    for(const leaf of leaves){
+      const root=leaf.view.containerEl;let explorer=this.explorers.get(root);
       if(!explorer){
-        const toolbar=root.querySelector<HTMLElement>('.nav-buttons-container'),tree=root.querySelector<HTMLElement>('.nav-files-container');if(!toolbar||!tree)continue;
-        explorer=this.mount(root,toolbar,tree);this.explorers.set(root,explorer);
+        const tab=(leaf as WorkspaceLeaf&{tabHeaderEl?:HTMLElement}).tabHeaderEl,toolbar=tab?.parentElement,tree=root.querySelector<HTMLElement>('.nav-files-container'),view=nativeExplorerTree(leaf.view);
+        if(!tab||!toolbar||!tree||!view||[...this.explorers.values()].some(other=>other.toolbar===toolbar))continue;
+        explorer=this.mount(root,toolbar,tab,leaf,tree,view);this.explorers.set(root,explorer);
       }
-      const state=this.host.state();root.classList.toggle('t3-note-inbox-mode',state.enabled);explorer.button.classList.toggle('is-active',state.enabled);explorer.button.setAttribute('aria-pressed',String(state.enabled));explorer.panel.hidden=!state.enabled;
-      if(state.enabled)this.render(explorer,notes);
+      this.placeButton(explorer);
+      const enabled=this.host.state().enabled,selected=enabled&&explorer.tab.classList.contains('is-active');root.classList.toggle('t3-note-inbox-mode',enabled);explorer.button.classList.toggle('is-active',selected);
+      this.attribute(explorer.button,'aria-pressed',String(selected));
+      if(enabled){
+        try{this.project(explorer,notes);}catch(error){
+          // Return to the ordinary tree if the native capability changes.
+          // A partially filtered tree must never retain hidden selections.
+          this.host.saveState({...this.host.state(),enabled:false});
+          try{this.unproject(explorer);}finally{root.classList.remove('t3-note-inbox-mode');explorer.button.classList.remove('is-active');this.attribute(explorer.button,'aria-pressed','false');this.report(error);}
+        }
+      }else this.unproject(explorer);
     }
     if(this.wake)window.clearTimeout(this.wake);
     const now=Date.now(),next=Math.min(...notes.flatMap(note=>note.until&&note.until>now?[note.until]:[]));
-    if(Number.isFinite(next))this.wake=window.setTimeout(()=>this.refresh(),Math.min(2_147_483_647,Math.max(1,next-Date.now()+1)));
+    if(Number.isFinite(next))this.wake=window.setTimeout(()=>this.refresh(),Math.min(2_147_483_647,Math.max(1,next-now+1)));
   }
-  private mount(root:HTMLElement,toolbar:HTMLElement,tree:HTMLElement):Explorer {
-    const button=toolbar.createEl('button',{cls:'clickable-icon nav-action-button t3-note-inbox-toggle',attr:{type:'button','aria-label':'T3 inbox','aria-pressed':'false',title:'T3 inbox — switch file explorer mode'}});
+  private schedule(){if(this.scheduled||this.stopped)return;this.scheduled=true;void Promise.resolve().then(()=>{this.scheduled=false;this.refresh();}).catch(error=>this.report(error));}
+  private mount(root:HTMLElement,toolbar:HTMLElement,tab:HTMLElement,leaf:WorkspaceLeaf,tree:HTMLElement,view:NativeExplorerTree):Explorer {
+    const button=toolbar.createEl('button',{cls:'clickable-icon t3-note-inbox-toggle',attr:{type:'button','aria-label':'T3 inbox','aria-pressed':'false',title:'T3 inbox — filter notes with T3 streams'}});
     const svg=root.ownerDocument.win.createSvg('svg');svg.setAttribute('viewBox','10 27 108 76');svg.setAttribute('aria-hidden','true');svg.classList.add('svg-icon');const path=root.ownerDocument.win.createSvg('path');path.setAttribute('d',T3_PATH);path.setAttribute('fill','currentColor');path.setAttribute('stroke','none');svg.appendChild(path);button.appendChild(svg);
-    const panel=root.createDiv({cls:'t3-note-inbox',attr:{'aria-label':'T3 note inbox'}});panel.hidden=true;
-    const header=panel.createDiv({cls:'t3-note-inbox-search'});setIcon(header.createSpan(),'search');
-    const search=header.createEl('input',{attr:{type:'search',placeholder:'Search notes','aria-label':'Search T3 inbox'}});
-    const list=panel.createDiv({cls:'t3-note-inbox-list'}),explorer:Explorer={root,tree,button,panel,list,search};
-    button.addEventListener('click',()=>{const state=this.host.state();this.host.saveState({...state,enabled:!state.enabled});this.refresh();});
-    search.addEventListener('input',()=>this.render(explorer,this.host.notes()));
+    const observer=new MutationObserver(()=>this.schedule()),restoreFiles=()=>{const state=this.host.state();if(state.enabled){this.host.saveState({...state,enabled:false});this.refresh();}},explorer:Explorer={root,tree,toolbar,tab,restoreFiles,view,button,headers:new Map(),observer};
+    tab.addEventListener('click',restoreFiles);
+    button.addEventListener('click',()=>{const state=this.host.state();this.host.saveState({...state,enabled:!tab.classList.contains('is-active')||!state.enabled});this.refresh();void this.app.workspace.revealLeaf(leaf).then(()=>this.refresh()).catch(error=>this.report(error));});
+    observer.observe(tree,{childList:true,subtree:true,attributes:true,attributeFilter:['data-path']});
+    observer.observe(toolbar,{childList:true});observer.observe(tab,{attributes:true,attributeFilter:['class']});
     return explorer;
   }
-  private render(explorer:Explorer,all:InboxNote[]){
-    const query=explorer.search.value.trim().toLocaleLowerCase(),notes=all.filter(note=>note.path.toLocaleLowerCase().includes(query)),state=this.host.state();
-    const active=this.app.workspace.getActiveFile()?.path,signature=JSON.stringify([notes,state.collapsed,active,query]);if(signature===explorer.signature)return;explorer.signature=signature;
-    const focused=explorer.list.ownerDocument.activeElement as HTMLElement|null,focusKey=focused&&explorer.list.contains(focused)?focused.dataset.inboxFocus:undefined;
-    explorer.list.empty();
-    if(!notes.length){explorer.list.createDiv({cls:'t3-note-inbox-empty',text:query?'No matching notes.':'No notes with T3 streams yet.'});return;}
+  private placeButton(explorer:Explorer){
+    const codebase=this.app.workspace.getLeavesOfType('t3-codebase').map(leaf=>(leaf as WorkspaceLeaf&{tabHeaderEl?:HTMLElement}).tabHeaderEl).find(tab=>tab?.parentElement===explorer.toolbar);
+    if(codebase&&codebase.nextSibling!==explorer.button)explorer.toolbar.insertBefore(explorer.button,codebase.nextSibling);
+  }
+  private attribute(element:HTMLElement,name:string,value:string){if(element.getAttribute(name)!==value)element.setAttribute(name,value);}
+  private unproject(explorer:Explorer){try{explorer.projection?.dispose();}finally{explorer.projection=undefined;explorer.headers.clear();explorer.spacer=undefined;if(explorer.frame!==undefined)window.cancelAnimationFrame(explorer.frame);explorer.frame=undefined;}}
+  private project(explorer:Explorer,notes:InboxNote[]){
+    const projection=explorer.projection??=new NativeInboxTree(explorer.view);
+    const sample=notes.map(note=>explorer.view.fileItems[note.path]).find(Boolean);
+    if(!sample){projection.update([]);return;}
+    const state=this.host.state(),items:NativeTreeItem[]=[],firstShelf=SHELVES.find(shelf=>notes.some(note=>note.section===shelf)||shelf==='settled');
     for(const section of INBOX_SECTIONS){
-      const members=notes.filter(note=>note.section===section);if(!members.length)continue;
-      const group=explorer.list.createDiv({cls:'t3-note-inbox-section',attr:{'data-inbox-section':section}}),collapsed=state.collapsed.includes(section)&&!query;
-      const header=group.createEl('button',{cls:'t3-note-inbox-heading',attr:{type:'button','aria-expanded':String(!collapsed),'data-inbox-focus':'section:'+section}});
-      setIcon(header.createSpan({cls:'t3-note-inbox-chevron'}),collapsed?'chevron-right':'chevron-down');header.createSpan({text:labels[section]});header.createSpan({cls:'t3-note-inbox-count',text:String(members.length)});
-      header.addEventListener('click',()=>{const current=this.host.state();this.host.saveState({...current,collapsed:current.collapsed.includes(section)?current.collapsed.filter(item=>item!==section):[...current.collapsed,section]});this.refresh();});
-      if(!collapsed)for(const note of members)this.row(group,note,note.path===active);
+      const members=notes.filter(note=>note.section===section),shelf=SHELVES.find(shelf=>shelf===section);
+      if(shelf&&(members.length||shelf==='settled')){
+        if(shelf===firstShelf){
+          if(!explorer.spacer){explorer.spacer=explorer.root.ownerDocument.win.createDiv({cls:'t3-note-inbox-spacer',attr:{'aria-hidden':'true'}});}
+          items.push(projection.control(explorer.spacer,'t3-inbox-gap',sample));
+        }
+        let header=explorer.headers.get(shelf);
+        if(!header){
+          header=explorer.root.ownerDocument.win.createEl('button',{cls:'clickable-icon t3-note-inbox-heading',attr:{type:'button','data-t3-inbox-shelf':shelf}});
+          header.createSpan({text:labels[shelf]});header.createSpan({cls:'t3-note-inbox-rule',attr:{'aria-hidden':'true'}});header.createSpan({cls:'t3-note-inbox-count'});setIcon(header.createSpan({cls:'t3-note-inbox-chevron'}),'chevron-down');
+          header.addEventListener('click',event=>{event.stopPropagation();const current=this.host.state();this.host.saveState({...current,collapsed:current.collapsed.includes(shelf)?current.collapsed.filter(item=>item!==shelf):[...current.collapsed,shelf]});this.refresh();});
+          explorer.headers.set(shelf,header);
+        }
+        this.attribute(header,'aria-expanded',String(!state.collapsed.includes(shelf)));this.attribute(header,'aria-label',`${labels[shelf]}, ${members.length} notes`);
+        const count=header.querySelector<HTMLElement>('.t3-note-inbox-count')!;if(count.textContent!==String(members.length))count.textContent=String(members.length);
+        items.push(projection.control(header,'t3-inbox-'+shelf,sample));
+      }
+      if(!shelf||!state.collapsed.includes(shelf))for(const note of members){const item=explorer.view.fileItems[note.path];if(item)items.push(item);}
     }
-    if(focusKey)Array.from(explorer.list.querySelectorAll<HTMLElement>('[data-inbox-focus]')).find(element=>element.dataset.inboxFocus===focusKey)?.focus();
+    projection.update(items);
+    if(explorer.frame===undefined)explorer.frame=window.requestAnimationFrame(()=>{
+      explorer.frame=undefined;if(this.stopped||!this.host.state().enabled||!explorer.spacer)return;
+      const padding=window.getComputedStyle(explorer.tree),space=parseFloat(padding.paddingTop||'0')+parseFloat(padding.paddingBottom||'0');
+      const normalHeight=sample.selfEl.getBoundingClientRect().height||25;
+      const height=projection.items.filter(item=>item.el!==explorer.spacer).reduce((sum,item)=>sum+(item.info.height||(item.file?normalHeight:32)),0);
+      const gap=Math.max(8,explorer.tree.clientHeight-space-height),previous=parseFloat(explorer.spacer.style.getPropertyValue('--t3-inbox-gap'))||8;
+      if(Number.isFinite(gap)&&Math.abs(gap-previous)>0.5){explorer.spacer.setCssProps({'--t3-inbox-gap':gap+'px'});projection.layout();}
+    });
   }
-  private row(group:HTMLElement,note:InboxNote,active:boolean){
-    const row=group.createDiv({cls:'t3-note-inbox-row'+(active?' is-active':''),attr:{'data-note-path':note.path}});
-    row.addEventListener('contextmenu',event=>{event.preventDefault();this.menu(note,event);});
-    const open=row.createEl('button',{cls:'t3-note-inbox-open',attr:{type:'button',title:note.path,'aria-label':'Open '+note.path,'data-inbox-focus':'open:'+note.path}});
-    const status=open.createSpan({cls:'t3-note-inbox-status'});setIcon(status,note.indicator.input?'message-circle-question':note.indicator.active?'loader-circle':icons[note.section]);if(note.indicator.active)status.classList.add('is-working');
-    if(note.indicator.input)status.classList.add('needs-input');
-    const copy=open.createSpan({cls:'t3-note-inbox-copy'}),title=copy.createSpan({cls:'t3-note-inbox-title',text:note.title});
-    if(note.indicator.active)title.setAttribute('data-t3-active-title','true');
-    if(note.indicator.unread)row.setAttribute('data-t3-completion-glow','note');
-    copy.createSpan({cls:'t3-note-inbox-detail',text:note.indicator.input?'Needs your input':note.section==='snoozed'?'Until '+new Date(note.until!).toLocaleString():note.folder||'Vault root'});
-    open.addEventListener('click',event=>{void this.open(note,event.ctrlKey||event.metaKey).catch(error=>this.report(error));});
-    const actions=row.createDiv({cls:'t3-note-inbox-actions'});
-    if(!note.indicator.active&&!note.indicator.input){const settled=note.section==='settled';this.iconButton(actions,settled?'Reopen note':'Settle note',settled?'undo-2':'check',()=>this.change(note,{kind:settled?'regular':'settled'}),'settle:'+note.path);}
-    this.iconButton(actions,'Note actions','ellipsis',event=>this.menu(note,event),'menu:'+note.path);
-  }
-  private iconButton(parent:HTMLElement,label:string,icon:string,click:(event:MouseEvent)=>void,focus:string){const button=parent.createEl('button',{cls:'clickable-icon',attr:{type:'button','aria-label':label,title:label,'data-inbox-focus':focus}});setIcon(button,icon);button.addEventListener('click',click);}
-  private async open(note:InboxNote,tab=false){const file=this.app.vault.getAbstractFileByPath(note.path);if(!(file instanceof TFile)){this.refresh();return;}await this.app.workspace.getLeaf(tab?'tab':false).openFile(file);}
   private change(note:InboxNote,action:InboxAction){void this.host.change(note,action).then(()=>this.refresh()).catch(error=>this.report(error));}
   private report(error:unknown){new Notice(error instanceof Error?error.message:String(error));}
-  private menu(note:InboxNote,event:MouseEvent){
-    const menu=new Menu();
-    menu.addItem(item=>item.setTitle('Open in new tab').setIcon('file').onClick(()=>void this.open(note,true).catch(error=>this.report(error))));
-    menu.addItem(item=>item.setTitle(note.pinned?'Unpin note':'Pin note').setIcon(note.pinned?'pin-off':'pin').onClick(()=>this.change(note,{kind:'pin',value:!note.pinned})));
+  private menu(menu:Menu,note:InboxNote){
     menu.addSeparator();
+    menu.addItem(item=>item.setTitle(note.pinned?'Unpin note':'Pin note').setIcon(note.pinned?'pin-off':'pin').onClick(()=>this.change(note,{kind:'pin',value:!note.pinned})));
     if(note.section==='settled'||note.section==='snoozed')menu.addItem(item=>item.setTitle(note.section==='settled'?'Reopen note':'Wake note').setIcon('undo-2').onClick(()=>this.change(note,{kind:'regular'})));
     else {
       const busy=!!note.indicator.active||!!note.indicator.input;
       menu.addItem(item=>item.setTitle('Settle note').setIcon('check').setDisabled(busy).onClick(()=>this.change(note,{kind:'settled'})));
       for(const [label,delay] of [['Snooze for 1 hour',60*60_000],['Snooze until tomorrow',24*60*60_000],['Snooze for 1 week',7*24*60*60_000]] as const)menu.addItem(item=>item.setTitle(label).setIcon('alarm-clock').setDisabled(busy).onClick(()=>this.change(note,{kind:'snoozed',until:Date.now()+delay})));
     }
-    menu.showAtMouseEvent(event);
   }
-  private remove(explorer:Explorer){explorer.root.classList.remove('t3-note-inbox-mode');explorer.button.remove();explorer.panel.remove();}
-  dispose(){this.stopped=true;if(this.wake)window.clearTimeout(this.wake);for(const explorer of this.explorers.values())this.remove(explorer);this.explorers.clear();}
+  private remove(explorer:Explorer){explorer.observer.disconnect();explorer.tab.removeEventListener('click',explorer.restoreFiles);if(explorer.frame!==undefined)window.cancelAnimationFrame(explorer.frame);try{explorer.projection?.dispose();}finally{explorer.root.classList.remove('t3-note-inbox-mode');explorer.button.remove();}}
+  dispose(){if(this.stopped)return;this.stopped=true;if(this.wake)window.clearTimeout(this.wake);this.app.workspace.offref(this.menuEvent);for(const explorer of this.explorers.values())this.remove(explorer);this.explorers.clear();}
 }

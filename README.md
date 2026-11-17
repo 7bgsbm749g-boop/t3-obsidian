@@ -40,19 +40,21 @@ Use **Settings → T3 Code → Replies** to adjust reply behaviour, and **Projec
 
 ## Note inbox in the file explorer
 
-Choose the **T3 icon** in the file explorer's top buttons to switch between the
-file tree and the note inbox. The inbox includes only existing Markdown notes
-with a current or past T3 stream. Several streams in a note share one row;
+Choose the **T3 icon** in the left sidebar's top row, next to **Codebase view**,
+to open the note inbox. Choose **Files** to return to the normal file tree.
+The inbox includes only existing Markdown notes with a current or past T3 stream. Several streams in a note share one row;
 sending a note without attaching a stream does not add it.
 
-The inbox groups **Pinned**, **Working**, regular **Inbox**, **Snoozed**, and
-**Settled** notes, with search, collapsible sections, live activity and unread
-reply indicators. Select a row to open the normal note editor. Use the check
-button or row menu to settle work; the menu also pins, snoozes, wakes, and
-reopens notes. Running responses and notes that need input must finish before
-you can settle or snooze them. New sends return settled work to the inbox;
-snoozed notes return when their wake time passes. Completing a response does
-not settle its note.
+The T3 button filters the existing file explorer to notes with stream history.
+Notes keep their normal labels, icons, decorations, drag behavior, and file
+menus. Pinned notes come first, followed by regular notes. The small **Working**,
+**Snoozed**, and **Settled** shelf headers follow T3 Code's sidebar, with a
+trailing count and collapse chevron.
+
+Use the normal note context menu to pin, settle, snooze, wake, or reopen work.
+Running responses and notes that need input must finish before you can settle
+or snooze them. New sends return settled work to the inbox; snoozed notes return
+when their wake time passes. Completing a response does not settle its note.
 
 Inbox choices follow stream bindings through note moves and use the existing
 plugin settings sync. Settling a note changes only its inbox state: its file,

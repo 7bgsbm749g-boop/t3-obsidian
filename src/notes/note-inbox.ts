@@ -4,7 +4,7 @@ import type {ExplorerResponse,NoteIndicator} from '../responses/explorer-respons
 import {contentHash} from '../responses/completion';
 
 export type InboxSection='pinned'|'working'|'regular'|'snoozed'|'settled';
-export const INBOX_SECTIONS:readonly InboxSection[]=['pinned','working','regular','snoozed','settled'];
+export const INBOX_SECTIONS:readonly InboxSection[]=['pinned','regular','working','snoozed','settled'];
 type Register<T>={value:T;clock:number;actor:string};
 export interface InboxEntry {pinned?:Register<boolean>;shelf?:Register<{kind:'regular'|'settled'|'snoozed';activity:string;until?:number}>}
 /** Stream IDs retain note choices through moves and response removal. No note text. */

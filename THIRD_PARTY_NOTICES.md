@@ -766,7 +766,7 @@ THE SOFTWARE.
 
 ## T3 Code model picker, inbox layout, and wordmark
 
-Adapted from [pingdotgg/t3code](https://github.com/pingdotgg/t3code/tree/983654b3b2f7267a69e3d5d049d781aadbbc3166/apps/web/src/components/chat): ProviderModelPicker, ModelPickerContent, ModelPickerSidebar, and ComposerModelEffort. The note inbox also adapts the sidebar section and row layout and the T3 wordmark from `assets/prod/logo.svg`. The Obsidian implementation uses native DOM controls and active-theme variables.
+Adapted from [pingdotgg/t3code](https://github.com/pingdotgg/t3code/tree/983654b3b2f7267a69e3d5d049d781aadbbc3166/apps/web/src/components/chat): ProviderModelPicker, ModelPickerContent, ModelPickerSidebar, and ComposerModelEffort. The note inbox follows [Sidebar section ordering and CollapsibleSectionHeader](https://github.com/pingdotgg/t3code/tree/c52df24d285a072ad9c3f7ab5b3656c0be1cb0f5/apps/web/src/components) and uses the T3 wordmark from `assets/prod/logo.svg`. Note rows are the existing Obsidian file explorer elements. The Obsidian implementation uses native DOM controls and active-theme variables.
 
 MIT License
 
