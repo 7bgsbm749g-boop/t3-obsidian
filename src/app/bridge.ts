@@ -49,11 +49,11 @@ export async function runBridge(connection:Connection,args:string[],input='',opt
   logEvent('transport.operation.completed',{operation,control:options.control,elapsedMs:Date.now()-started,transport:connection.transport??'desktop',environmentId:connection.environmentId});return result;
   }catch(error){logFailure('transport.operation.failed',error,{operation,control:options.control,cancelled:options.signal?.aborted,elapsedMs:Date.now()-started,transport:connection.transport??'desktop',environmentId:connection.environmentId});throw error;}
 }
-export function prepareSend(connection:Connection,project:Project,threadId?:string){
+export function prepareSend(connection:Connection,project:Project,threadId:string|undefined,parallelHead:boolean){
   const open=runtime?.access;
   if(threadId||connection.transport!=='direct'||!connection.environmentId||!open)return;
   const work=open(connection.environmentId).then(async access=>{
-    try{return await prepareNewThreadSend(project,access.api,access.origin);}finally{await access.close?.();}
+    try{return await prepareNewThreadSend(project,access.api,access.origin,parallelHead);}finally{await access.close?.();}
   });
   // Preparation can outlive a locally rejected or empty send.
   void work.catch(()=>{});

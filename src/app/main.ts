@@ -2532,7 +2532,7 @@ export default class SendToT3 extends Plugin {
       const threadId=options?.threadId??(!options?.newThread&&active&&project.id===active.projectId&&((project.connectionId??'')===active.connectionId||!!connection.environmentId&&connection.environmentId===active.environmentId)?active.threadId:undefined);
       await this.assertNoteMode(note?.path,{...connection,projectId:project.id,threadId});
       options?.onTargetResolved?.();
-      const preparing=prepareSend(connection,project,threadId);
+      const preparing=prepareSend(connection,project,threadId,link.id!=='no-project');
       if(note&&options?.sourceContext?.smartDocument!==undefined){
         const context=options.sourceContext;
         await this.recoverSmartReplies(note.path,context.smartDocument!);
@@ -3105,7 +3105,7 @@ export default class SendToT3 extends Plugin {
       const threadId=options?.threadId??remembered?.threadId;
       const connection=this.connection(project);
       await this.assertNoteMode(file.path,{...connection,projectId:project.id,threadId},options?.destinations);
-      const preparing=prepareSend(connection,project,threadId);
+      const preparing=prepareSend(connection,project,threadId,options?.folderLink?.id!=='no-project');
       const jobOptions=options?.jobOptions??resolveJobOptions({...this.settings.inlineStreaming,enabled:options?.streamReply??(!options?.quiet&&this.settings.inlineStreaming.enabled)});
       const streaming=jobOptions.inline.enabled;
       const inlineView=streaming?await this.editorForNoteSend(file):undefined;

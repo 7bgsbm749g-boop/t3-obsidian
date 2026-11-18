@@ -147,12 +147,12 @@ export function commandId(id:string,name:string){
  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))throw Error('Invalid request ID.');
  const b=Buffer.from(sha1(Buffer.concat([Buffer.from(id.replace(/-/g,''),'hex'),Buffer.from(name)]))).slice(0,16);b[6]=(b[6]&15)|80;b[8]=(b[8]&63)|128;const h=b.toString('hex');return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
 }
-export function prepareNewThreadSend(project:Project,api:ThreadAccess['api'],origin:string){
+export function prepareNewThreadSend(project:Project,api:ThreadAccess['api'],origin:string,parallelHead=false){
  return readNewThreadDefaults(api,origin,project,undefined,async()=>{
   const legacy=readWireProjects(await api('/api/orchestration/shell')).find(p=>p.id===project.id);
   if(!legacy)throw Error('Project no longer exists. Scan this connection again.');
   return legacy;
- });
+ },parallelHead);
 }
 
 export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Promise<void>,fetcher?:Fetcher,access?:ThreadAccess,beforeThreadCreate?:()=>void|Promise<void>,preparing?:Promise<NewThreadDefaults>){
