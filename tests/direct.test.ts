@@ -288,3 +288,38 @@ test('composer models reach new and existing messages, and retry refuses a chang
   request.jobOptions!.modelSelection!.model='changed';await assert.rejects(sendDirect(request,session,async()=>{},fetcher),/no longer matches/);
  }
 });
+
+test('new sends retry failed early preparation and preserve worktree selection', async t => {
+ const original=globalThis.WebSocket;
+ t.after(()=>{globalThis.WebSocket=original;});
+ const config=modelConfig();
+ const workspaceConfig={...config,settings:{...config.settings,defaultThreadEnvMode:'worktree'}};
+ for(const fixture of [
+  {file:{contents:'a'.repeat(40)},ref:'HEAD'},
+  {file:{exists:false,contents:''},ref:'topic'},
+  {file:{contents:'ref: refs/heads/-invalid'},ref:'topic'},
+  {file:new Error('linked worktree'),ref:'topic'},
+  {file:{exists:false},moved:true,ref:'topic'},
+ ]){
+  let reads=0,launches=0,saved=false;
+  globalThis.WebSocket=settingsSocket(()=>workspaceConfig,()=>{reads++;},(tag,payload)=>{
+   if(tag==='projects.readFile'){
+    if(fixture.file instanceof Error)throw Object.assign(fixture.file,{kind:'ProjectReadFileError'});
+    return fixture.file;
+   }
+   if(tag==='vcs.listRefs')return fixture.moved&&payload.cwd==='/repo'?{isRepo:false,refs:[]}:{isRepo:true,refs:[{current:true,name:'topic'}]};
+   assert.equal(tag,'orchestration.launchThread');
+   assert.equal(saved,true);
+   assert.equal(payload.workspaceStrategy.baseRef,fixture.ref);
+   launches++;
+   return {threadId:payload.threadId};
+  }) as any;
+  const request:Request={id:crypto.randomUUID(),project:{id:'p',title:'P',workspaceRoot:'/repo'},connection:{transport:'direct',url,environmentId:eid,host:'direct',executable:''},title:'Named note',prompt:'Content'};
+  const fetcher:any=async(u:string)=>response(u.endsWith('/environment')?descriptor:u.endsWith('/shell')?{projects:[{id:'p',workspaceRoot:'/moved'}]}:{ticket:'test'});
+  const preparing=Promise.reject(new Error('Early connection failed'));
+  void preparing.catch(()=>{});
+  await sendDirect(request,session,async()=>{saved=true;},fetcher,undefined,undefined,preparing);
+  assert.equal(reads,1);
+  assert.equal(launches,1);
+ }
+});

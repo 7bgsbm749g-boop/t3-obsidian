@@ -171,7 +171,10 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
    r.directPlan={protocolVersion:2,hash,environmentId:r.connection.environmentId!,phase:'created',create:null,turn,...(thread.session?.status==='running'&&thread.session.activeTurnId?{observedActiveTurnId:thread.session.activeTurnId}:{})};
   }else{
   const project=r.project;
-  const defaults=await (preparing??prepareNewThreadSend(project,environment,access?.origin??endpoint(r.connection.url||'')));
+  // Speculative reads can fail before the dispatch connection recovers.
+  // Retry preparation only, before saving or attempting any mutation.
+  const readDefaults=()=>prepareNewThreadSend(project,environment,access?.origin??endpoint(r.connection.url||''));
+  const defaults=await (preparing?preparing.catch(readDefaults):readDefaults());
   const {workspaceStrategy,...accessDefaults}=defaults;
   const common={threadId:commandId(r.id,'thread'),...accessDefaults,...(r.jobOptions?.modelSelection?{modelSelection:structuredClone(r.jobOptions.modelSelection)}:{}),interactionMode:r.jobOptions?.interactionMode??'default',createdAt:new Date().toISOString()};
   const generateTitle=r.title===AUTO_THREAD_TITLE,title=generateTitle?promptThreadTitle(r.prompt,r.attachments):r.title;

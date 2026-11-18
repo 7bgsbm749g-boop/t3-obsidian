@@ -84,9 +84,15 @@ export async function readNewThreadDefaults(api:T3Api,origin:string,project:Proj
     if(defaults.workspaceStrategy?.type==='worktree'&&project.workspaceRoot){
       const head=migrated&&readLegacyProject?await (headRead??readRepositoryHead(rpc,project.workspaceRoot)):undefined;
       if(head){defaults.workspaceStrategy.baseRef=head;return defaults;}
-      const status=migrated
-        ?await rpc.call('vcs.listRefs',{cwd:project.workspaceRoot,refKind:'local',limit:1,refresh:true})
+      const readRefs=(cwd:string)=>rpc.call('vcs.listRefs',{cwd,refKind:'local',limit:1,refresh:true});
+      let status=migrated
+        ?await readRefs(project.workspaceRoot)
         :await rpc.call('vcs.refreshStatus',{cwd:project.workspaceRoot,localOnly:true});
+      // A moved project must not silently become a root launch.
+      if(migrated&&readLegacyProject&&isRecord(status)&&status.isRepo===false){
+        const current=await readLegacyProject();
+        if(current.workspaceRoot&&current.workspaceRoot!==project.workspaceRoot)status=await readRefs(current.workspaceRoot);
+      }
       if(!isRecord(status)||typeof status.isRepo!=='boolean')throw Error('T3 did not return the project repository status. Retry the saved request.');
       // The ref endpoint puts the checked-out local branch first. It reads
       // refs without scanning the worktree or computing changes and upstream status.
