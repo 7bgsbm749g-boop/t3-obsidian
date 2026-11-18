@@ -50,6 +50,7 @@ export interface UpdateFiles {
 export type UpdateState={release:Release;busy:boolean;message:string};
 export interface UpdateHost {
   installed():Promise<string>;
+  running?():string;
   latest():Promise<Release|null>;
   install(release:Release):Promise<void>;
   dismissed():unknown;
@@ -70,7 +71,8 @@ export class PluginUpdates {
   private async runCheck(manual:boolean){
     try{
       const release=await this.host.latest(),installed=await this.host.installed();if(this.stopped)return;
-      if(release&&newerRelease(release.version,installed)){
+      const running=this.host.running?.()??installed;
+      if(release&&!newerRelease(running,release.version)&&(newerRelease(release.version,installed)||release.version===installed&&newerRelease(release.version,running))){
         if(manual||this.host.dismissed()!==release.version)this.show({release,busy:false,message:updateTitle(release.version)});
         else this.show(null);
       }else {this.show(null);if(manual)this.host.report('T3 Code is up to date.');}

@@ -352,7 +352,7 @@ export default class SendToT3 extends Plugin {
     const banner=new UpdateBanner(this.app.workspace.containerEl,()=>void this.pluginUpdates?.update(),()=>this.pluginUpdates?.dismiss());
     const dismissalKey=`t3-dismissed-update:${this.settings.vaultId}:${this.deviceId}`;
     this.pluginUpdates=new PluginUpdates({
-      installed:()=>installedVersion(updateStorage(this.app,this.manifest),this.manifest.id),latest:()=>latestRelease(requestRelease),
+      installed:()=>installedVersion(updateStorage(this.app,this.manifest),this.manifest.id),running:()=>pluginManifest.version,latest:()=>latestRelease(requestRelease),
       dismissed:()=>{const value:unknown=this.app.loadLocalStorage(dismissalKey);return value;},dismiss:version=>this.app.saveLocalStorage(dismissalKey,version),
       render:state=>banner.render(state),report:text=>{new Notice(text,10000);},
       install:async release=>{

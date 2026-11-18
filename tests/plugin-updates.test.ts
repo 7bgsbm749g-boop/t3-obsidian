@@ -48,6 +48,21 @@ test('offline background checks stay quiet; manual retry and errors stay availab
  f.setFail(false);await f.updates.update();assert.equal(f.rendered.at(-1),null);assert.equal(f.installs(),2);
  f.setVersion('0.0.451');await f.updates.check(true);assert.match(f.notices.at(-1)!,/up to date/);
 });
+test('manual and foreground checks retain an installed update until its code is running',async()=>{
+ let disk='0.0.450',running='0.0.450',clock=0,installs=0;const rendered:(UpdateState|null)[]=[],notices:string[]=[];
+ const updates=new PluginUpdates({installed:async()=>disk,running:()=>running,latest:async()=>release,dismissed:()=>null,dismiss:()=>{},render:state=>rendered.push(state),report:message=>notices.push(message),install:async()=>{installs++;disk=release.version;if(installs===1)throw Error('Save pending');running=release.version;}},()=>clock);
+ await updates.check();await updates.update();assert.match(rendered.at(-1)!.message,/Save pending/);
+ await updates.check(true);assert.equal(rendered.at(-1)?.release.version,release.version);assert.equal(notices.length,0);
+ clock+=6*60*60*1000;await updates.check();assert.equal(rendered.at(-1)?.busy,false);assert.equal(rendered.at(-1)?.release.version,release.version);
+ await updates.update();assert.equal(installs,2);assert.equal(rendered.at(-1),null);
+ await updates.check(true);assert.match(notices.at(-1)!,/up to date/);
+});
+test('checks cannot offer an older release over newer disk or running code',async()=>{
+ for(const [disk,running] of [['0.0.452-feature','0.0.450'],['0.0.450','0.0.452-feature'],['0.0.451','0.0.452-feature']]){
+  let state:UpdateState|null=null;const updates=new PluginUpdates({installed:async()=>disk,running:()=>running,latest:async()=>release,dismissed:()=>null,dismiss:()=>{},render:value=>{state=value;},report:()=>{},install:async()=>assert.fail('must not install')});
+  await updates.check(true);await updates.update();assert.equal(state,null);
+ }
+});
 test('unload drops late checks and prevents further installs',async()=>{
  let resolve!:(value:typeof release)=>void;const rendered:unknown[]=[];let installed=0;const updates=new PluginUpdates({installed:async()=>{installed++;return '0.0.450';},latest:()=>new Promise(r=>resolve=r),install:async()=>assert.fail('disposed'),dismissed:()=>null,dismiss:()=>assert.fail('disposed'),render:s=>rendered.push(s),report:()=>assert.fail('disposed')});
  const work=updates.check();updates.dispose();resolve(release);await work;await updates.update();await updates.check(true);assert.deepEqual(rendered,[null]);assert.equal(installed,1);

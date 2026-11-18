@@ -103,6 +103,7 @@ T3 Code. If the old code is still running, notes are saved again before Obsidian
 plugin manager reloads it. Settings are preserved, and active streams do not need to finish. The
 installed and running versions are checked after installation. Errors stay in the
 banner so you can retry; if the old plugin has unloaded, a notice shows the error.
+Update checks keep the banner available while installed files wait to load.
 If this Obsidian version does not expose its internal installer, update through
 Community plugins. Releases that need a newer Obsidian version show an instruction
 to update Obsidian first. Development builds are compared by their numeric source

@@ -28,7 +28,7 @@ export async function updatePlugin(app:App,manifest:PluginManifest,release:Relea
   const storage=updateStorage(app,manifest),before=await installedVersion(storage,manifest.id);
   const loaded=plugins.plugins[manifest.id]?.manifest?.version;
   const retryReload=before===release.version&&!!loaded&&newerRelease(release.version,loaded);
-  if(!retryReload&&!newerRelease(release.version,before))throw Error('This release is already installed or older than your installed version.');
+  if(newerRelease(loaded??'',release.version)||!retryReload&&!newerRelease(release.version,before))throw Error('This release is already installed or older than your installed version.');
   try{
     if(!retryReload){
       const next=await releaseManifest(release,request,manifest.id,requireApiVersion,Platform.isMobile);

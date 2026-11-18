@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from './build-fixture';
 import {runInNewContext} from './obsidian-context';
-import {readRelease,RELEASE_REPOSITORY} from '../src/app/plugin-updates';
+import {PluginUpdates,readRelease,RELEASE_REPOSITORY,type UpdateState} from '../src/app/plugin-updates';
 const compiled=build({entryPoints:['src/app/update-install.ts'],bundle:true,platform:'browser',format:'cjs',write:false});
 async function fixture(tag='0.0.451'){
  const module={exports:{} as any},files=new Map<string,string>([['plugins/t-three-code/manifest.json',JSON.stringify({id:'t-three-code',version:'0.0.450'})],['plugins/t-three-code/main.js','old'],['plugins/t-three-code/styles.css','old css'],['plugins/t-three-code/data.json','preserve settings']]),events:string[]=[],notices:string[]=[];
@@ -84,6 +84,24 @@ test('retry after a blocked reload uses installed files and cannot downgrade a n
  assert.equal(installs,1);assert.deepEqual(f.events,['download manifest.json']);
  f.app.plugins.plugins['t-three-code'].manifest.version='0.0.452';
  await assert.rejects(f.module.exports.updatePlugin(f.app,f.manifest,f.release,prepare,()=>true,f.request),/older/);
+});
+test('a manual check after the second save blocks preserves the native reload retry',async()=>{
+ const f=await fixture();let prepares=0,installs=0;const states:(UpdateState|null)[]=[],notices:string[]=[];
+ f.app.plugins.installPlugin=async()=>{installs++;f.files.set('plugins/t-three-code/manifest.json',JSON.stringify(f.next));};
+ f.app.plugins.disablePlugin=async()=>{};f.app.plugins.loadManifests=async()=>{};
+ f.app.plugins.enablePlugin=async()=>{f.app.plugins.plugins['t-three-code'].manifest={...f.next};};
+ const updates=new PluginUpdates({installed:()=>f.module.exports.installedVersion(f.module.exports.updateStorage(f.app,f.manifest),f.manifest.id),running:()=>f.app.plugins.plugins['t-three-code'].manifest.version,latest:async()=>f.release,dismissed:()=>null,dismiss:()=>{},render:state=>states.push(state),report:message=>notices.push(message),install:release=>f.module.exports.updatePlugin(f.app,f.manifest,release,async()=>{if(++prepares===2)throw Error('Save pending');},()=>true,f.request)});
+ await updates.check();await updates.update();assert.match(states.at(-1)!.message,/Save pending/);
+ assert.equal(f.app.plugins.plugins['t-three-code'].manifest.version,'0.0.450');
+ assert.equal(await f.module.exports.installedVersion(f.module.exports.updateStorage(f.app,f.manifest),f.manifest.id),f.release.version);
+ await updates.check(true);assert.equal(states.at(-1)?.release.version,f.release.version);assert.equal(notices.length,0);
+ await updates.update();assert.equal(states.at(-1),null);assert.equal(installs,1);assert.deepEqual(f.events,['download manifest.json']);
+ await updates.check(true);assert.match(notices.at(-1)!,/up to date/);
+});
+test('stale update actions cannot downgrade newer running code even when disk files are older',async()=>{
+ const f=await fixture();f.app.plugins.plugins['t-three-code'].manifest.version='0.0.452-feature';
+ await assert.rejects(f.module.exports.updatePlugin(f.app,f.manifest,f.release,async()=>assert.fail('must not prepare'),()=>true,f.request),/older/);
+ assert.deepEqual(f.events,[]);
 });
 test('native rejection is retained and is visible even after the old plugin unloads',async()=>{
  const f=await fixture();let alive=true;f.app.plugins.installPlugin=async()=>{alive=false;throw Error('Native install failed');};
