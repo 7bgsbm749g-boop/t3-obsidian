@@ -7,10 +7,10 @@ import {Buffer} from 'buffer/';
 import {sha1} from '@noble/hashes/legacy';
 import {sha256} from '@noble/hashes/sha2';
 import {proofKey,proof} from './dpop';
-import type {Connection,Request} from '../app/bridge';
+import type {Connection,Project,Request} from '../app/bridge';
 import type {InlineStartRequest} from '../conversations/inline-thread';
 import {existingThreadTurn,responseOwnsActiveTurn} from '../conversations/thread-target';
-import {readNewThreadDefaults} from '../conversations/model-defaults';
+import {readNewThreadDefaults,type NewThreadDefaults} from '../conversations/model-defaults';
 import {T3HttpError} from '../conversations/thread-access-cache';
 import {t3Api,abortableRead,requestAborted,type AbortableT3Api,type T3RequestOptions} from './t3-api';
 import {T3_PROTOCOL_VERSION,T3_PROTOCOL_HEADER} from './orchestration-v2';
@@ -147,7 +147,15 @@ export function commandId(id:string,name:string){
  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))throw Error('Invalid request ID.');
  const b=Buffer.from(sha1(Buffer.concat([Buffer.from(id.replace(/-/g,''),'hex'),Buffer.from(name)]))).slice(0,16);b[6]=(b[6]&15)|80;b[8]=(b[8]&63)|128;const h=b.toString('hex');return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
 }
-export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Promise<void>,fetcher?:Fetcher,access?:ThreadAccess,beforeThreadCreate?:()=>void|Promise<void>){
+export function prepareNewThreadSend(project:Project,api:ThreadAccess['api'],origin:string){
+ return readNewThreadDefaults(api,origin,project,undefined,async()=>{
+  const legacy=readWireProjects(await api('/api/orchestration/shell')).find(p=>p.id===project.id);
+  if(!legacy)throw Error('Project no longer exists. Scan this connection again.');
+  return legacy;
+ });
+}
+
+export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Promise<void>,fetcher?:Fetcher,access?:ThreadAccess,beforeThreadCreate?:()=>void|Promise<void>,preparing?:Promise<NewThreadDefaults>){
  const environment=access?.api??await environmentApi(r.connection,s,fetcher);
  const requestOptions=beforeThreadCreate?{beforeThreadCreate}:undefined;
  const api=(path:string,payload?:unknown)=>environment('/api/orchestration/'+path,payload,requestOptions);
@@ -163,11 +171,7 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
    r.directPlan={protocolVersion:2,hash,environmentId:r.connection.environmentId!,phase:'created',create:null,turn,...(thread.session?.status==='running'&&thread.session.activeTurnId?{observedActiveTurnId:thread.session.activeTurnId}:{})};
   }else{
   const project=r.project;
-  const defaults=await readNewThreadDefaults(environment,access?.origin??endpoint(r.connection.url||''),project,undefined,async()=>{
-   const legacy=readWireProjects(await api('shell')).find(p=>p.id===project.id);
-   if(!legacy)throw Error('Project no longer exists. Scan this connection again.');
-   return legacy;
-  });
+  const defaults=await (preparing??prepareNewThreadSend(project,environment,access?.origin??endpoint(r.connection.url||'')));
   const {workspaceStrategy,...accessDefaults}=defaults;
   const common={threadId:commandId(r.id,'thread'),...accessDefaults,...(r.jobOptions?.modelSelection?{modelSelection:structuredClone(r.jobOptions.modelSelection)}:{}),interactionMode:r.jobOptions?.interactionMode??'default',createdAt:new Date().toISOString()};
   const generateTitle=r.title===AUTO_THREAD_TITLE,title=generateTitle?promptThreadTitle(r.prompt,r.attachments):r.title;
