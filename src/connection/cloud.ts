@@ -4,6 +4,7 @@ import {Buffer} from 'buffer/';
 import {endpoint,descriptor,type PairedSession,type Fetcher} from './direct';
 import {proofKey,proof,thumbprint} from './dpop';
 import {PLUGIN_PERMISSIONS,hasPluginPermissions} from './environment-permissions';
+import type {SessionSetupStage} from './connection-setup';
 // Public client configuration shipped by T3 Code; these are not secrets.
 export const CLOUD={issuer:'https://clerk.t3.codes',relay:'https://relay.t3.codes',clientId:'hzxSgY2cH10sDU2r'};
 export interface CloudAccount {accessToken:string;refreshToken?:string;expiresAt:number;identity:string}
@@ -50,16 +51,21 @@ export async function discoverMachines(a:CloudAccount,fetcher?:Fetcher):Promise<
  const ids=new Set<string>();return result.environments.map((e:unknown)=>{if(!isRecord(e)||!isRecord(e.endpoint)||typeof e.endpoint.httpBaseUrl!=='string'||typeof e.environmentId!=='string'||!e.environmentId||ids.has(e.environmentId)||typeof e.label!=='string')throw new CloudError('invalid_environment_list');ids.add(e.environmentId);return {environmentId:e.environmentId,name:e.label,url:endpoint(e.endpoint.httpBaseUrl)};});
 }
 
-export async function connectMachine(a:CloudAccount,m:CloudMachine,keyId:string,fetcher?:Fetcher,permissions:readonly string[]=PLUGIN_PERMISSIONS):Promise<PairedSession>{
+export async function connectMachine(a:CloudAccount,m:CloudMachine,keyId:string,fetcher?:Fetcher,permissions:readonly string[]=PLUGIN_PERMISSIONS,step?:(stage:SessionSetupStage)=>void):Promise<PairedSession>{
+ step?.('proof-key');
  const key=await proofKey(keyId);const exchange=CLOUD.relay+'/v1/client/dpop-token';
  const opts=form({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',subject_token:a.accessToken,subject_token_type:'urn:ietf:params:oauth:token-type:jwt',requested_token_type:'urn:ietf:params:oauth:token-type:access_token',resource:CLOUD.relay,scope:'environment:connect',client_id:'t3-web'});
+ step?.('relay-token');
  const t=await request(exchange,{...opts,headers:{...opts.headers,DPoP:await proof(key,'POST',exchange)}},fetcher);
  if(t.token_type!=='DPoP'||typeof t.access_token!=='string'||t.scope!=='environment:connect')throw new CloudError('invalid_relay_token');
  const url=CLOUD.relay+'/v1/environments/'+encodeURIComponent(m.environmentId)+'/connect';
+ step?.('relay-connect');
  const connected=await request(url,{method:'POST',headers:{Authorization:'DPoP '+t.access_token,DPoP:await proof(key,'POST',url,t.access_token),'Content-Type':'application/json'},body:JSON.stringify({clientProofKeyThumbprint:await thumbprint(key)})},fetcher);
  if(!isRecord(connected.endpoint)||typeof connected.endpoint.httpBaseUrl!=='string'||connected.environmentId!==m.environmentId||endpoint(connected.endpoint.httpBaseUrl)!==m.url||typeof connected.credential!=='string')throw new CloudError('environment_changed');
+ step?.('descriptor');
  const d=await descriptor(m.url,fetcher);if(d.environmentId!==m.environmentId)throw new CloudError('environment_changed');
  const tokenUrl=m.url+'/oauth/token';const tokenOpts=form({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',subject_token:connected.credential,subject_token_type:'urn:t3:params:oauth:token-type:environment-bootstrap',requested_token_type:'urn:ietf:params:oauth:token-type:access_token',scope:permissions.join(' '),client_label:'T3 Code (Obsidian)'});
+ step?.('environment-token');
  const session=await request(tokenUrl,{...tokenOpts,headers:{...tokenOpts.headers,DPoP:await proof(key,'POST',tokenUrl)}},fetcher);
  if(session.token_type!=='DPoP'||typeof session.access_token!=='string'||typeof session.expires_in!=='number'||!Number.isFinite(session.expires_in)||session.expires_in<=0)throw new CloudError('invalid_environment_token');
  const granted=String(session.scope).split(/\s+/);

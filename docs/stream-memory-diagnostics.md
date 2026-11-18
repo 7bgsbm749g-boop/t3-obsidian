@@ -39,6 +39,11 @@ Turning a switch off stops new collection in that category and preserves history
 The former Export command now opens the log location; its ID remains compatible.
 The read-only command API still provides a recent preview for older tools.
 
+With Connection logging on, a failed thread visibility check records the
+machine ID and whether setup or the settings update failed. A setup failure also
+records the route ID, the step it reached, the elapsed setup time, and whether
+the setup deadline expired. These events contain no request or response bodies.
+
 ## RAM and work bounds
 
 Only the recent preview is limited to 512 events / 256,000 event bytes / seven days.
