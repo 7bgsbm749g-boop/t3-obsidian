@@ -68,3 +68,12 @@ test('large notes retain their history index between repeated layout refreshes',
  const after=streamBlockCacheStatus();assert.equal(after.sourceParses,before.sourceParses);assert.equal(after.hits-before.hits,30);assert.ok(after.characters<=after.maxCharacters);
  assert.equal(streamBlock(note.replace(':complete',':active'),key),undefined);
 });
+
+test('a repeated fold key cannot identify a block for removal',()=>{
+  const {key,body}=historyFixture();
+  assert.ok(streamBlock(body,key));
+  const duplicate=body+'\n\n'+body+'\n\n'+body;
+  assert.equal(streamBlocks(duplicate).length,3);
+  assert.equal(streamBlock(duplicate,key),undefined);
+  assert.throws(()=>removeStreamBlock(duplicate,key));
+});

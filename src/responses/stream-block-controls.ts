@@ -1,7 +1,7 @@
 import {responseControlsChanged} from './response-controls-event';
 import type {App,MarkdownView} from 'obsidian';
 import {nativeResponses} from './native-response-manager';
-import {streamBlock} from './stream-block';
+import {streamBlock,streamBlockIndex} from './stream-block';
 import {removeStreamBlockFromEditor} from './stream-block-edit';
 import {responseScrollChanged} from './response-scroll';
 import {installResponseDrag} from './response-drag';
@@ -26,7 +26,15 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
   },target=>onStop(target.id,target.view),icon,onError):()=>{};
   const refresh=()=>{
     queued=false;if(disposed)return;
-    const live=new Set<HTMLElement>();
+    const live=new Set<HTMLElement>(),indexes=new Map<MarkdownView,ReturnType<typeof streamBlockIndex>>();
+    const indexFor=(view:MarkdownView)=>{
+      let index=indexes.get(view);
+      if(!index){
+        index=streamBlockIndex(view.editor.getValue());
+        indexes.set(view,index);
+      }
+      return index;
+    };
     for(const fold of Array.from(root.querySelectorAll<HTMLElement>('.callout[data-callout="t3-progress"]'))){
       if(!generated(fold))continue;
       const block=fold.closest<HTMLElement>('.cm-embed-block'),reading=!!fold.closest('.markdown-preview-view');
@@ -73,7 +81,7 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
       // This is only a visibility hint. Use the compact native document for
       // it; the click handler above rechecks canonical saved bytes before any
       // destructive action. Layout must not repeatedly parse hidden output.
-      let ready=false;try{const found=id&&view?streamBlock(view.getMode()==='source'?view.editor.getValue():saved(view),id):undefined;ready=!!found?.complete&&!found.tracked;}catch{/* An unparseable saved block exposes no destructive action. */}
+      let ready=false;try{const found=id&&view&&!reading&&view.getMode()==='source'?indexFor(view).get(id):undefined;ready=!!found?.complete&&!found.tracked;}catch{/* An unparseable saved block exposes no destructive action. */}
       const response=id&&view?nativeResponses(app).view(view)?.responseForFold(id):undefined;
       const needsSignIn=!!response&&nativeResponses(app).connectionIssue(response)?.kind==='sign-in-required';
       controls.signIn.hidden=!needsSignIn;actions.classList.toggle('send-to-t3-stream-auth-required',needsSignIn);
