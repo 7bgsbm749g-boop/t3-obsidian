@@ -1,4 +1,4 @@
-import {isRecord,records} from '../shared/values';
+import {hasControlCharacters,isRecord,records} from '../shared/values';
 import {acquireT3UnaryRpc,type T3Api,type T3RpcConnection,type SocketFactory} from '../connection/t3-rpc';
 
 export interface ModelSelection {instanceId:string;model:string;options?:{id:string;value:unknown}[]}
@@ -61,8 +61,8 @@ async function readRepositoryHead(rpc:T3RpcConnection,cwd:string):Promise<string
     if(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(head))return 'HEAD';
     // Read only a normal clone's symbolic local branch. Linked worktrees,
     // nested folders and unfamiliar HEAD formats use T3's VCS API.
-    const branch=/^ref: refs\/heads\/([^\u0000-\u0020\u007f~^:?*\[\\]+)$/u.exec(head)?.[1];
-    if(branch&&!branch.startsWith('-')&&!branch.includes('..')&&!branch.includes('@{'))return branch;
+    const branch=/^ref: refs\/heads\/(.+)$/u.exec(head)?.[1];
+    if(branch&&!hasControlCharacters(branch,true)&&!/[ ~^:?*[\\]/u.test(branch)&&!branch.startsWith('-')&&!branch.includes('..')&&!branch.includes('@{'))return branch;
   }catch(error){
     if(!isRecord(error)||!['ProjectReadFileError','EnvironmentAuthorizationError'].includes(String(error.kind)))throw error;
   }
@@ -77,11 +77,11 @@ export async function readNewThreadDefaults(api:T3Api,origin:string,project:Proj
     const headRead=readLegacyProject&&project.workspaceRoot?readRepositoryHead(rpc,project.workspaceRoot):undefined;
     void headRead?.catch(()=>{});
     const config=await configRead;
+    const migrated=isRecord(config)&&isRecord(config.settings)&&config.settings.projectSettingsFolded===true;
     // Current servers migrate aggregate defaults into projectSettingsOverrides.
-    if(readLegacyProject&&isRecord(config)&&isRecord(config.settings)&&config.settings.projectSettingsFolded!==true)project=await readLegacyProject();
+    if(readLegacyProject&&!migrated)project=await readLegacyProject();
     const defaults=resolveNewThreadDefaults(config,project);
     if(defaults.workspaceStrategy?.type==='worktree'&&project.workspaceRoot){
-      const migrated=isRecord(config)&&isRecord(config.settings)&&config.settings.projectSettingsFolded===true;
       const head=migrated?await headRead:undefined;
       if(head){defaults.workspaceStrategy.baseRef=head;return defaults;}
       const status=migrated
