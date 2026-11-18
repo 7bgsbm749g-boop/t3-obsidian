@@ -742,6 +742,18 @@ test('first-send selection waits for confirmation and follows the note identity 
   assert.equal(h.plugin.hasConfirmedNoteSend('Notes/Fresh.md'),false);assert.equal(h.plugin.hasConfirmedNoteSend('Notes/Copy.md'),false);
   await h.plugin.openNoteSend(file);assert.equal(h.modals.length,2);assert.equal(sent.length,2);assert.equal(sent[1].threadId,'confirmed-thread');
   assert.match(sent[1].prompt,/Follow-up/);assert.doesNotMatch(sent[1].prompt,/First instruction/);
+
+  h.plugin.settings.alwaysShowComposer=true;document+='\nReview this too.';
+  await h.plugin.openNoteSend(file);
+  const composer=h.modals.at(-1);
+  assert.equal(h.modals.length,3);assert.equal(sent.length,2);
+  assert.equal((await composer.ready).threadId,'confirmed-thread');
+  composer.overrides.modelSelection={instanceId:'provider',model:'chosen'};
+  await composer.choose();
+  assert.equal(sent.length,3);assert.equal(sent[2].threadId,'confirmed-thread');
+  assert.equal(sent[2].jobOptions.modelSelection.model,'chosen');
+  assert.match(sent[2].prompt,/Review this too/);assert.doesNotMatch(sent[2].prompt,/Follow-up/);
+
   moveSmartNotes(h.plugin.smartData(),file.path);assert.equal(h.plugin.hasConfirmedNoteSend(file.path),false);
  }finally{h.plugin.onunload();}
 });
@@ -767,7 +779,14 @@ test('whole-note sends, command-bar asks and confirmed receipts use one Smart Se
   await h.plugin.openManualAction(file,'Why?', '',{editor,view},false);
   assert.equal(sent.length,3);assert.match(sent[2].prompt,/\*\*USER ASKS:\*\*\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Second instruction|Agent final/);
   const selected='First instruction.',firstAnchor={text:selected,start:0,end:selected.length,before:'',after:document.slice(selected.length,selected.length+80)};
+  h.plugin.settings.alwaysShowComposer=true;
   await h.plugin.openManualAction(file,'Which passage?',selected,{editor,view,anchor:firstAnchor,canonicalAnchor:firstAnchor,snapshot:document},false);
+  assert.equal(sent.length,3);
+  const composer=h.modals.at(-1);
+  assert.equal(composer.field.value,'Which passage?');
+  assert.equal((await composer.ready).threadId,'smart-thread');
+  await composer.choose();
+  h.plugin.settings.alwaysShowComposer=false;
   assert.equal(sent.length,4);assert.match(sent[3].prompt,/First instruction\./);assert.doesNotMatch(sent[3].prompt,/Selection reference:|Second instruction|Agent final/);
   const start=document.indexOf(response),replyAnchor={text:response,start,end:start+response.length,before:document.slice(Math.max(0,start-80),start),after:document.slice(start+response.length,start+response.length+80)};
   await h.plugin.openManualAction(file,'Explain this reply.',response,{editor,view,anchor:replyAnchor,canonicalAnchor:replyAnchor,snapshot:document},false);

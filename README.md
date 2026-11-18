@@ -23,7 +23,7 @@ For a local, HTTPS/Tailscale, or existing SSH tunnel connection, choose that met
 - **Send a note or selection.** Use **Send to agent** from the editor menu, or **T3 Code** from the command palette. Choose a new conversation or continue an existing thread.
 - **Ask a question.** Use **Ask agent** to open the composer. Selected text becomes context for your question.
 - **Follow the reply.** Responses stream into the note. Expand progress to see the agent’s activity, answer its questions, or stop the response. The finished reply becomes Markdown in your note.
-- **Continue your work.** Later sends can reuse the note’s previous thread. Smart Send avoids sending the same automatic note context again.
+- **Continue your work.** Later sends can reuse the note’s previous thread. Turn on **Always show composer** under **Settings → T3 Code → Replies** to review the destination and choose a model before each send. Smart Send avoids sending the same automatic note context again.
 
 ![Ask an agent without leaving your note](docs/images/ask-agent.png)
 

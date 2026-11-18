@@ -26,6 +26,7 @@ export interface ChatDestination {
   status?:string;
 }
 export interface ChatHost {
+  alwaysShowComposer?:boolean;
   draftChanged?(text:string):void;
   contextLabel?:string;
   chooseProject?(key:string):Promise<string>;
@@ -116,7 +117,11 @@ export class SendComposer extends NoteTabPanel {
   private modelError?:string;
   private modelTask?:Promise<void>;
   modelReady:Promise<void>=Promise.resolve();
-  constructor(app:App,private host:ChatHost,private prompt=''){super(app,host.getNotePath());this.projectKey=host.getDefaultProjectKey?.();if(host.steering||host.getThreadChoiceRestriction?.())this.target='default';}
+  constructor(app:App,private host:ChatHost,private prompt=''){
+    super(app,host.getNotePath());
+    this.projectKey=host.getDefaultProjectKey?.();
+    if(host.steering||host.getThreadChoiceRestriction?.()||(host.alwaysShowComposer&&host.getDefaultThread(this.projectKey)))this.target='default';
+  }
   private cancelCheck(){this.check?.controller.abort(cancelledRequest('Conversation check cancelled.'));this.check=undefined;}
   private checkDestination(){
     const key=this.projectKey;
@@ -325,10 +330,10 @@ async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
 /** Both entry points preserve the note captured when the action was activated. */
 export async function openChatFlow(app:App,host:ChatHost,prompt?:string,showSelector=false):Promise<void>{
   if(prompt!==undefined&&!prompt.trim())return;
-  if(prompt!==undefined&&!showSelector)return sendDefault(app,host,prompt);
+  if(prompt!==undefined&&!showSelector&&!host.alwaysShowComposer)return sendDefault(app,host,prompt);
   const modal=new SendComposer(app,host,prompt);modal.open();await modal.ready;
 }
 export async function openNoteSendFlow(app:App,host:ChatHost,showSelector=false):Promise<void>{
-  if(showSelector){new SendComposer(app,host,'').open();return;}
+  if(showSelector||host.alwaysShowComposer){new SendComposer(app,host,'').open();return;}
   await sendDefault(app,host,'');
 }
