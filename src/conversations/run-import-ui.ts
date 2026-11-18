@@ -289,7 +289,7 @@ export class ResponseCatchUpModal extends Modal {
     let update=()=>{};
     for(const thread of this.threads)new Setting(this.contentEl).setName(thread.title).setDesc(`${thread.environmentId} · ${thread.threadId}`).addToggle(toggle=>toggle.setValue(this.selected.has(thread)).onChange(value=>{if(value)this.selected.add(thread);else this.selected.delete(thread);update();}));
     new Setting(this.contentEl).addButton(button=>button.setButtonText('Cancel').onClick(()=>this.close())).addButton(button=>{
-      update=()=>button.setDisabled(!this.selected.size);update();
+      update=()=>{button.setDisabled(!this.selected.size);};update();
       button.setButtonText('Catch up on responses').setCta().onClick(()=>{
         if(this.submitted||!this.selected.size)return;
         this.submitted=true;button.setDisabled(true);
