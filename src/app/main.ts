@@ -125,7 +125,10 @@ import {selectionRange} from '../conversations/inline-steering';
 import {projectThreads,type ThreadChoice} from '../conversations/thread-target';
 import {assertThreadNoteMode,oneToOneNoteThreads,threadNoteMode,type ThreadNoteMode,type ModeThread} from '../conversations/thread-note-mode';
 import {lastUsedNoteThread,loadNoteThreads,mergeNoteThreads,mutateNoteThreads,previousNoteThreads,bindNoteThreadIds,resolveNoteThreadPaths,type NoteThread} from '../notes/note-threads';
-import {noteIndicators} from '../responses/explorer-responses';
+import {noteIndicators,type NoteIndicator} from '../responses/explorer-responses';
+import {changeNoteInbox,inboxNotes,mergeNoteInbox,type NoteInboxData,type InboxAction,type InboxNote} from '../notes/note-inbox';
+import {NoteInboxView,loadInboxViewState,type InboxViewState} from '../notes/note-inbox-view';
+import {changeInboxThreads,inboxThreadTargets} from '../notes/note-inbox-threads';
 import {CompletionGlow} from '../responses/completion-glow';
 import {folderNotePath,type FolderNotesSettings} from '../projects/folder-note-adapter';
 import {installFolderIndicators,type FolderIndicatorController} from '../projects/folder-indicator';
@@ -161,7 +164,7 @@ type SteeringSource={document:string;ranges:Span[]};
 type PaletteActionContext={file:TFile;editor?:EditorChatContext;insertion:CursorInsertion|null};
 interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat}
 type PreparedNote={content:string;images:Awaited<ReturnType<typeof collectImages>>};
-interface Settings {threadNoteMode:ThreadNoteMode;projectCreationLocations:ProjectCreationLocation[];noteContexts?:NoteContextRecord[];smartSend?:SmartSendData;responseBindings?:ResponseBindingData;codebase?:CodebaseState; replyFolders:ReplyFolders;threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; vaultHost?:VaultHost; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean;hideObsidianThreads?:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
+interface Settings {noteInbox?:NoteInboxData;threadNoteMode:ThreadNoteMode;projectCreationLocations:ProjectCreationLocation[];noteContexts?:NoteContextRecord[];smartSend?:SmartSendData;responseBindings?:ResponseBindingData;codebase?:CodebaseState; replyFolders:ReplyFolders;threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; vaultHost?:VaultHost; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean;hideObsidianThreads?:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
 type SharedSettings=Omit<Settings,'pending'|'completionJobs'|'settlementJobs'|'connection'|'projects'|'directProjects'|'selected'|'directSelected'|'directScanId'>;
 type StoredSettings=Omit<Partial<Settings>,'inlineStreaming'>&{inlineStreaming?:Partial<InlineStreamingSettings>&{askT3?:boolean;sendToT3?:boolean}};
 interface DeviceSettings {connectionMethod?:ConnectionMethod;routeOrder?:string[];deviceId?:string;mode?:'direct'|'desktop';connection?:Connection;pairedSessions?:Record<string,PairedSession>;cloudAccount?:CloudAccount|null;nativeAccount?:NativeAccount|null;signInEmail?:string;signInExpired?:boolean;vaultRegistrations?:Record<string,VaultRegistration>}
@@ -261,6 +264,10 @@ export default class SendToT3 extends Plugin {
   private recentFolderGesture?:{path:string;at:number};
   private paletteChat?:PaletteChatController;
   private folderIndicators?:FolderIndicatorController;
+  private noteInboxView?:NoteInboxView;
+  private inboxActions=new Map<string,Promise<void>>();
+  private inboxIndicators=new Map<string,NoteIndicator>();
+  private inboxViewState:InboxViewState=loadInboxViewState(undefined);
   private completionGlow?:CompletionGlow;
   private vaultSetup?:Promise<VaultHost>;
   private noProjectProjects=new Map<string,Project>();
@@ -417,7 +424,9 @@ export default class SendToT3 extends Plugin {
     this.signInEmail=typeof local?.signInEmail==='string'?local.signInEmail:this.nativeAccount?.identity??'';
     this.signInExpired=local?.signInExpired===true&&!this.nativeAccount;
     this.vaultRegistrations=local?.vaultRegistrations??{};
-    this.settings = {threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],vaultHost:loadVaultHost(data?.vaultHost),inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:'keep',archiveFolder:''},completionJobs:[],settlementJobs:data?.autoSettleThreads===true&&Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads===true,hideObsidianThreads:threadHiding(data?.hideObsidianThreads),folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
+    this.settings = {noteInbox:mergeNoteInbox(data?.noteInbox),threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],vaultHost:loadVaultHost(data?.vaultHost),inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:'keep',archiveFolder:''},completionJobs:[],settlementJobs:data?.autoSettleThreads===true&&Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads===true,hideObsidianThreads:threadHiding(data?.hideObsidianThreads),folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
+    this.settings.noteInbox=mergeNoteInbox(this.settings.noteInbox,await deviceState(`note-inbox:${this.deviceId}:${this.settings.vaultId}`));
+    const restoreNoteInbox=JSON.stringify(mergeNoteInbox(data?.noteInbox))!==JSON.stringify(this.settings.noteInbox);
     this.responseBindingReplica=mergeResponseBindingData(data?.responseBindings,await deviceState(`response-bindings:${this.deviceId}:${this.settings.vaultId}`));
     this.settings.responseBindings=this.responseBindingReplica;
     const completionKey=`t3-completion-glow:${this.settings.vaultId}`;
@@ -663,7 +672,7 @@ export default class SendToT3 extends Plugin {
     // verify the same vault root. This is a one-time migration, not an
     // unconditional startup snapshot write, and uses the conflict-safe path.
     if(typeof data?.vaultId!=='string'||!data.vaultId)await this.save(true);
-    else if(migratedNoteThreads||restoreFolderLinks||restoreResponseBindings||restoreSmartSend)await this.save(true);
+    else if(migratedNoteThreads||restoreNoteInbox||restoreFolderLinks||restoreResponseBindings||restoreSmartSend)await this.save(true);
     await this.publishVaultIdentity();
     this.settingsTab=new T3Settings(this.app,this);this.addSettingTab(this.settingsTab);
     this.app.workspace.onLayoutReady(()=>{
@@ -673,6 +682,12 @@ export default class SendToT3 extends Plugin {
         this.registerDomEvent(document,'pointerdown',remember,true);
         this.registerDomEvent(document,'touchstart',remember,true);
       }
+      this.inboxViewState=loadInboxViewState(this.app.loadLocalStorage(`t3-note-inbox-view:${this.settings.vaultId}`));
+      this.noteInboxView=new NoteInboxView(this.app,{
+        notes:()=>this.inboxNotes(),change:(note,action)=>this.changeInboxNote(note,action),state:()=>this.inboxViewState,
+        saveState:state=>{this.inboxViewState=state;this.app.saveLocalStorage(`t3-note-inbox-view:${this.settings.vaultId}`,state);},
+      });
+      this.noteInboxView.refresh();
       this.paletteChat=installPaletteChat(this.app,(prompt,selection,showSelector,source)=>this.openPaletteAction(prompt,selection,showSelector,source),{pluginId:this.manifest.id,onError:error=>new Notice(`T3 Code: ${message(error)}`,10000),getDraft:()=>this.localDraft(),saveDraft:draft=>this.app.saveLocalStorage(this.chatDraftKey,draft),captureSource:()=>this.capturePaletteSource()});
       this.registerInterval(window.setInterval(()=>this.paletteChat?.reconcile(),2000));
       if(typeof document!=='undefined'&&document.body&&typeof MutationObserver!=='undefined'){
@@ -690,6 +705,7 @@ export default class SendToT3 extends Plugin {
           if(!plugin||!title.classList.contains('has-folder-note'))return;
           return folderNotePath(title.getAttribute('data-path')??'',plugin.settings,path=>this.app.vault.getAbstractFileByPath(path) instanceof TFile);
         },notes=>{
+          this.inboxIndicators=notes;this.noteInboxView?.refresh();
           const tabs:Parameters<typeof decorateActivityTabs>[0]=[];
           this.app.workspace.iterateAllLeaves(leaf=>{
             const header=(leaf as typeof leaf&{tabHeaderEl?:HTMLElement}).tabHeaderEl;
@@ -1043,7 +1059,37 @@ export default class SendToT3 extends Plugin {
     return folder instanceof TFolder?folder:file;
   }
   paletteChatStatus(){return this.paletteChat?.status??'unavailable';}
-  refreshFolderIndicators(){this.folderIndicators?.refresh();this.codebase?.reconcileLinks();}
+  private inboxNotes(){
+    const responses=this.deviceInline?.explorerResponses()??[],known=new Set(responses.map(response=>response.id));
+    return inboxNotes(responseBindingRequests(this.settings.responseBindings??{}),[...responses,...(this.inlineChat?.explorerResponses()??[]).filter(response=>!known.has(response.id))],this.inboxIndicators,this.settings.noteInbox??{},this.settings.vaultId,path=>this.app.vault.getAbstractFileByPath(path) instanceof TFile);
+  }
+  private async changeInboxNote(note:InboxNote,action:InboxAction){
+    const previous=this.inboxActions.get(note.path)??Promise.resolve();
+    const work=previous.catch(()=>{}).then(()=>this.applyInboxNote(note.path,action));this.inboxActions.set(note.path,work);
+    try{await work;}finally{if(this.inboxActions.get(note.path)===work)this.inboxActions.delete(note.path);}
+  }
+  private async applyInboxNote(path:string,action:InboxAction){
+    const before=this.inboxNotes().find(note=>note.path===path);if(!before)throw Error('This note no longer has a T3 stream.');
+    changeNoteInbox(this.settings.noteInbox??{},before,action,this.deviceId);
+    const current=()=>{
+      const found=this.inboxNotes().find(note=>note.path===path);
+      if(this.stopped||!found||found.activity!==before.activity||JSON.stringify(found.ids)!==JSON.stringify(before.ids))throw Error('This note or its streams changed. Try the action again.');
+      if(action.kind==='settled'&&(found.indicator.active||found.indicator.input))throw Error('Wait for the response before settling this note.');
+      return found;
+    };
+    const wake=action.kind==='regular'&&before.section==='settled'||action.kind==='pin'&&action.value&&before.section==='settled';
+    if(action.kind==='settled'||wake){
+      const responses=[...(this.deviceInline?.explorerResponses()??[]),...(this.inlineChat?.explorerResponses()??[])];
+      const targets=inboxThreadTargets(before,responseBindingRequests(this.settings.responseBindings??{}),responses);
+      await changeInboxThreads(targets,action.kind==='settled',environmentId=>this.inlineThreadAccess(environmentId),()=>{current();},randomId);
+    }
+    let data=this.settings.noteInbox??{};const latest=current();
+    if(action.kind==='pin'&&action.value&&(latest.section==='settled'||latest.section==='snoozed'))data=changeNoteInbox(data,latest,{kind:'regular'},this.deviceId);
+    this.settings.noteInbox=changeNoteInbox(data,latest,action,this.deviceId);
+    await deviceState(`note-inbox:${this.deviceId}:${this.settings.vaultId}`,this.settings.noteInbox);
+    await this.save();
+  }
+  refreshFolderIndicators(){this.folderIndicators?.refresh();this.noteInboxView?.refresh();this.codebase?.reconcileLinks();}
   private async checkExternalSettings(){
     if(this.stopped||this.checkingExternalSettings)return;
     this.checkingExternalSettings=true;
@@ -1055,8 +1101,11 @@ export default class SendToT3 extends Plugin {
     const data=storedSettings(loaded??await this.loadSettings());if(this.stopped||!data)return;
     this.lastDiskSnapshot=JSON.stringify(data);
     const baseline=parseJson(this.sharedBaseline) as SharedSettings,remote=this.sharedData(data);
-    const adopted=mergeSharedSettingsExcept(baseline,remote,this.sharedSnapshot(),['smartSend','responseBindings','folderLinks','folderLinkChanges','noteThreads','noteContexts','vaultHost']);
+    const adopted=mergeSharedSettingsExcept(baseline,remote,this.sharedSnapshot(),['noteInbox','smartSend','responseBindings','folderLinks','folderLinkChanges','noteThreads','noteContexts','vaultHost']);
     adopted.vaultHost=mergeVaultHost(baseline.vaultHost,remote.vaultHost,this.settings.vaultHost);
+    this.settings.noteInbox=mergeNoteInbox(this.settings.noteInbox,data.noteInbox);
+    const restoreNoteInbox=JSON.stringify(mergeNoteInbox(data.noteInbox))!==JSON.stringify(this.settings.noteInbox);
+    await deviceState(`note-inbox:${this.deviceId}:${this.settings.vaultId}`,this.settings.noteInbox);
     const incomingBindings=loadResponseBindingData(data.responseBindings);
     const previousBindings=JSON.stringify(this.responseBindingReplica),previousSmartSend=JSON.stringify(this.smartReplica);
     Object.assign(this.smartReplica,mergeSmartSend(this.smartReplica,data.smartSend,this.settings.smartSend));this.settings.smartSend=this.smartReplica;await deviceState(`smart-send:${this.deviceId}:${this.settings.vaultId}`,this.smartReplica);
@@ -1095,7 +1144,7 @@ export default class SendToT3 extends Plugin {
     // Include sends and note moves confirmed while the refresh was awaiting IO.
     const mergedThreads=mergeNoteThreads(remoteThreads,this.settings.noteThreads);
     this.settings.noteThreads=mergedThreads;
-    if(JSON.stringify(data.smartSend)!==JSON.stringify(this.smartReplica)||restoreFolderLinks||restoreResponseBindings||restoreNoteContexts||JSON.stringify(mergedThreads)!==JSON.stringify(remoteThreads))await this.save(restoreFolderLinks||restoreResponseBindings||restoreNoteContexts);
+    if(JSON.stringify(data.smartSend)!==JSON.stringify(this.smartReplica)||restoreNoteInbox||restoreFolderLinks||restoreResponseBindings||restoreNoteContexts||JSON.stringify(mergedThreads)!==JSON.stringify(remoteThreads))await this.save(restoreNoteInbox||restoreFolderLinks||restoreResponseBindings||restoreNoteContexts);
     if(previousBindings!==JSON.stringify(this.responseBindingReplica))this.deviceInline?.localBindingsChanged();
     if(previousSmartSend!==JSON.stringify(this.smartReplica))this.deviceInline?.savedResponsesChanged();
     this.refreshFolderIndicators();
@@ -2938,7 +2987,7 @@ export default class SendToT3 extends Plugin {
   private sharedSnapshot():SharedSettings{const {pending,completionJobs,settlementJobs,connection,projects,directProjects,selected,directSelected,directScanId,smartSend,...shared}=this.settings;return {...jsonClone(shared),...(smartSend?{smartSend:snapshotSmartSend(smartSend)}:{})};}
   private sharedData(input:unknown):SharedSettings{
     const data=storedSettings(input);
-    return {...this.sharedSnapshot(),threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),responseBindings:loadResponseBindingData(data?.responseBindings),smartSend:loadSmartSend(data?.smartSend),autoSettleThreads:data?.autoSettleThreads===true,hideObsidianThreads:threadHiding(data?.hideObsidianThreads),
+    return {...this.sharedSnapshot(),noteInbox:mergeNoteInbox(data?.noteInbox),threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),responseBindings:loadResponseBindingData(data?.responseBindings),smartSend:loadSmartSend(data?.smartSend),autoSettleThreads:data?.autoSettleThreads===true,hideObsidianThreads:threadHiding(data?.hideObsidianThreads),
       vaultHost:loadVaultHost(data?.vaultHost),
       inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},
       completion:{action:'keep',archiveFolder:''}};
@@ -2964,11 +3013,12 @@ export default class SendToT3 extends Plugin {
       if(!writeShared)return;
       const current=await this.loadSettings();
       const disk=this.sharedData(current);
-      snapshot=mergeSharedSettingsExcept(baseline,disk,intended,['smartSend','responseBindings','folderLinks','folderLinkChanges','noteThreads','noteContexts','vaultHost']);
+      snapshot=mergeSharedSettingsExcept(baseline,disk,intended,['noteInbox','smartSend','responseBindings','folderLinks','folderLinkChanges','noteThreads','noteContexts','vaultHost']);
       snapshot.vaultHost=mergeVaultHost(baseline.vaultHost,disk.vaultHost,intended.vaultHost);
       snapshot.folderLinkChanges=mergeFolderLinkChanges(this.folderLinkReplica,loadFolderLinkChanges(current?.folderLinkChanges),intended.folderLinkChanges);
       snapshot.folderLinks=applyFolderLinkChanges(mergeLegacyFolderLinks(loadFolderLinks(baseline),loadFolderLinks(current),intended.folderLinks),snapshot.folderLinkChanges);
       snapshot.noteThreads=mergeNoteThreads(loadNoteThreads(current?.noteThreads),intended.noteThreads);
+      snapshot.noteInbox=mergeNoteInbox(current?.noteInbox,intended.noteInbox,this.settings.noteInbox);
       snapshot.noteContexts=mergeNoteContexts(current?.noteContexts,intended.noteContexts,this.settings.noteContexts);
       snapshot.smartSend=mergeSmartSend(this.smartReplica,current?.smartSend,intended.smartSend);
       snapshot.responseBindings=mergeResponseBindingData(this.responseBindingReplica,current?.responseBindings,intended.responseBindings);
@@ -2977,10 +3027,12 @@ export default class SendToT3 extends Plugin {
       await writeDeviceStates([
         [`smart-send:${this.deviceId}:${this.settings.vaultId}`,snapshot.smartSend],
         [`response-bindings:${this.deviceId}:${this.settings.vaultId}`,snapshot.responseBindings],
+        [`note-inbox:${this.deviceId}:${this.settings.vaultId}`,snapshot.noteInbox],
       ]);
       await this.saveData(snapshot);
       this.smartHistoryPublished=Math.max(this.smartHistoryPublished,smartRevision);
       Object.assign(this.smartReplica,mergeSmartSend(snapshot.smartSend,this.smartReplica,this.settings.smartSend));this.settings.smartSend=this.smartReplica;
+      this.settings.noteInbox=mergeNoteInbox(snapshot.noteInbox,this.settings.noteInbox);
       this.settings.noteContexts=mergeNoteContexts(snapshot.noteContexts,this.settings.noteContexts);
       this.responseBindingReplica=mergeResponseBindingData(snapshot.responseBindings,this.responseBindingReplica);this.settings.responseBindings=this.responseBindingReplica;
       this.folderLinkReplica=snapshot.folderLinkChanges;
@@ -3296,7 +3348,7 @@ export default class SendToT3 extends Plugin {
       throw error;
     }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
-  onunload(){this.connectionSetupOwner.abort();this.disposeUnaryOwners();if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.conversationSources.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void Promise.allSettled([this.saving,this.diagnostics?.close()]).then(()=>closeSharedStateDatabase());void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){this.connectionSetupOwner.abort();this.disposeUnaryOwners();if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.conversationSources.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.noteInboxView?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void Promise.allSettled([this.saving,this.diagnostics?.close()]).then(()=>closeSharedStateDatabase());void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async setThreadHiding(enabled:boolean){this.settings.hideObsidianThreads=enabled;await this.save();await this.syncThreadVisibility();}
   private syncThreadVisibility(force=false):Promise<void>{
     if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve();

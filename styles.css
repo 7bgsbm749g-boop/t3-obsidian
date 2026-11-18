@@ -867,6 +867,19 @@ a.send-to-t3-subagent:focus-visible { outline:2px solid var(--interactive-accent
 .t3-model-picker-switch::after { content: ''; display: block; width: 12px; height: 12px; border-radius: 50%; background: var(--text-on-accent); }
 .t3-model-picker-row[aria-checked="true"] .t3-model-picker-switch { background: var(--interactive-accent); }
 .t3-model-picker-row[aria-checked="true"] .t3-model-picker-switch::after { transform: translateX(10px); }
+/* Native note rows, filtered in place. Shelf geometry follows T3's
+   CollapsibleSectionHeader: 32px high, 12px text, trailing count and chevron. */
+.t3-note-inbox-toggle { align-self:center; flex:none; }
+.t3-note-inbox-toggle.is-active { color:var(--interactive-accent); background:var(--background-modifier-hover); }
+.t3-note-inbox-spacer { height:var(--t3-inbox-gap, 8px); }
+.t3-note-inbox-heading { display:flex; align-items:center; gap:8px; width:100%; height:32px; padding:0 8px; border:0; border-radius:var(--radius-m); box-shadow:none; background:transparent; color:var(--text-muted); font-size:var(--font-ui-smaller); font-weight:var(--font-medium); text-align:start; cursor:pointer; }
+.t3-note-inbox-heading:hover { background:transparent; box-shadow:none; }
+.t3-note-inbox-heading:focus-visible { outline:1px solid var(--background-modifier-border-focus); outline-offset:-1px; }
+.t3-note-inbox-rule { flex:1; min-width:8px; height:1px; background:var(--background-modifier-border); visibility:hidden; }
+.t3-note-inbox-count { font-weight:var(--font-normal); font-variant-numeric:tabular-nums; }
+.t3-note-inbox-chevron { display:flex; flex:none; }
+.t3-note-inbox-chevron .svg-icon { width:12px; height:12px; }
+.t3-note-inbox-heading[aria-expanded="false"] .t3-note-inbox-chevron { transform:rotate(-90deg); }
 .t3-update-banner {
   position: fixed;
   top: calc(env(safe-area-inset-top, 0px) + var(--header-height, 40px));
@@ -900,3 +913,7 @@ a.send-to-t3-subagent:focus-visible { outline:2px solid var(--interactive-accent
 .t3-update-banner-notes > :last-child { margin-bottom: 0; }
 .t3-update-banner-notes pre { white-space: pre-wrap; }
 .t3-update-banner-actions { grid-column: 2; grid-row: 2; align-self: end; display: flex; gap: var(--size-4-2); }
+
+.nav-files-container.t3-note-inbox-dragging { position:relative; }
+.t3-note-inbox-drop-target { position:absolute; top:var(--t3-inbox-drop-top); inset-inline:12px; height:32px; z-index:2; display:flex; align-items:center; padding:0 8px; border:1px solid var(--background-modifier-border); border-radius:var(--radius-m); background:var(--background-primary); color:var(--text-muted); font-size:var(--font-ui-smaller); }
+.t3-note-inbox-drop-target.is-over { color:var(--interactive-accent); border-color:var(--interactive-accent); background:var(--background-modifier-hover); }

@@ -339,7 +339,7 @@ test('queued send checkpoints own their snapshots and commit before compatible r
   const groups=[...transactions.values()];
   assert.equal(groups.filter(keys=>keys.includes(h.deviceId)).every(keys=>keys.length===1),true,'Pending checkpoints stay separate');
   const replicas=groups.filter(keys=>keys.some(key=>key.startsWith('smart-send:')));
-  assert.equal(replicas.length,2);assert.ok(replicas.every(keys=>keys.length===2&&keys[1].startsWith('response-bindings:')));
+  assert.equal(replicas.length,2);assert.ok(replicas.every(keys=>keys.length===3&&keys[1].startsWith('response-bindings:')&&keys[2].startsWith('note-inbox:')));
   assert.equal((await storedDevice(h.deviceId)).pending[0].directPlan.turn.commandId,'stable-command');
 });
 
@@ -383,4 +383,37 @@ test('plugin visibility saves share completion and collapse force requests to th
   await p.save();assert.equal(calls.length,2);
   p.settings.paired=[{id:'new',environmentId:'remote',url:'https://fixture',name:'new'}];await p.save();await p.visibilityWork;
   assert.deepEqual(calls.at(-1),{enabled:false,force:false},'route changes still synchronize');
+});
+
+
+test('inbox choices survive stale settings saves, external changes, and restart without losing independent fields',async()=>{
+  const h=await harness({vaultId:randomUUID()}),p=h.plugin;
+  const pin={value:true,clock:10,actor:'local'};
+  p.settings.noteInbox={stream:{pinned:pin}};
+  h.setCurrent({...h.current(),noteInbox:{stream:{shelf:{value:{kind:'settled',activity:'fixture'},clock:11,actor:'remote'}}}});
+  await p.save();
+  assert.equal(h.current().noteInbox.stream.pinned.value,true);
+  assert.equal(h.current().noteInbox.stream.shelf.value.kind,'settled');
+  const restarted=await harness(h.current());
+  assert.equal(restarted.plugin.settings.noteInbox.stream.shelf.value.kind,'settled');
+  h.setCurrent({...h.current(),noteInbox:{stream:{pinned:{value:false,clock:20,actor:'remote'}}}});
+  await p.onExternalSettingsChange();
+  assert.equal(p.settings.noteInbox.stream.pinned.value,false);
+  assert.equal(p.settings.noteInbox.stream.shelf.value.kind,'settled','a stale field cannot delete a different register');
+  assert.equal(h.current().noteInbox.stream.shelf.value.kind,'settled','compatible local state is republished');
+  const staleRestart=await harness({...h.current(),noteInbox:{}},h.deviceId);
+  assert.equal(staleRestart.plugin.settings.noteInbox.stream.pinned.value,false,'the local replica survives stale Sync at startup');
+  assert.equal(staleRestart.current().noteInbox.stream.shelf.value.kind,'settled');
+});
+
+test('inbox settlement updates every attached T3 thread before saving local state and preserves failures',async()=>{
+ const h=await harness({vaultId:randomUUID()}),p=h.plugin,actions:any[]=[],path='Synthetic/Inbox.md';let fail=false;
+ const note:any={path,ids:['one','duplicate','two'],activity:'activity',section:'regular',pinned:false,indicator:{active:0,input:0,total:3,complete:3}};
+ p.inboxNotes=()=>[note];p.settings.noteInbox={};
+ p.settings.responseBindings=Object.fromEntries(note.ids.map((id:string)=>[id,{request:{id,threadEnvironmentId:id==='two'?'remote':'local',threadId:id==='two'?'second':'first',projectId:'project'}}]));
+ p.inlineThreadAccess=async(env:string)=>({origin:'http://synthetic',close:()=>{},api:async(_path:string,body:any)=>{if(body){actions.push({env,...body});if(fail)throw Error('offline');return {};}return {thread:{id:env==='remote'?'second':'first',projectId:'project',messages:[],activities:[],session:{status:'ready',activeTurnId:null}}};}});
+ p.save=async()=>{actions.push({local:true});};
+ await p.changeInboxNote(note,{kind:'settled'});assert.deepEqual(actions.map(action=>action.type??'local'),['thread.settle','thread.settle','local']);assert.equal(p.settings.noteInbox.one.shelf.value.kind,'settled');
+ note.section='settled';actions.length=0;await p.changeInboxNote(note,{kind:'regular'});assert.deepEqual(actions.map(action=>action.type??'local'),['thread.unsettle','thread.unsettle','local']);assert.equal(actions[0].reason,'user');
+ note.section='regular';const before=JSON.stringify(p.settings.noteInbox);fail=true;await assert.rejects(p.changeInboxNote(note,{kind:'settled'}),/offline/);assert.equal(JSON.stringify(p.settings.noteInbox),before);
 });

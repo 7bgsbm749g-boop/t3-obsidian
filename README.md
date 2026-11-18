@@ -38,6 +38,34 @@ Use **Settings → T3 Code → Replies** to adjust reply behaviour, and **Projec
 
 **Hide Obsidian threads in T3**, under **Replies**, is off by default. It tags new threads created here with `t3-obsidian` and hides them across connected T3 environments and clients. It also enables T3’s existing hidden-tag filter, including other tags already listed there. Turning it off removes only `t3-obsidian` from that filter; thread tags and other entries remain. Existing threads created outside the plugin are not tagged. New threads can appear briefly before tagging. Unavailable machines and pending tags are checked again when Obsidian reconnects or returns to the foreground.
 
+## Note inbox in the file explorer
+
+Choose the **T3 icon** in the left sidebar's top row, next to **Codebase view**,
+to open the note inbox. Choose **Files** to return to the normal file tree.
+The inbox includes only existing Markdown notes with a current or past T3 stream. Several streams in a note share one row;
+sending a note without attaching a stream does not add it.
+
+The T3 button filters the existing file explorer to notes with stream history.
+Notes keep their normal labels, icons, decorations, drag behavior, and file
+menus. Pinned notes come first, followed by regular notes. The small **Working**,
+**Snoozed**, and **Settled** shelf headers follow T3 Code's sidebar, with a
+trailing count and collapse chevron.
+
+Drag a note onto **Pinned** at the top or **Settled** at the bottom of the inbox.
+These drop targets appear only while dragging. Drop onto a regular note to
+unpin or reopen work. The normal note context menu offers the same actions,
+plus snooze and wake.
+Running responses and notes that need input must finish before you can settle
+or snooze them. New sends return settled work to the inbox; snoozed notes return
+when their wake time passes. Completing a response does not settle its note.
+
+Inbox choices follow stream bindings through note moves and use the existing
+plugin settings sync. Settling a note also settles each attached T3 thread
+on its original machine. Reopening the note reopens those threads. The note
+enters Settled only after T3 accepts all required commands; unavailable
+threads leave its inbox state unchanged. Note files and their contents stay in place. File explorer mode and section
+collapse choices stay on the current device.
+
 ## Right sidebar conversations
 
 Use **T3 Code: Open thread in right sidebar…** to select a connected project,
