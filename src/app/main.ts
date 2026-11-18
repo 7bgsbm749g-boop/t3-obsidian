@@ -238,7 +238,7 @@ export default class SendToT3 extends Plugin {
   private settlementEvents?:ThreadSettlementEvents;
   private threadVisibility?:ThreadVisibility;
   private visibilitySignature='';
-  private visibilityWork?:Promise<void>;
+  private visibilityWork?:Promise<string[]>;
   private visibilityRerun=false;
   private visibilityForce=false;
   private settlementSyncJobs?:ThreadSettlementJob[];
@@ -3390,25 +3390,30 @@ export default class SendToT3 extends Plugin {
     }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
   onunload(){this.connectionSetupOwner.abort();this.disposeUnaryOwners();if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.conversationSources.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.noteInboxView?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void Promise.allSettled([this.saving,this.diagnostics?.close()]).then(()=>closeSharedStateDatabase());void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
-  async setThreadHiding(enabled:boolean){this.settings.hideObsidianThreads=enabled;await this.save();await this.syncThreadVisibility();}
-  private syncThreadVisibility(force=false):Promise<void>{
-    if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve();
+  async setThreadHiding(enabled:boolean){
+    this.settings.hideObsidianThreads=enabled;await this.save();
+    const failures=await this.syncThreadVisibility(true);
+    if(failures.length&&!this.stopped&&this.settings.hideObsidianThreads===enabled)new Notice(`Thread visibility is waiting on ${failures.join('; ')}. It will be checked again on reconnect.`,12000);
+  }
+  private syncThreadVisibility(force=false):Promise<string[]>{
+    if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve([]);
     const signature=JSON.stringify([this.settings.hideObsidianThreads,this.settings.paired]);
     if(this.visibilityWork){
       if(force||this.visibilitySignature!==signature){this.visibilityRerun=true;this.visibilityForce ||=force;}
       return this.visibilityWork;
     }
-    if(!force&&this.visibilitySignature===signature)return Promise.resolve();
+    if(!force&&this.visibilitySignature===signature)return Promise.resolve([]);
     const work=(async()=>{
-      let refresh=force;
+      let refresh=force,failures:string[]=[];
       do{
         this.visibilityRerun=false;this.visibilityForce=false;
         const enabled=this.settings.hideObsidianThreads,signature=JSON.stringify([enabled,this.settings.paired]);
         if(this.stopped||enabled===undefined||!refresh&&this.visibilitySignature===signature)break;
         this.visibilitySignature=signature;
-        await this.applyThreadVisibility(enabled,refresh);
+        failures=await this.applyThreadVisibility(enabled,refresh);
         refresh=this.visibilityForce;
       }while(this.visibilityRerun);
+      return failures;
     })().finally(()=>{if(this.visibilityWork===work)this.visibilityWork=undefined;});
     this.visibilityWork=work;return work;
   }
@@ -3426,7 +3431,9 @@ export default class SendToT3 extends Plugin {
           try{await this.threadVisibility!.apply(access,environmentId,enabled,credentialKey,force);}finally{await access.close?.();}
         }catch(error){failures.push(`${this.settings.paired.find(paired=>paired.environmentId===environmentId)?.name??environmentId}: ${message(error)}`);logFailure('thread.visibility.failed',error,{environmentId});}
       }
-      if(failures.length&&!this.stopped)new Notice(`Thread visibility is waiting on ${failures.join('; ')}. It will be checked again on reconnect.`,12000);
+      // Foreground, reconnect, send and settings-save retries are background work.
+      // Keep diagnostics for every failure; only an explicit toggle shows a notice.
+      return failures;
   }
   private syncSettlementEvents(){
     if(!this.settlementEvents)return;

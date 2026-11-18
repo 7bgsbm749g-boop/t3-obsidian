@@ -7,6 +7,8 @@ import {randomUUID,webcrypto} from 'node:crypto';
 import {indexedDB,IDBObjectStore} from 'fake-indexeddb';
 async function harness(initial:any,deviceId=randomUUID()){
   let current=initial,saves=0,local:any={deviceId,mode:'direct'};
+  const notices:Array<{message:string;duration?:number}>=[];
+  class Notice {constructor(message:string,duration?:number){notices.push({message,duration});}}
   class Base{}
   class Plugin {
     app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,value:any)=>{local=value;},workspace:{onLayoutReady:()=>{},on:()=>({}),getActiveViewOfType:()=>undefined,getLeavesOfType:()=>[]}};
@@ -14,11 +16,11 @@ async function harness(initial:any,deviceId=randomUUID()){
     async saveData(value:any){current=value;saves++;}
     addSettingTab(){}registerEvent(){}addCommand(){}register(_cleanup:()=>void){}
   }
-  const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base};
+  const api={Plugin,Platform:{isMobile:true},Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice};
   const module={exports:{} as any};
   runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},URL,TextEncoder,TextDecoder,AbortController,crypto:webcrypto,setTimeout,clearTimeout,console},{timeout:5000});
   const plugin=new module.exports.default();await plugin.onload();
-  return {plugin,deviceId,saves:()=>saves,current:()=>current,setCurrent:(value:any)=>{current=value;}};
+  return {plugin,deviceId,notices,saves:()=>saves,current:()=>current,setCurrent:(value:any)=>{current=value;}};
 }
 
 async function noteRoutingHarness(){
@@ -374,7 +376,7 @@ test('plugin visibility saves share completion and collapse force requests to th
   const h=await harness({vaultId:'vault'}),p=h.plugin,calls:Array<{enabled:boolean;force:boolean}>=[];
   let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
   p.threadVisibility={};p.settings.hideObsidianThreads=true;
-  p.applyThreadVisibility=async(enabled:boolean,force:boolean)=>{calls.push({enabled,force});if(calls.length===1)await gate;};
+  p.applyThreadVisibility=async(enabled:boolean,force:boolean)=>{calls.push({enabled,force});if(calls.length===1)await gate;return [];};
   const first=p.syncThreadVisibility(true);
   await Promise.all(Array.from({length:40},()=>p.save()));assert.equal(calls.length,1);
   const waiting=[];for(let i=0;i<40;i++){p.settings.hideObsidianThreads=i%2===0;waiting.push(p.syncThreadVisibility(true));}
@@ -383,6 +385,49 @@ test('plugin visibility saves share completion and collapse force requests to th
   await p.save();assert.equal(calls.length,2);
   p.settings.paired=[{id:'new',environmentId:'remote',url:'https://fixture',name:'new'}];await p.save();await p.visibilityWork;
   assert.deepEqual(calls.at(-1),{enabled:false,force:false},'route changes still synchronize');
+});
+
+async function failedVisibilityHarness(){
+  const h=await harness({vaultId:randomUUID()}),p=h.plugin;
+  p.threadVisibility={};p.settings.hideObsidianThreads=true;
+  p.settings.paired=[{id:'offline',environmentId:'offline',url:'https://offline.invalid',name:'Offline machine'}];
+  let attempts=0;
+  p.sessionFor=async()=>{attempts++;throw Error('T3 connection setup timed out.');};
+  return {...h,attempts:()=>attempts};
+}
+
+test('repeated background visibility failures stay silent and keep retrying',async()=>{
+  const h=await failedVisibilityHarness(),p=h.plugin;
+  for(let i=0;i<3;i++){
+    const failures=await p.syncThreadVisibility(true);
+    assert.match(failures[0],/Offline machine: T3 connection setup timed out/);
+  }
+  assert.equal(h.attempts(),3,'silencing the notice must not disable retries');
+  assert.deepEqual(h.notices,[],'foreground, reconnect and send retries must not show popups');
+  await p.save();await p.visibilityWork;assert.deepEqual(h.notices,[]);
+});
+
+test('an explicit visibility change reports failure once and later background retries stay silent',async()=>{
+  const h=await failedVisibilityHarness(),p=h.plugin;
+  await p.setThreadHiding(false);
+  assert.equal(h.current().hideObsidianThreads,false,'the user choice remains saved for recovery');
+  assert.equal(h.notices.length,1);assert.match(h.notices[0].message,/Thread visibility is waiting on Offline machine/);
+  await p.syncThreadVisibility(true);await p.syncThreadVisibility(true);
+  assert.equal(h.notices.length,1);
+  p.applyThreadVisibility=async()=>[];
+  await p.setThreadHiding(true);assert.equal(h.notices.length,1,'a successful explicit change needs no warning');
+});
+
+test('a pending background retry still reports an explicit change, but unload suppresses its notice',async()=>{
+  for(const stopped of [false,true]){
+    const h=await failedVisibilityHarness(),p=h.plugin;
+    let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});let attempts=0;
+    p.sessionFor=async()=>{attempts++;if(attempts===1)await gate;throw Error('T3 connection setup timed out.');};
+    const background=p.syncThreadVisibility(true),explicit=p.setThreadHiding(false);
+    await p.saving;
+    p.stopped=stopped;release();await Promise.all([background,explicit]);
+    assert.equal(h.notices.length,stopped?0:1);
+  }
 });
 
 
