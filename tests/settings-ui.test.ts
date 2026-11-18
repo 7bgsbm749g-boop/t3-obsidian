@@ -10,6 +10,9 @@ class Element {
   children:Element[]=[];attrs:Record<string,string>={};text='';tabIndex=0;open=false;
   listeners:Record<string,(event:any)=>void>={};controls:any[]=[];focused=false;
   constructor(readonly tag='div'){}
+  isConnected=true;
+  get textContent(){return this.text;}
+  set textContent(value:string){this.text=value;}
   createEl(tag:string,options:any={}){const el=new Element(tag);el.text=options.text??'';el.attrs={...options.attr};this.children.push(el);return el;}
   createDiv(options:any={}){return this.createEl('div',options);}
   addClass(){}removeClass(){}empty(){this.children=[];this.controls=[];}
@@ -28,6 +31,7 @@ async function harness(mobile=false){
   class Setting {
     el:Element;get settingEl(){return this.el;}
     constructor(parent:Element){this.el=parent.createEl('setting');}
+    get descEl(){return this.el;}
     description='';setName(text:string){this.el.text=text;return this;}setDesc(text:string){this.description=text;return this;}setHeading(){return this;}
     add(callback:any){const control:any={inputEl:{},options:{} as Record<string,string>,setPlaceholder(){return this;},setValue(value:any){this.value=value;return this;},setButtonText(text:string){this.text=text;return this;},setCta(){return this;},setDisabled(){return this;},addOption(key:string,value:string){this.options[key]=value;return this;},addOptions(options:any){Object.assign(this.options,options);return this;},onChange(run:any){this.change=run;return this;},onClick(run:any){this.click=run;return this;}};callback(control);this.el.controls.push(control);return this;}
     addText(callback:any){return this.add(callback);}addDropdown(callback:any){return this.add(callback);}
@@ -39,6 +43,7 @@ async function harness(mobile=false){
   let saves=0,refreshes=0;
   const plugin:any={mode:'direct',manifest:{id:'t-three-code'},settings:{connection:{executable:'',baseDir:''},paired:[],folderLinks:[],completion:{action:'keep',archiveFolder:'Archive/T3 Code'},completionJobs:[],inlineStreaming:{enabled:true,finalAnswerFormat:'formatted'},threadTitleGeneration:'untitled-only',autoSettleThreads:true,settlementJobs:[{id:'pending'}]},save:async()=>{saves++;},refreshMachines:async()=>{refreshes++;},vaultConnection:()=>undefined,paletteChatStatus:()=> 'active'};
   const tab=new module.exports.T3Settings({},plugin);
+  plugin.threadVisibilityStatus=()=> '';
   return {tab,plugin,Setting,Plugin:module.exports.default,modalOpens:()=>modalOpens,updates:()=>updates,saves:()=>saves,refreshes:()=>refreshes};
 }
 test('native settings definitions expose the supported pages without credential writes or legacy renderers',async()=>{
@@ -52,6 +57,20 @@ test('native controls save their values and refresh through the supported index 
  const format=replies.find((row:any)=>row.name==='Final answer format'),setting=new h.Setting(new Element());format.render(setting);await setting.el.controls[0].change('raw-markdown');assert.equal(h.plugin.settings.inlineStreaming.finalAnswerFormat,'raw-markdown');assert.equal(h.saves(),1);
  h.plugin.cloudChanged();assert.equal(h.updates(),1);assert.equal(h.plugin.nativeAccount,undefined);
  const settle=replies.find((row:any)=>row.name==='Settle completed threads'),toggle=new h.Setting(new Element());settle.render(toggle);await toggle.el.controls[0].change(false);assert.equal(h.plugin.settings.settlementJobs.length,0);
+});
+test('the visibility row shows pending status and clears it in place',async()=>{
+ const h=await harness(),replies=h.tab.getSettingDefinitions().find((page:any)=>page.name==='Replies').items;
+ let status='Waiting for Test laptop.';
+ h.plugin.threadVisibilityStatus=()=>status;
+ const row=new h.Setting(new Element());
+ replies.find((item:any)=>item.name==='Hide Obsidian threads in T3').render(row);
+ const live=row.descEl.children.find(child=>child.attrs.role==='status');
+ assert.equal(live?.text,status);
+ const toggle=row.el.controls[0];status='';
+ h.tab.refreshThreadVisibilityStatus();
+ assert.equal(live?.text,'');
+ assert.equal(row.el.controls[0],toggle);
+ assert.equal(h.updates(),0);
 });
 test('always show composer defaults off and saves each toggle',async()=>{
  const h=await harness(),row=h.tab.getSettingDefinitions().find((page:any)=>page.name==='Replies').items.find((row:any)=>row.name==='Always show composer');
