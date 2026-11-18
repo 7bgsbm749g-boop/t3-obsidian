@@ -79,7 +79,7 @@ export class LocalResponseManager {
         const changed=localFinalIdentity(old.request)!==localFinalIdentity(request);
         old.attemptRevision=undefined;old.request=request;old.record={...old.record,revision:old.record.revision+1,request,state:{...old.record.state!,notePath:request.notePath,messageId:request.localMessageId??request.messageId,steering:request.localSteering}};old.preview.update(old.record);
         void Promise.resolve(this.io.receiveCoordinated?.(old.record)).catch(error=>logFailure('response.local.update',error,{bindingId:request.id}));
-        if(changed){old.update=undefined;old.preview.reconnect(this.io.isOpen(request.notePath));}
+        if(changed){old.update=undefined;if(!this.pendingThreadCreation.has(request.id))old.preview.reconnect(this.io.isOpen(request.notePath));}
       }
       return old;
     }
@@ -256,7 +256,15 @@ export class LocalResponseManager {
   }
   foreground(){this.resume();this.sources.tick(true);}
   tick(){this.resume();this.sources.tick();}
-  reconnect(){if(this.closed)return;for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.suspend();for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped){runtime.attemptRevision=undefined;if(!runtime.restoring&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.reconnect(this.io.isOpen(runtime.request.notePath));}this.resume();}
+  reconnect(){
+    if(this.closed)return;
+    for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.suspend();
+    for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped){
+      runtime.attemptRevision=undefined;
+      if(!runtime.restoring&&!this.pendingThreadCreation.has(runtime.request.id)&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.reconnect(this.io.isOpen(runtime.request.notePath));
+    }
+    this.resume();
+  }
   private detach(runtime:Runtime){if(runtime.done||runtime.stopped)return;runtime.detached=true;runtime.pendingSave='note-changed';runtime.preview.suspend();this.reportState(runtime);}
   private saveResult(runtime?:Runtime):LocalResponseSaveResult {
     if(this.closed||!runtime)return {saved:false,reason:'plugin-unavailable'};

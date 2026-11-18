@@ -625,17 +625,20 @@ test('an immediate checked retry queued while the previous worker exits cannot b
 
 
 test('unsent evidence reaches adoption before a settings notification and is never persisted',async()=>{
- const h=fixture(),hints:Array<string|undefined>=[];let ticks=0;
+ const h=fixture(),hints:Array<string|undefined>=[];let ticks=0,reconnects=0;
  const manager=new LocalResponseManager('test','vault',h.io,h.notes,undefined,()=>({
-  pendingSend:(id?:string)=>hints.push(id),tick:()=>{ticks++;},update:()=>{},delivery:()=>{},reconnect:()=>{},suspend:()=>{},dispose:()=>{},
+  pendingSend:(id?:string)=>hints.push(id),tick:()=>{ticks++;},update:()=>{},delivery:()=>{},reconnect:()=>{reconnects++;},suspend:()=>{},dispose:()=>{},
  }) as any);
  const save=h.io.saveLocalBinding;h.io.saveLocalBinding=async(request:ResponseRequest)=>{await save(request);manager.resume();};
  await manager.register(h.binding,false,undefined,h.binding.messageId,{pendingThreadCreation:true});await drain();
+ manager.reconnect();
+ assert.equal(reconnects,0,'Reconnecting cannot read a thread before the launch attempt settles');
  assert.equal(ticks,0,'Registration and recovery notifications leave a new thread unread');
  assert.ok(hints.length);assert.ok(hints.every(id=>id===h.binding.messageId));
  assert.deepEqual(responseBindingRequests(h.records())[0],h.binding);
  manager.attempted(h.binding.id);assert.equal(hints.at(-1),undefined,'An uncertain attempt resumes recovery without inventing acceptance');
  assert.equal(ticks,1);
+ manager.reconnect();assert.equal(reconnects,1);
  manager.delivered(h.binding.id,{messageId:h.binding.messageId,requestedAt:h.binding.createdAt,sequence:5});
  await manager.register(h.binding);assert.equal(hints.at(-1),undefined);manager.dispose();h.manager.dispose();
 });
