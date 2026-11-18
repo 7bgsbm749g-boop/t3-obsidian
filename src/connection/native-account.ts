@@ -10,6 +10,15 @@ const ORIGIN='https://clerk.t3.codes';
 export interface NativeAccount {clientToken:string;sessionId:string;userId:string;identity:string}
 export interface EmailLogin {clientToken:string;signInId:string;email:string;expiresAt:number}
 export class SignInError extends Error {}
+export class SignInRateLimitError extends SignInError {
+ constructor(readonly retryAt:number){super(`T3 has limited sign-in requests. Try again after ${new Date(retryAt).toLocaleTimeString()}. Closing Obsidian does not reset this limit.`);}
+}
+export function signInRetryAt(value:string|null,now=Date.now()):number{
+ const seconds=value?.trim()&&/^\d+(?:\.\d+)?$/.test(value.trim())?Number(value):NaN;
+ const at=Number.isFinite(seconds)?now+seconds*1000:value?Date.parse(value):NaN;
+ // Clerk can omit Retry-After. Allow a manual retry after one minute, with no automatic resend.
+ return Number.isFinite(at)&&at>now&&at<=8.64e15?at:now+60_000;
+}
 type ClientState={clientToken:string};
 const messages:Record<string,string>={
  form_identifier_not_found:'No T3 account was found for that email. Use the email shown in your T3 account.',
@@ -23,12 +32,18 @@ async function request(path:string,state:ClientState,body:Record<string,string>|
  const controller=new AbortController();
  try{
   const response=await fetcher(url,{method:body?'POST':'GET',headers:{...(state.clientToken?{Authorization:'Bearer '+state.clientToken}:{}),...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},...(body?{body:new URLSearchParams(body).toString()}:{}),credentials:'omit',redirect:'error',signal:controller.signal});
+  if(response.status===429){
+   const rotated=response.headers.get('authorization')?.replace(/^Bearer /i,'');
+   if(rotated){state.clientToken=rotated;await changed?.();}
+   throw new SignInRateLimitError(signInRetryAt(response.headers.get('retry-after')));
+  }
   const text=await response.text();if(Buffer.byteLength(text)>1_000_000)throw new SignInError('T3 sign-in response is too large.');
   let data:Record<string,unknown>;try{const parsed=parseJson(text);if(!isRecord(parsed))throw Error('Expected a sign-in object.');data=parsed;}catch{throw new SignInError('T3 sign-in returned an invalid response.');}
   const rotated=response.headers.get('authorization')?.replace(/^Bearer /i,'');
   if(rotated){state.clientToken=rotated;await changed?.();}
   if(!response.ok){const first=Array.isArray(data.errors)?data.errors[0] as unknown:undefined;const code=isRecord(first)&&typeof first.code==='string'?first.code:'';
    if(response.status===401||['session_expired','session_revoked','session_not_found','client_invalid','client_not_found'].includes(code))throw new SignInRequiredError();
+   if(code==='too_many_requests')throw new SignInRateLimitError(signInRetryAt(response.headers.get('retry-after')));
    throw new SignInError(messages[code]??(response.status===429?messages.too_many_requests:`T3 sign-in failed (HTTP ${response.status}). Try again or use advanced pairing.`));}
   // Clerk uses null when the response does not include a separate client update.
   const result=data.response??data,client=data.client??undefined;

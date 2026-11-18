@@ -7,15 +7,19 @@ import {webcrypto} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
 import {PLUGIN_PERMISSIONS,PLUGIN_SCOPE,AGENT_SETUP_PERMISSIONS} from '../src/connection/environment-permissions';
 
-test('mobile account sign-in connects all machines, preserves selections, survives restart, renews, and signs out without replay',async()=>{
+test('mobile account sign-in connects all machines, preserves selections, survives restart, renews, and signs out without replay',{timeout:20000},async()=>{
  let local:any={deviceId:'account-mobile-device',mode:'direct',pairedSessions:{manual:{url:'https://manual.example',environmentId:'manual',token:'manual-private',expiresAt:Date.now()+600000}}};
  const initial={paired:[{id:'a-connection',environmentId:'a',url:'https://a.example',name:'Laptop'},{id:'manual',environmentId:'manual',url:'https://manual.example',name:'Manual'}],directSelected:['a-connection:p-a'],directProjects:[{id:'p-a',title:'Project a',workspaceRoot:'/',connectionId:'a-connection',connectionName:'Laptop'}],directScanId:'a-connection'};
  const shared:any[]=[];let verified=false,offline=true,connects=0,revoked=0,nativeOffline=false;const dispatches:any[]=[];
+ let sendStarted:()=>void=()=>{};let sendDelayed=false,releaseSend:(()=>void)|undefined,limited=false,nativeRequests=0;
  let delayed=false,release:((r:any)=>void)|undefined;
  const session={id:'sess-native',status:'active',user:{id:'user-native'}};
  const jwt='header.'+Buffer.from(JSON.stringify({exp:Math.floor(Date.now()/1000)+600})).toString('base64url')+'.signature';
  const nativeResponse=(value:any,status=200)=>({status,headers:{authorization:'native-client-secret'},text:JSON.stringify(value)});
  const requestUrl=async(o:any)=>{
+  nativeRequests++;
+  if(limited)return {status:429,headers:{'retry-after':'120'},text:'Rate limited'};
+  if(sendDelayed){sendDelayed=false;await new Promise<void>(resolve=>{releaseSend=resolve;sendStarted();});}
   if(nativeOffline)throw Error('Synthetic temporary network failure');
   const u=new URL(o.url);assert.equal(u.origin,'https://clerk.t3.codes');assert.equal(o.headers.origin,undefined);assert.equal(o.throw,false);const f=new URLSearchParams(o.body);
   if(u.pathname.endsWith('/sign_ins'))return nativeResponse({response:{id:'sign-native',supported_first_factors:[{strategy:'email_code',email_address_id:'email-native'}]}});
@@ -46,12 +50,12 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
   dispatches.push(JSON.parse(o.body));return response({});
  };
  class Base{};class File{path='account-test.md';basename='account-test';name='account-test.md';extension='md';stat={ctime:1,size:10};}
- let settingsTab:any;const ui:{text:string[];buttons:Array<{text:string;run?:()=>Promise<void>}>;inputs:string[]}={text:[],buttons:[],inputs:[]};
+ let settingsTab:any;const ui:{text:string[];buttons:Array<{text:string;disabled?:boolean;run?:()=>Promise<void>}>;inputs:string[]}={text:[],buttons:[],inputs:[]};
  const element={createEl:(_tag:string,options:any)=>{ui.text.push(options.text);return element;}};
  class Setting{
   constructor(_el:any){}setName(text:string){ui.text.push(text);return this;}setDesc(text:string){ui.text.push(text);return this;}setHeading(){return this;}
   addText(callback:any){callback({inputEl:{},setPlaceholder(){return this;},setValue(text:string){ui.inputs.push(text);return this;},onChange(){return this;}});return this;}
-  addButton(callback:any){const button:any={text:'',setButtonText(text:string){this.text=text;return this;},setCta(){return this;},setDisabled(){return this;},onClick(run:any){this.run=run;return this;}};callback(button);ui.buttons.push(button);return this;}
+  addButton(callback:any){const button:any={text:'',setButtonText(text:string){this.text=text;return this;},setCta(){return this;},setDisabled(value:boolean){this.disabled=value;return this;},onClick(run:any){this.run=run;return this;}};callback(button);ui.buttons.push(button);return this;}
  }
  class Plugin{
   app={loadLocalStorage:()=>local,saveLocalStorage:(_:string,v:any)=>{local=v;},workspace:{getLeavesOfType:()=>[],onLayoutReady:()=>{},on:()=>{}},vault:{read:async()=> 'Account connection test',getMarkdownFiles:()=>[],getName:()=> 'Notes'},metadataCache:{}};
@@ -100,13 +104,37 @@ test('mobile account sign-in connects all machines, preserves selections, surviv
  assert.equal(p.nativeAccount,null);assert.equal((await p.sessionFor(c.id,true)).accountId,undefined);
  assert.equal(reconnects,1);assert.deepEqual(recoveredEnvironments,['a'],'Successful manual pairing wakes paused replies and failed HTML on that environment');assert.equal(dispatches.length,0);
  p.deviceInline=deviceInline;p.htmlResults=htmlResults;delete p.pairedSessions[c.id];
- await ui.buttons.find(button=>button.text==='Refresh authentication')!.run!();assert.equal(p.emailLogin.email,'user@example.com');
+ // Redraws and repeated handlers must share the same request and show progress immediately.
+ const entered=new Promise<void>(resolve=>{sendStarted=resolve;});sendDelayed=true;const refreshButton=ui.buttons.find(button=>button.text==='Refresh authentication')!;
+ const start=refreshButton.run!();assert.equal(p.emailSignInPending,'sending');
+ assert.ok(ui.buttons.some(button=>button.text==='Sending code…'&&button.disabled));
+ const repeat=p.startEmailSignIn('user@example.com');settingsTab.refresh();
+ assert.ok(ui.buttons.some(button=>button.text==='Sending code…'&&button.disabled));
+ await entered;const sendingRequests=nativeRequests;assert.ok(releaseSend);
+ releaseSend!();await Promise.all([start,repeat]);assert.equal(nativeRequests,sendingRequests+2,'Only one sign-in creation and one email delivery');
+ assert.equal(p.emailLogin.email,'user@example.com');assert.equal(p.emailSignInPending,null);
+ assert.match(ui.text.join('\n'),/six-digit verification code sent/);
+ const reuseRequests=nativeRequests;await p.startEmailSignIn('user@example.com');assert.equal(nativeRequests,reuseRequests,'An existing unexpired code is reused');
  await p.finishEmailSignIn('123456');assert.equal(p.nativeAccount.userId,'user-native');assert.equal(p.signInExpired,false);assert.equal(p.directAccountReady(),true);assert.equal(dispatches.length,0,'Reauthentication must not resend any prompt');
  const project=p.settings.directProjects.find((p:any)=>p.id==='p-a');await p.send(new File(),project);assert.equal(dispatches.length,2);assert.ok(dispatches[1].text.startsWith('Account connection test'));assert.doesNotMatch(dispatches[1].text,/T3 EVENT HISTORY CAPABILITY/);assert.equal(p.settings.pending.length,0);p.onunload();
  const q=new module.exports.default();await q.onload();assert.equal(q.nativeAccount.userId,'user-native');assert.equal(q.directAccountReady(),false,'reload stays gated until this device refreshes its connections');assert.equal(dispatches.length,2,'Reload must not send work');
  const sessions=q.pairedSessions;q.pairedSessions={};assert.doesNotMatch(q.chatReadinessError()??'',/Refresh connections/);q.pairedSessions=sessions;
  await q.signOutCloud();assert.equal(q.nativeAccount,null);assert.equal(q.directAccountReady(),false);assert.equal(q.pairedSessions[c.id],undefined);assert.equal(q.pairedSessions.manual.token,'manual-private');assert.equal(revoked,1);
- await q.startEmailSignIn('user@example.com');delayed=true;const verify=q.finishEmailSignIn('123456');await new Promise(r=>setImmediate(r));assert.ok(release);q.cancelCloudLogin();release!({});await verify;assert.equal(q.nativeAccount,null,'Cancelled verification must not restore account');
+ await q.startEmailSignIn('user@example.com');delayed=true;const verify=q.finishEmailSignIn('123456');const verifyAgain=q.finishEmailSignIn('123456');assert.equal(q.emailSignInPending,'verifying');await new Promise(r=>setImmediate(r));assert.ok(release);q.cancelCloudLogin();release!({});await Promise.all([verify,verifyAgain]);assert.equal(q.nativeAccount,null,'Cancelled verification must not restore account');
  for(const s of shared)assert.doesNotMatch(JSON.stringify(s),/native-client-secret|bootstrap-private|environment-private|relay-private|manual-private|123456|privateKey|sessionId/);
- q.onunload();
+ // Server cooldown is device-local and survives a plugin/app restart.
+ limited=true;await assert.rejects(q.startEmailSignIn('user@example.com'),/limited sign-in requests/);
+ const cooldownRequests=nativeRequests;assert.ok(local.signInRetryAt>Date.now());q.onunload();
+ const r=new module.exports.default();await r.onload();
+ assert.equal(r.signInRetryAt,local.signInRetryAt);
+ settingsTab.update=()=>{ui.text=[];ui.buttons=[];ui.inputs=[];settingsTab.cloudUI(element);};settingsTab.refresh();
+ assert.ok(ui.buttons.some(button=>button.text==='Send sign-in code'&&button.disabled));
+ assert.match(ui.text.join('\n'),/Closing Obsidian does not reset/);
+ await assert.rejects(r.startEmailSignIn('user@example.com'),/limited sign-in requests/);assert.equal(nativeRequests,cooldownRequests);
+ limited=false;delayed=false;r.signInRetryAt=Date.now()-1;await r.startEmailSignIn('user@example.com');assert.ok(r.emailLogin);
+ // A cancelled slow request cannot publish a late failure or replace a newer attempt.
+ r.cancelCloudLogin();const enteredAgain=new Promise<void>(resolve=>{sendStarted=resolve;});sendDelayed=true;const stale=r.startEmailSignIn('user@example.com');await enteredAgain;
+ r.cancelCloudLogin();await r.startEmailSignIn('other@example.com');releaseSend!();await stale;
+ assert.equal(r.emailLogin.email,'other@example.com');assert.equal(r.cloudError,'');assert.equal(r.emailSignInPending,null);
+ for(const plugin of [q,r]){plugin.signInRetryAt=0;plugin.scheduleSignInRetry();}r.onunload();
 });
