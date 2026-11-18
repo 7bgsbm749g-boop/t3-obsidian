@@ -21,12 +21,16 @@
     "30": {
       "version": "0.0.452",
       "mergeCommit": "80bacb7a35a1b821eff0cc39ea53d9d9c402f03e"
+    },
+    "31": {
+      "version": "0.0.453",
+      "mergeCommit": "fd3e5dfc9e8552f9830045737447861b14d581f3"
     }
   },
   "startCommit": "c4dd2722b89929b46e00573a81a421796ede3a41",
   "latest": {
-    "pr": 30,
-    "version": "0.0.452",
-    "source": "80bacb7a35a1b821eff0cc39ea53d9d9c402f03e"
+    "pr": 31,
+    "version": "0.0.453",
+    "source": "fd3e5dfc9e8552f9830045737447861b14d581f3"
   }
 }
