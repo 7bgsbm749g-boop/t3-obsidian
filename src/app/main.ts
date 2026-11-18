@@ -102,7 +102,7 @@ import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,
 import {pair,readDirect,commandId,environmentApi,endpoint,type PairedConnection,type PairedSession} from '../connection/direct';
 import {RouteAuthorizationCache,verifyOrchestrationRead} from '../connection/route-authorization';
 import {environmentAccess} from '../connection/environment-access';
-import {connectionDeadline,setupFetcher,ConnectionPreparation} from '../connection/connection-setup';
+import {connectionDeadline,setupFetcher,ConnectionPreparation,ConnectionSetupTimeout,type SessionSetupStage} from '../connection/connection-setup';
 import {browserFetch} from '../connection/browser-fetch';
 import {setIcon, App, FileSystemAdapter, Menu, MenuItem, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, MarkdownView, Platform, FuzzySuggestModal, type SettingDefinition,type SettingDefinitionItem,type TAbstractFile, type Editor, type MarkdownFileInfo, MarkdownRenderChild, MarkdownRenderer,  requestUrl } from 'obsidian';
 import { Buffer } from 'buffer/';
@@ -169,6 +169,7 @@ type SharedSettings=Omit<Settings,'pending'|'completionJobs'|'settlementJobs'|'c
 type StoredSettings=Omit<Partial<Settings>,'inlineStreaming'>&{inlineStreaming?:Partial<InlineStreamingSettings>&{askT3?:boolean;sendToT3?:boolean}};
 interface DeviceSettings {connectionMethod?:ConnectionMethod;routeOrder?:string[];deviceId?:string;mode?:'direct'|'desktop';connection?:Connection;pairedSessions?:Record<string,PairedSession>;cloudAccount?:CloudAccount|null;nativeAccount?:NativeAccount|null;signInEmail?:string;signInExpired?:boolean;signInRetryAt?:number;vaultRegistrations?:Record<string,VaultRegistration>}
 function storedSettings(value:unknown):StoredSettings|null{return isRecord(value)?value:null;}
+interface VisibilityFailure { environmentId:string; message:string }
 export default class SendToT3 extends Plugin {
   private settingsTab?:T3Settings;
   declare settings: Settings;
@@ -199,7 +200,7 @@ export default class SendToT3 extends Plugin {
   machineErrors:Record<string,string>={};
   private nativeToken:CloudAccount|undefined;
   private nativeRefreshing:Promise<CloudAccount>|undefined;
-  private sessionRefreshing=new Map<string,Promise<PairedSession>>();
+  private sessionRefreshing=new Map<string,{work:Promise<PairedSession>;stage:()=>SessionSetupStage}>();
   private connectionSetupOwner=new AbortController();
   private renewalPreparation=new ConnectionPreparation();
   private machineRefreshing:Promise<void>|undefined;
@@ -238,7 +239,8 @@ export default class SendToT3 extends Plugin {
   private settlementEvents?:ThreadSettlementEvents;
   private threadVisibility?:ThreadVisibility;
   private visibilitySignature='';
-  private visibilityWork?:Promise<string[]>;
+  private visibilityWork?:Promise<VisibilityFailure[]>;
+  private visibilityResult?:{signature:string;failures:VisibilityFailure[]};
   private visibilityRerun=false;
   private visibilityForce=false;
   private settlementSyncJobs?:ThreadSettlementJob[];
@@ -2708,7 +2710,7 @@ export default class SendToT3 extends Plugin {
       const state={...account};
       const token=await nativeRelayAccount(state,async()=>{requestAborted(signal);if(!active())throw Error('Sign-in cancelled.');account.clientToken=state.clientToken;await this.save();},setupFetcher(nativeAccountFetch,signal));
       requestAborted(signal);if(!active())throw Error('Sign-in cancelled.');this.nativeToken=token;return token;
-    },this.connectionSetupOwner.signal).catch(async error=>{if(active()&&signInRequired(error))await this.clearAccount(true,error);throw error;});
+    },this.connectionSetupOwner.signal,()=> 'account-credential').catch(async error=>{if(active()&&signInRequired(error))await this.clearAccount(true,error);throw error;});
     this.nativeRefreshing=work;try{return await work;}finally{if(this.nativeRefreshing===work)this.nativeRefreshing=undefined;}
   }
   async sessionFor(id:string,forceRefresh=false,permissions:readonly string[]=PLUGIN_PERMISSIONS):Promise<PairedSession|undefined>{
@@ -2722,18 +2724,26 @@ export default class SendToT3 extends Plugin {
     // Refresh them before any remote vault check; token expiry is not enough.
     if(session&&session.expiresAt>Date.now()+60000&&!forceRefresh&&(!c?.managed||hasPluginPermissions(session))&&permissions.every(scope=>session.permissions?.includes(scope)))return session;
     if(!c?.managed||!this.nativeAccount)return session;
-    const existing=this.sessionRefreshing.get(id);if(existing){const value=await existing;if(permissions.every(scope=>value.permissions?.includes(scope)))return value;return this.sessionFor(id,true,permissions);}
+    const existing=this.sessionRefreshing.get(id);if(existing){const value=await existing.work;if(permissions.every(scope=>value.permissions?.includes(scope)))return value;return this.sessionFor(id,true,permissions);}
     const account=this.nativeAccount;const generation=this.cloudGeneration,url=c.url,environmentId=c.environmentId;
+    let stage:SessionSetupStage='account-credential';
     const work=connectionDeadline(async signal=>{
       const fetcher=setupFetcher(browserFetch,signal),credential=await abortableRead(this.nativeCredential(),signal);
-      requestAborted(signal);const machines=await discoverMachines(credential,fetcher);
+      requestAborted(signal);
+      stage='machine-discovery';
+      const machines=await discoverMachines(credential,fetcher);
       const m=machines.find(m=>m.environmentId===environmentId&&m.url===url);
       if(!m)throw Error('This T3 connection is no longer available to your account. Reconnect its machine.');
-      const next=await connectMachine(await abortableRead(this.nativeCredential(),signal),m,this.deviceId+':'+account.userId,fetcher,permissions);
+      stage='account-credential';
+      const next=await connectMachine(await abortableRead(this.nativeCredential(),signal),m,this.deviceId+':'+account.userId,fetcher,permissions,step=>{stage=step;});
       requestAborted(signal);
       if(this.stopped||this.nativeAccount!==account||generation!==this.cloudGeneration||!this.settings.paired.includes(c)||c.url!==url||c.environmentId!==environmentId||this.pairedSessions[id]!==session)throw Error('Connection cancelled.');
+      stage='save-session';
       next.accountId=account.userId;this.pairedSessions[id]=next;await this.save();return next;
-    },this.connectionSetupOwner.signal);this.sessionRefreshing.set(id,work);try{return await work;}finally{if(this.sessionRefreshing.get(id)===work)this.sessionRefreshing.delete(id);}
+    },this.connectionSetupOwner.signal,()=>stage);
+    const renewal={work,stage:()=>stage};
+    this.sessionRefreshing.set(id,renewal);
+    try{return await work;}finally{if(this.sessionRefreshing.get(id)===renewal)this.sessionRefreshing.delete(id);}
   }
   private prepareConnectionRenewal(){
     if(this.stopped||!this.nativeAccount)return;
@@ -3391,26 +3401,48 @@ export default class SendToT3 extends Plugin {
   }
   onunload(){this.connectionSetupOwner.abort();this.disposeUnaryOwners();if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.conversationSources.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.noteInboxView?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void Promise.allSettled([this.saving,this.diagnostics?.close()]).then(()=>closeSharedStateDatabase());void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async setThreadHiding(enabled:boolean){
-    this.settings.hideObsidianThreads=enabled;await this.save();
+    this.settings.hideObsidianThreads=enabled;
+    this.settingsTab?.refreshThreadVisibilityStatus();
+    await this.save();
     const failures=await this.syncThreadVisibility(true);
-    if(failures.length&&!this.stopped&&this.settings.hideObsidianThreads===enabled)new Notice(`Thread visibility is waiting on ${failures.join('; ')}. It will be checked again on reconnect.`,12000);
+    if(failures.length&&!this.stopped&&this.settings.hideObsidianThreads===enabled){
+      const details=failures.map(failure=>`${this.visibilityMachineName(failure.environmentId)}: ${failure.message}`).join('; ');
+      new Notice(`Thread visibility is waiting on ${details.replace(/\.$/,'')}. Obsidian retries when you return to the app or get back online.`,12000);
+    }
   }
-  private syncThreadVisibility(force=false):Promise<string[]>{
+  private threadVisibilitySignature(){
+    return JSON.stringify([this.settings.hideObsidianThreads,this.settings.paired]);
+  }
+  private visibilityMachineName(environmentId:string){
+    return this.settings.paired.find(paired=>paired.environmentId===environmentId)?.name??environmentId;
+  }
+  threadVisibilityStatus():string{
+    const result=this.visibilityResult;
+    if(!result?.failures.length||result.signature!==this.threadVisibilitySignature())return '';
+    const machines=result.failures.map(failure=>this.visibilityMachineName(failure.environmentId)).join(', ');
+    return `Waiting for ${machines}. Obsidian retries when you return to the app or get back online.`;
+  }
+  private syncThreadVisibility(force=false):Promise<VisibilityFailure[]>{
     if(!this.threadVisibility||this.stopped||this.settings.hideObsidianThreads===undefined)return Promise.resolve([]);
-    const signature=JSON.stringify([this.settings.hideObsidianThreads,this.settings.paired]);
+    const signature=this.threadVisibilitySignature();
+    if(this.visibilityResult&&this.visibilityResult.signature!==signature)this.settingsTab?.refreshThreadVisibilityStatus();
     if(this.visibilityWork){
       if(force||this.visibilitySignature!==signature){this.visibilityRerun=true;this.visibilityForce ||=force;}
       return this.visibilityWork;
     }
     if(!force&&this.visibilitySignature===signature)return Promise.resolve([]);
     const work=(async()=>{
-      let refresh=force,failures:string[]=[];
+      let refresh=force,failures:VisibilityFailure[]=[];
       do{
         this.visibilityRerun=false;this.visibilityForce=false;
-        const enabled=this.settings.hideObsidianThreads,signature=JSON.stringify([enabled,this.settings.paired]);
+        const enabled=this.settings.hideObsidianThreads,signature=this.threadVisibilitySignature();
         if(this.stopped||enabled===undefined||!refresh&&this.visibilitySignature===signature)break;
         this.visibilitySignature=signature;
         failures=await this.applyThreadVisibility(enabled,refresh);
+        if(!this.stopped&&signature===this.threadVisibilitySignature()){
+          this.visibilityResult={signature,failures};
+          this.settingsTab?.refreshThreadVisibilityStatus();
+        }
         refresh=this.visibilityForce;
       }while(this.visibilityRerun);
       return failures;
@@ -3418,21 +3450,44 @@ export default class SendToT3 extends Plugin {
     this.visibilityWork=work;return work;
   }
   private async applyThreadVisibility(enabled:boolean,force:boolean){
-      const failures:string[]=[];
+      const failures:VisibilityFailure[]=[];
       for(const environmentId of new Set(this.settings.paired.map(paired=>paired.environmentId))){
         if(this.stopped||this.settings.hideObsidianThreads!==enabled)break;
+        let phase:'setup'|'apply'='setup';
         try{
           let credentialKey='';
           const access=await environmentAccess(environmentId,{paired:orderedRoutes(this.settings.paired,this.routeOrder,c=>this.connectionScore(c)),openPaired:async(paired,signal)=>{
-            const session=await abortableRead(this.sessionFor(paired.id,false,[...PLUGIN_PERMISSIONS,'settings:write']),signal);requestAborted(signal);
-            const api=await environmentApi({transport:'direct',host:'direct',executable:'',url:paired.url,environmentId:paired.environmentId,connectionId:paired.id},session,undefined,undefined,signal);
-            await verifyOrchestrationRead((path,payload)=>api(path,payload,{signal}));requestAborted(signal);credentialKey=session?.token??paired.id;return {origin:endpoint(paired.url),api};
+            const started=Date.now();
+            let stage='paired-session';
+            try{
+              const session=await abortableRead(this.sessionFor(paired.id,false,[...PLUGIN_PERMISSIONS,'settings:write']),signal);
+              requestAborted(signal);
+              stage='route-identity';
+              const api=await environmentApi({transport:'direct',host:'direct',executable:'',url:paired.url,environmentId,connectionId:paired.id},session,undefined,undefined,signal);
+              await verifyOrchestrationRead((path,payload)=>{
+                stage=path==='/api/auth/session'?'session-check':'orchestration-read';
+                return api(path,payload,{signal});
+              });
+              requestAborted(signal);
+              credentialKey=session?.token??paired.id;
+              return {origin:endpoint(paired.url),api};
+            }catch(error){
+              const timeout=error instanceof ConnectionSetupTimeout;
+              const renewalStage=stage==='paired-session'?this.sessionRefreshing.get(paired.id)?.stage():undefined;
+              logEvent('thread.visibility.setup.failed',{
+                environmentId,routeId:paired.id,stage:(timeout?error.stage:undefined)??renewalStage??stage,
+                elapsedMs:Date.now()-started,outcome:timeout?'timeout':'error',
+              },'warning');
+              throw error;
+            }
           }});
+          phase='apply';
           try{await this.threadVisibility!.apply(access,environmentId,enabled,credentialKey,force);}finally{await access.close?.();}
-        }catch(error){failures.push(`${this.settings.paired.find(paired=>paired.environmentId===environmentId)?.name??environmentId}: ${message(error)}`);logFailure('thread.visibility.failed',error,{environmentId});}
+        }catch(error){
+          failures.push({environmentId,message:message(error)});
+          logEvent('thread.visibility.failed',{environmentId,phase,outcome:error instanceof ConnectionSetupTimeout?'timeout':'error'},'warning');
+        }
       }
-      // Foreground, reconnect, send and settings-save retries are background work.
-      // Keep diagnostics for every failure; only an explicit toggle shows a notice.
       return failures;
   }
   private syncSettlementEvents(){
@@ -3522,6 +3577,7 @@ class FolderLinkModal extends Modal{
 interface SettingsRow {name:string;desc?:string;aliases?:string[];render:(setting:Setting)=>void}
 export class T3Settings extends PluginSettingTab {
   private agentTools?:AgentToolsSettings;
+  private threadVisibilityStatuses=new Set<HTMLElement>();
   constructor(app:App,private plugin:SendToT3){super(app,plugin);}
   /** Native indexed settings on supported Obsidian clients. */
   getSettingDefinitions():SettingDefinitionItem[]{
@@ -3543,7 +3599,15 @@ export class T3Settings extends PluginSettingTab {
       this.agentTools.render(setting.settingEl);
     }},
   ];}
-  hide(){this.agentTools?.dispose();}
+  hide(){this.agentTools?.dispose();this.threadVisibilityStatuses.clear();}
+  refreshThreadVisibilityStatus(){
+    if(!this.threadVisibilityStatuses.size)return;
+    const text=this.plugin.threadVisibilityStatus();
+    for(const status of this.threadVisibilityStatuses){
+      if(!status.isConnected)this.threadVisibilityStatuses.delete(status);
+      else if(status.textContent!==text)status.textContent=text;
+    }
+  }
   private connectionDefinitions():Array<SettingsRow>{return [{name:'Connections',aliases:['Sign in','T3 account email','Email verification code','Refresh connections','Sign out'],render:setting=>{setting.settingEl.empty();setting.settingEl.removeClass('setting-item');setting.settingEl.addClass('t3-settings-section');this.connectionUI(setting.settingEl);}}];}
   private selectedMachine:CloudMachine|null=null;
   private readonly expanded=new Set<string>();
@@ -3634,7 +3698,11 @@ export class T3Settings extends PluginSettingTab {
       {name:'Stream replies into the editor',desc:'Insert Send and Ask replies into the note. Selection replies appear below the selection; other replies use the captured cursor position or follow its paragraph.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));}},
       {name:'Final answer format',desc:'Applies to new responses. Both formats support images and files.',render:setting=>{setting.addDropdown(dropdown=>dropdown.addOptions({formatted:'Quoted Markdown','raw-markdown':'Raw Markdown'}).setValue(finalAnswerFormat(this.plugin.settings.inlineStreaming.finalAnswerFormat)).onChange(async value=>{this.plugin.settings.inlineStreaming.finalAnswerFormat=finalAnswerFormat(value);await this.plugin.save();}));}},
       {name:'Thread title generation',desc:'Use note titles by default, or let T3 name every new thread. Existing titles stay the same.',render:setting=>{setting.addDropdown(d=>d.addOption('untitled-only','Only for untitled notes').addOption('always','Always use T3').setValue(this.plugin.settings.threadTitleGeneration).onChange(async value=>{this.plugin.settings.threadTitleGeneration=threadTitleGeneration(value);await this.plugin.save();}));}},
-      {name:'Hide Obsidian threads in T3',desc:'Off by default. Tag new threads t3-obsidian and hide them across all connected T3 environments and clients. Enables T3’s hidden-tag filter. Turning off removes only this tag from that filter.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.hideObsidianThreads===true).onChange(async enabled=>{await this.plugin.setThreadHiding(enabled);}));}},
+      {name:'Hide Obsidian threads in T3',desc:'Off by default. Tag new threads t3-obsidian and hide them across all connected T3 environments and clients. Enables T3’s hidden-tag filter. Turning off removes only this tag from that filter.',render:setting=>{
+        const status=setting.descEl.createDiv({text:this.plugin.threadVisibilityStatus(),attr:{role:'status'}});
+        this.threadVisibilityStatuses.add(status);
+        setting.addToggle(t=>t.setValue(this.plugin.settings.hideObsidianThreads===true).onChange(async enabled=>{await this.plugin.setThreadHiding(enabled);}));
+      }},
       {name:'Settle completed threads',desc:'Off by default. Move threads to Settled after a successful turn and saved reply. Sending again wakes the thread. Checks follow thread events and saved replies while Obsidian is open.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.autoSettleThreads).onChange(async enabled=>{this.plugin.settings.autoSettleThreads=enabled;if(!enabled)this.plugin.settings.settlementJobs=[];await this.plugin.save();}));}},
       {name:'Thread and note mode',desc:'Free is the default and allows many-to-many links. 1:1 keeps one thread per note and one note per thread. The most recent links select existing 1:1 pairs. Saved replies and link history are kept when you switch.',render:setting=>{setting.addDropdown(d=>d.addOptions({free:'Free · Many-to-many','one-to-one':'1:1 · One thread per note'}).setValue(threadNoteMode(this.plugin.settings.threadNoteMode)).onChange(async value=>{this.plugin.settings.threadNoteMode=threadNoteMode(value);await this.plugin.save();}));}},
     ];

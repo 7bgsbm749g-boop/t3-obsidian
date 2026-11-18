@@ -400,11 +400,50 @@ test('repeated background visibility failures stay silent and keep retrying',asy
   const h=await failedVisibilityHarness(),p=h.plugin;
   for(let i=0;i<3;i++){
     const failures=await p.syncThreadVisibility(true);
-    assert.match(failures[0],/Offline machine: T3 connection setup timed out/);
+    assert.equal(failures[0].environmentId,'offline');
+    assert.match(failures[0].message,/T3 connection setup timed out/);
   }
   assert.equal(h.attempts(),3,'silencing the notice must not disable retries');
   assert.deepEqual(h.notices,[],'foreground, reconnect and send retries must not show popups');
   await p.save();await p.visibilityWork;assert.deepEqual(h.notices,[]);
+});
+
+test('visibility status survives a retry and clears when the setting is confirmed',async()=>{
+  const h=await failedVisibilityHarness(),p=h.plugin;
+  await p.syncThreadVisibility(true);
+  assert.match(p.threadVisibilityStatus(),/^Waiting for Offline machine\./);
+  let confirm!:()=>void;
+  const pending=new Promise<void>(resolve=>{confirm=resolve;});
+  p.applyThreadVisibility=async()=>{await pending;return [];};
+  const check=p.syncThreadVisibility(true);
+  assert.match(p.threadVisibilityStatus(),/^Waiting for Offline machine\./);
+  confirm();await check;
+  assert.equal(p.threadVisibilityStatus(),'');
+  assert.deepEqual(h.notices,[]);
+});
+
+test('a visibility timeout records the active shared renewal step with no request data',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const h=await failedVisibilityHarness(),p=h.plugin;
+  p.diagnosticLogging.connection=true;
+  const renewal=new Promise(()=>{});
+  p.sessionFor=()=>renewal;
+  p.sessionRefreshing.set('offline',{work:renewal,stage:()=> 'relay-connect'});
+  const check=p.syncThreadVisibility(true);
+  await Promise.resolve();
+  t.mock.timers.tick(8000);
+  await check;
+  const events=p.diagnostics.snapshot().events;
+  const setup=events.find((event:any)=>event.event==='thread.visibility.setup.failed')?.fields;
+  assert.equal(setup?.stage,'relay-connect');
+  assert.equal(setup?.outcome,'timeout');
+  assert.equal(setup?.routeId,'offline');
+  assert.equal(setup?.environmentId,'offline');
+  assert.equal(typeof setup?.elapsedMs,'number');
+  assert.equal(setup?.error,undefined);
+  const failure=events.find((event:any)=>event.event==='thread.visibility.failed')?.fields;
+  assert.equal(failure?.phase,'setup');
+  assert.equal(failure?.outcome,'timeout');
 });
 
 test('an explicit visibility change reports failure once and later background retries stay silent',async()=>{

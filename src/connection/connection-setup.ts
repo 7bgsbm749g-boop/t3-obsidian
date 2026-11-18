@@ -3,12 +3,19 @@ import {abortableRead,requestAborted} from './t3-api';
 import type {Fetcher} from './direct';
 
 export const CONNECTION_SETUP_MS=8000;
+export type SessionSetupStage='account-credential'|'machine-discovery'|'proof-key'|'relay-token'|'relay-connect'|'descriptor'|'environment-token'|'save-session';
+
+export class ConnectionSetupTimeout extends Error {
+ constructor(readonly stage?:SessionSetupStage){
+  super('T3 connection setup timed out. Try another route or check the connection.');
+ }
+}
 /** Only establishment is bounded here. A deadline never replays an operation
  * or establishes whether a dispatched mutation was accepted. */
-export async function connectionDeadline<T>(open:(signal:AbortSignal)=>Promise<T>,parent?:AbortSignal):Promise<T>{
+export async function connectionDeadline<T>(open:(signal:AbortSignal)=>Promise<T>,parent?:AbortSignal,stage?:()=>SessionSetupStage):Promise<T>{
  const controller=new AbortController(),cancel=()=>controller.abort(parent?.reason);
  if(parent?.aborted)cancel();else parent?.addEventListener('abort',cancel,{once:true});
- const timer=scheduleTimeout(()=>controller.abort(Error('T3 connection setup timed out. Try another route or check the connection.')),CONNECTION_SETUP_MS);
+ const timer=scheduleTimeout(()=>controller.abort(new ConnectionSetupTimeout(stage?.())),CONNECTION_SETUP_MS);
  try{requestAborted(controller.signal);return await abortableRead(Promise.resolve().then(()=>{requestAborted(controller.signal);return open(controller.signal);}),controller.signal);}
  finally{cancelTimeout(timer);parent?.removeEventListener('abort',cancel);}
 }
