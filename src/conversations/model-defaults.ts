@@ -1,5 +1,5 @@
 import {isRecord,records} from '../shared/values';
-import {acquireT3UnaryRpc,type T3Api,type SocketFactory} from '../connection/t3-rpc';
+import {acquireT3UnaryRpc,type T3Api,type T3RpcConnection,type SocketFactory} from '../connection/t3-rpc';
 
 export interface ModelSelection {instanceId:string;model:string;options?:{id:string;value:unknown}[]}
 export type RuntimeMode='approval-required'|'auto-accept-edits'|'auto'|'full-access';
@@ -53,6 +53,21 @@ export function resolveNewThreadDefaults(config:unknown,project:Project):NewThre
   return {modelSelection,runtimeMode:runtimeMode as RuntimeMode,workspaceStrategy:workspaceMode==='worktree'?{type:'worktree',baseRef:'HEAD',startFromOrigin:fromOrigin}:{type:'root'}};
 }
 
+async function readRepositoryHead(rpc:T3RpcConnection,cwd:string):Promise<string|undefined>{
+  try{
+    const file=await rpc.call('projects.readFile',{cwd,relativePath:'.git/HEAD',allowMissing:true});
+    if(!isRecord(file)||file.truncated||typeof file.contents!=='string')return;
+    const head=file.contents.trimEnd();
+    if(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(head))return 'HEAD';
+    // Read only a normal clone's symbolic local branch. Linked worktrees,
+    // nested folders and unfamiliar HEAD formats use T3's VCS API.
+    const branch=/^ref: refs\/heads\/([^\u0000-\u0020\u007f~^:?*\[\\]+)$/u.exec(head)?.[1];
+    if(branch&&!branch.startsWith('-')&&!branch.includes('..')&&!branch.includes('@{'))return branch;
+  }catch(error){
+    if(!isRecord(error)||!['ProjectReadFileError','EnvironmentAuthorizationError'].includes(String(error.kind)))throw error;
+  }
+}
+
 export async function readNewThreadDefaults(api:T3Api,origin:string,project:Project,makeSocket?:SocketFactory,readLegacyProject?:()=>Promise<Project>):Promise<NewThreadDefaults>{
   const rpc=await acquireT3UnaryRpc(api,origin,makeSocket);
   try{
@@ -62,6 +77,8 @@ export async function readNewThreadDefaults(api:T3Api,origin:string,project:Proj
     const defaults=resolveNewThreadDefaults(config,project);
     if(defaults.workspaceStrategy?.type==='worktree'&&project.workspaceRoot){
       const migrated=isRecord(config)&&isRecord(config.settings)&&config.settings.projectSettingsFolded===true;
+      const head=migrated&&readLegacyProject?await readRepositoryHead(rpc,project.workspaceRoot):undefined;
+      if(head){defaults.workspaceStrategy.baseRef=head;return defaults;}
       const status=migrated
         ?await rpc.call('vcs.listRefs',{cwd:project.workspaceRoot,refKind:'local',limit:1,refresh:true})
         :await rpc.call('vcs.refreshStatus',{cwd:project.workspaceRoot,localOnly:true});

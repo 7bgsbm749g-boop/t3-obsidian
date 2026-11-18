@@ -208,9 +208,9 @@ test('direct acknowledgement persists exact prompt delivery and the observed act
 test('named direct sends prepare worktrees before starting and replay the saved workspace after a lost reply',async(t)=>{
  const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});
  const config:any=modelConfig();config.settings.defaultThreadEnvMode='worktree';
- const launches:any[]=[];let saved:any,lose=true,shellReads=0;
+ const launches:any[]=[];let saved:any,lose=true,shellReads=0,headReads=0;
  globalThis.WebSocket=settingsSocket(()=>config,undefined,(tag,payload)=>{
-  if(tag==='vcs.listRefs')return {isRepo:true,refs:[{current:true,name:'main'}]};
+  if(tag==='projects.readFile'){headReads++;assert.deepEqual(payload,{cwd:'/repo',relativePath:'.git/HEAD',allowMissing:true});return {contents:'ref: refs/heads/main\n'};}
   if(tag==='vcs.refreshStatus')return {isRepo:true,refName:'main'};
   assert.equal(tag,'orchestration.launchThread');launches.push(payload);
   if(lose){lose=false;throw Error('Lost acknowledgement');}return {threadId:payload.threadId};
@@ -228,6 +228,7 @@ test('named direct sends prepare worktrees before starting and replay the saved 
  await sendDirect(saved,session,async()=>{},fetcher);
  assert.deepEqual(launches[1],launches[0]);
  assert.equal(shellReads,0,'A current server needs no thread catalog to launch');
+ assert.equal(headReads,1,'A saved retry keeps its original branch');
  config.settings.projectSettingsFolded=false;
  config.settings.defaultThreadEnvMode='worktree';
  await sendDirect({...request,id:crypto.randomUUID(),directPlan:undefined},session,async()=>{},fetcher);
