@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,SignInError} from '../src/connection/native-account';
+import {beginEmailLogin,verifyEmailLogin,nativeRelayAccount,revokeNativeAccount,SignInError,SignInRateLimitError,signInRetryAt} from '../src/connection/native-account';
 import {signInRequired} from '../src/connection/sign-in-state';
 const reply=(response:unknown,token='client-secret',status=200,client?:unknown)=>new Response(JSON.stringify({response,...(client===undefined?{}:{client})}),{status,headers:{authorization:token}});
 const session={id:'sess_1',status:'active',user:{id:'user_1'}};
@@ -64,4 +64,31 @@ test('native sign-in rejects unsupported factors, wrong codes, stale accounts an
  await assert.rejects(verifyEmailLogin(login,'abc'),/six-digit/);
  const account={clientToken:'secret',sessionId:'sess_1',userId:'user_1',identity:'user@example.com'};
  await assert.rejects(nativeRelayAccount(account,async()=>{},(async()=>reply({sessions:[{...session,user:{id:'another-user'}}]})) as any),/expired/);
+});
+
+
+test('rate limits honor Retry-After seconds and dates, including non-JSON 429 responses',async()=>{
+ const now=Date.now();
+ assert.equal(signInRetryAt('120',now),now+120_000);
+ const date=new Date(Math.ceil((now+120_000)/1000)*1000).toUTCString();
+ assert.equal(signInRetryAt(date,now),Date.parse(date));
+ for(const value of [null,'invalid','-1','0','Infinity','9'.repeat(400),new Date(now-1000).toUTCString()])assert.equal(signInRetryAt(value,now),now+60_000);
+ for(const body of ['<html>Rate limit</html>',JSON.stringify({errors:[{code:'too_many_requests',message:'DO_NOT_LEAK'}]})]){
+  let calls=0;
+  await assert.rejects(beginEmailLogin('user@example.com',async()=>{calls++;return new Response(body,{status:429,headers:{'Retry-After':'120'}});}),error=>{
+   assert.ok(error instanceof SignInRateLimitError);assert.ok(error.retryAt>=now+120_000);assert.match(error.message,/Closing Obsidian does not reset/);assert.doesNotMatch(error.message,/DO_NOT_LEAK/);return true;
+  });assert.equal(calls,1,'A rate limit never sends subsequent sign-in steps or automatically retries');
+ }
+ await assert.rejects(beginEmailLogin('user@example.com',async()=>new Response(JSON.stringify({errors:[{code:'too_many_requests'}]}),{status:422})),error=>error instanceof SignInRateLimitError);
+});
+
+
+test('a rate-limited verification keeps rotated native credentials for the next manual attempt',async()=>{
+ const login={clientToken:'old-client',signInId:'sign_1',email:'user@example.com',expiresAt:Date.now()+600000};
+ await assert.rejects(verifyEmailLogin(login,'123456',async()=>new Response('Rate limited',{status:429,headers:{authorization:'Bearer rotated-client','Retry-After':'60'}})),SignInRateLimitError);
+ assert.equal(login.clientToken,'rotated-client');
+ const account=await verifyEmailLogin(login,'123456',async(_input,options)=>{
+  assert.equal(new Headers(options?.headers).get('authorization'),'Bearer rotated-client');
+  return reply({status:'complete',created_session_id:'sess_1'},'signed-in-client',200,{sessions:[session]});
+ });assert.equal(account.sessionId,'sess_1');
 });
