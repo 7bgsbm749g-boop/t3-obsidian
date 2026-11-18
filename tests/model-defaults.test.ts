@@ -101,6 +101,8 @@ test('workspace defaults inherit environment and project settings without changi
  assert.deepEqual(resolveNewThreadDefaults(config,{id:'p'}).workspaceStrategy,{type:'root'});
  config.settings.projectSettingsOverrides.p={defaultThreadEnvMode:null};
  assert.equal(resolveNewThreadDefaults(config,{id:'p'}).workspaceStrategy?.type,'worktree');
+ assert.equal(resolveNewThreadDefaults(config,{id:'other',defaultThreadEnvMode:'local'}).workspaceStrategy?.type,'worktree');
+ config.settings.projectSettingsFolded=false;
  assert.deepEqual(resolveNewThreadDefaults(config,{id:'other',defaultThreadEnvMode:'local'}).workspaceStrategy,{type:'root'});
  config.settings.defaultThreadEnvMode='invalid';
  assert.throws(()=>resolveNewThreadDefaults(config,{id:'p'}),/invalid workspace default/);

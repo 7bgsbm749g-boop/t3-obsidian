@@ -208,14 +208,17 @@ test('direct acknowledgement persists exact prompt delivery and the observed act
 test('named direct sends prepare worktrees before starting and replay the saved workspace after a lost reply',async(t)=>{
  const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});
  const config:any=modelConfig();config.settings.defaultThreadEnvMode='worktree';
- const launches:any[]=[];let saved:any,lose=true;
+ const launches:any[]=[];let saved:any,lose=true,shellReads=0;
  globalThis.WebSocket=settingsSocket(()=>config,undefined,(tag,payload)=>{
   if(tag==='vcs.refreshStatus')return {isRepo:true,refName:'main'};
   assert.equal(tag,'orchestration.launchThread');launches.push(payload);
   if(lose){lose=false;throw Error('Lost acknowledgement');}return {threadId:payload.threadId};
  }) as any;
  const request:Request={id:crypto.randomUUID(),project:{id:'p',title:'P',workspaceRoot:'/repo'},connection:{transport:'direct',url,environmentId:eid,host:'direct',executable:''},title:'Named note',prompt:'Content'};
- const fetcher:any=async(u:string)=>response(u.endsWith('/environment')?descriptor:u.endsWith('/shell')?{projects:[{id:'p',workspaceRoot:'/repo'}]}:{ticket:'test'});
+ const fetcher:any=async(u:string)=>{
+  if(u.endsWith('/shell')){shellReads++;return response({projects:[{id:'p',workspaceRoot:'/repo'}]});}
+  return response(u.endsWith('/environment')?descriptor:{ticket:'test'});
+ };
  const save=async()=>{saved=structuredClone(request);};
  await assert.rejects(sendDirect(request,session,save,fetcher),/Cannot reach/);
  assert.deepEqual(launches[0].workspaceStrategy,{type:'worktree',baseRef:'main',startFromOrigin:false});
@@ -223,6 +226,11 @@ test('named direct sends prepare worktrees before starting and replay the saved 
  config.settings.defaultThreadEnvMode='local';
  await sendDirect(saved,session,async()=>{},fetcher);
  assert.deepEqual(launches[1],launches[0]);
+ assert.equal(shellReads,0,'A current server needs no thread catalog to launch');
+ config.settings.projectSettingsFolded=false;
+ config.settings.defaultThreadEnvMode='worktree';
+ await sendDirect({...request,id:crypto.randomUUID(),directPlan:undefined},session,async()=>{},fetcher);
+ assert.equal(shellReads,1,'An older server retains the project lookup');
 });
 test('a new MCP-enabled pairing requests agent configuration access and refuses a restricted bootstrap grant',async()=>{
  const scopes=AGENT_SETUP_PERMISSIONS;let grant=scopes.join(' '),requested='';

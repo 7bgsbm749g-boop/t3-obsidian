@@ -46,17 +46,20 @@ export function resolveNewThreadDefaults(config:unknown,project:Project):NewThre
   const runtimeMode=projectMode!==undefined?projectMode:config.settings.defaultRuntimeMode!==undefined?config.settings.defaultRuntimeMode:'full-access';
   if(typeof runtimeMode!=='string'||!['approval-required','auto-accept-edits','auto','full-access'].includes(runtimeMode))throw Error('T3 returned an invalid access default. Choose an access mode in T3 settings and retry.');
   const storedMode=isRecord(overrides)?overrides.defaultThreadEnvMode:undefined;
-  const workspaceMode=storedMode??project.defaultThreadEnvMode??config.settings.defaultThreadEnvMode??'local';
+  const workspaceMode=storedMode??(!config.settings.projectSettingsFolded?project.defaultThreadEnvMode:undefined)??config.settings.defaultThreadEnvMode??'local';
   if(workspaceMode!=='local'&&workspaceMode!=='worktree')throw Error('T3 returned an invalid workspace default. Choose a workspace mode in T3 settings and retry.');
   const fromOrigin=config.settings.newWorktreesStartFromOrigin??false;
   if(typeof fromOrigin!=='boolean')throw Error('T3 returned an invalid worktree origin default.');
   return {modelSelection,runtimeMode:runtimeMode as RuntimeMode,workspaceStrategy:workspaceMode==='worktree'?{type:'worktree',baseRef:'HEAD',startFromOrigin:fromOrigin}:{type:'root'}};
 }
 
-export async function readNewThreadDefaults(api:T3Api,origin:string,project:Project,makeSocket?:SocketFactory):Promise<NewThreadDefaults>{
+export async function readNewThreadDefaults(api:T3Api,origin:string,project:Project,makeSocket?:SocketFactory,readLegacyProject?:()=>Promise<Project>):Promise<NewThreadDefaults>{
   const rpc=await acquireT3UnaryRpc(api,origin,makeSocket);
   try{
-    const defaults=resolveNewThreadDefaults(await rpc.call('server.getConfig',{}),project);
+    const config=await rpc.call('server.getConfig',{});
+    // Current servers migrate aggregate defaults into projectSettingsOverrides.
+    if(readLegacyProject&&isRecord(config)&&isRecord(config.settings)&&config.settings.projectSettingsFolded!==true)project=await readLegacyProject();
+    const defaults=resolveNewThreadDefaults(config,project);
     if(defaults.workspaceStrategy?.type==='worktree'&&project.workspaceRoot){
       const status=await rpc.call('vcs.refreshStatus',{cwd:project.workspaceRoot,localOnly:true});
       if(!isRecord(status)||typeof status.isRepo!=='boolean')throw Error('T3 did not return the project repository status. Retry the saved request.');

@@ -162,8 +162,12 @@ export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Pr
    if(r.jobOptions?.interactionMode)turn.interactionMode=r.jobOptions.interactionMode;
    r.directPlan={protocolVersion:2,hash,environmentId:r.connection.environmentId!,phase:'created',create:null,turn,...(thread.session?.status==='running'&&thread.session.activeTurnId?{observedActiveTurnId:thread.session.activeTurnId}:{})};
   }else{
-  const projects=readWireProjects(await api('shell'));const project=projects.find(p=>p.id===r.project.id);if(!project)throw Error('Project no longer exists. Scan this connection again.');
-  const defaults=await readNewThreadDefaults(environment,access?.origin??endpoint(r.connection.url||''),project);
+  const project=r.project;
+  const defaults=await readNewThreadDefaults(environment,access?.origin??endpoint(r.connection.url||''),project,undefined,async()=>{
+   const legacy=readWireProjects(await api('shell')).find(p=>p.id===project.id);
+   if(!legacy)throw Error('Project no longer exists. Scan this connection again.');
+   return legacy;
+  });
   const {workspaceStrategy,...accessDefaults}=defaults;
   const common={threadId:commandId(r.id,'thread'),...accessDefaults,...(r.jobOptions?.modelSelection?{modelSelection:structuredClone(r.jobOptions.modelSelection)}:{}),interactionMode:r.jobOptions?.interactionMode??'default',createdAt:new Date().toISOString()};
   const generateTitle=r.title===AUTO_THREAD_TITLE,title=generateTitle?promptThreadTitle(r.prompt,r.attachments):r.title;
