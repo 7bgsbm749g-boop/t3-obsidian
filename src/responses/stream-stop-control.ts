@@ -32,7 +32,7 @@ export function installStreamStopControls(root:Document,resolve:(fold:HTMLElemen
       activeExists||=!button.hidden;
       button.setAttribute('aria-busy',String(button.disabled));
       const heading=fold.querySelector<HTMLElement>(':scope > .callout-title');
-      if(heading){
+      if(heading&&!button.hidden){
         const header=heading.getBoundingClientRect(),box=fold.getBoundingClientRect();
         fold.style.setProperty('--send-to-t3-stop-center',`${header.top+header.height/2-box.top-fold.clientTop}px`);
       }

@@ -147,7 +147,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
       // Native callouts live inside a markdown-rendered wrapper. Only the
       // outer callout owns this widget's action; nested examples do not.
       const actions=block?.querySelector('.callout')===fold?block.querySelector<HTMLElement>(':scope > .embed-actions'):undefined;
-      if(actions?.querySelector('.edit-block-button')){
+      if(actions?.querySelector('.edit-block-button')&&!actions.classList.contains('send-to-t3-stream-actions')){
         const parent=(actions.offsetParent as HTMLElement|null)??block!;
         layout.add(heading);layout.add(parent);actionsInUse.add(actions);
         const header=heading.getBoundingClientRect(),container=parent.getBoundingClientRect();

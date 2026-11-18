@@ -12,7 +12,13 @@ import {installStreamStopControls} from './stream-stop-control';
 export function installStreamBlockControls(app:App,root:Document,icon:(element:HTMLElement,name:string)=>void,onError:(error:unknown)=>void,onSignIn:()=>void=()=>{},onStop?:(id:string,view:MarkdownView)=>Promise<void>):()=>void {
   const stopDrag=installResponseDrag(app,root,icon,onError);
   const owned=new Map<HTMLElement,{close:HTMLElement;follow:HTMLElement;signIn:HTMLButtonElement;reading:boolean;fold:HTMLElement;footer?:HTMLElement}>();
-  const watched=new Set<Element>();
+  const watched=new Map<Element,HTMLElement>();
+  const dirtyLayout=new WeakSet<HTMLElement>();
+  const layouts=new WeakMap<HTMLElement,{fold:HTMLElement;heading:HTMLElement;footer?:HTMLElement;bottom:boolean;collapsed:boolean;buttons:number}>();
+  const setPx=(element:HTMLElement,property:string,value:number)=>{
+    const px=`${value}px`;
+    if(element.style.getPropertyValue(property)!==px)element.style.setProperty(property,px);
+  };
   let queued=false,disposed=false;
   const key=(fold:Element)=>fold.querySelector<HTMLElement>(':scope > .callout-title .send-to-t3-fold-key')?.dataset.t3Fold;
   const generated=(fold:Element)=>!!key(fold)||!!fold.querySelector(':scope > .callout-title .send-to-t3-inline-spinner');
@@ -26,7 +32,9 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
   },target=>onStop(target.id,target.view),icon,onError):()=>{};
   const refresh=()=>{
     queued=false;if(disposed)return;
-    const live=new Set<HTMLElement>(),indexes=new Map<MarkdownView,ReturnType<typeof streamBlockIndex>>();
+    const live=new Set<HTMLElement>(),targets=new Map<Element,HTMLElement>();
+    const measure:Array<{actions:HTMLElement;fold:HTMLElement;heading:HTMLElement;footer?:HTMLElement;bottom:boolean}>=[];
+    const indexes=new Map<MarkdownView,ReturnType<typeof streamBlockIndex>>();
     const indexFor=(view:MarkdownView)=>{
       let index=indexes.get(view);
       if(!index){
@@ -100,26 +108,54 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
       footer?.classList.add('send-to-t3-stream-footer');
       actions.classList.toggle('send-to-t3-stream-actions-bottom',bottom);
       actions.classList.toggle('send-to-t3-stream-actions-active',!!state?.active);
-      const heading=fold.querySelector<HTMLElement>(':scope > .callout-title'),parent=(actions.offsetParent as HTMLElement|null)??fold;
-      if(heading){
-        // Reserve horizontal space before measuring the shared activity line.
-        // Panels without a final status line retain a separate footer.
-        const toolbar=actions.getBoundingClientRect(),width=bottom?0:toolbar.width;
-        fold.style.setProperty('--send-to-t3-stream-actions-space',`${width>0?width+8:0}px`);
-        fold.style.setProperty('--send-to-t3-stream-actions-footer',`${bottom&&!footer?toolbar.height+8:0}px`);
-        fold.style.setProperty('--send-to-t3-stream-footer-space',`${bottom?toolbar.width+8:0}px`);
-        const header=heading.getBoundingClientRect(),box=fold.getBoundingClientRect(),container=parent.getBoundingClientRect(),edge=header.top+header.height/2-box.top;
-        const row=footer?.getBoundingClientRect();
-        actions.style.setProperty('--send-to-t3-stream-top-center',`${header.top+header.height/2-container.top-parent.clientTop}px`);
-        actions.style.setProperty('--send-to-t3-stream-bottom-center',`${(row?row.top+row.height/2:box.bottom-(bottom?toolbar.height/2+4:edge))-container.top-parent.clientTop}px`);
+      const heading=fold.querySelector<HTMLElement>(':scope > .callout-title');
+      if(!heading)continue;
+      for(const element of [actions,fold,heading,footer])if(element)targets.set(element,actions);
+      const collapsed=fold.classList.contains('is-collapsed');
+      const buttons=Number(ready)+2*Number(needsSignIn);
+      const previous=layouts.get(actions);
+      if(!previous||previous.fold!==fold||previous.heading!==heading||previous.footer!==footer||
+          previous.bottom!==bottom||previous.collapsed!==collapsed||previous.buttons!==buttons||dirtyLayout.has(actions)){
+        measure.push({actions,fold,heading,footer,bottom});
+        layouts.set(actions,{fold,heading,footer,bottom,collapsed,buttons});
+        dirtyLayout.delete(actions);
       }
-      if(!watched.has(fold)){resize?.observe(fold);watched.add(fold);}
     }
-    for(const element of watched)if(!element.isConnected){resize?.unobserve(element);watched.delete(element);}
-    for(const [actions,controls] of owned)if(!live.has(actions)){controls.close.remove();controls.follow.remove();controls.signIn.remove();controls.footer?.classList.remove('send-to-t3-stream-footer');controls.fold.style.removeProperty('--send-to-t3-stream-footer-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading){actions.parentElement?.classList.remove('send-to-t3-has-reading-actions');actions.remove();}actions.closest('.cm-embed-block')?.classList.remove('send-to-t3-stream-collapsed');owned.delete(actions);}
+    for(const element of watched.keys())if(!targets.has(element)){resize?.unobserve(element);watched.delete(element);}
+    for(const [element,actions] of targets){
+      if(!watched.has(element))resize?.observe(element);
+      watched.set(element,actions);
+    }
+    for(const [actions,controls] of owned)if(!live.has(actions)){controls.close.remove();controls.follow.remove();controls.signIn.remove();controls.footer?.classList.remove('send-to-t3-stream-footer');controls.fold.style.removeProperty('--send-to-t3-stream-footer-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading){actions.parentElement?.classList.remove('send-to-t3-has-reading-actions');actions.remove();}actions.closest('.cm-embed-block')?.classList.remove('send-to-t3-stream-collapsed');owned.delete(actions);layouts.delete(actions);}
+
+    // Apply spacing across the affected toolbars before measuring wrapped
+    // headings or footer rows. Keep each group of reads free of style writes.
+    const sizes=measure.map(item=>({...item,toolbar:item.actions.getBoundingClientRect()}));
+    for(const {fold,footer,bottom,toolbar} of sizes){
+      setPx(fold,'--send-to-t3-stream-actions-space',!bottom&&toolbar.width>0?toolbar.width+8:0);
+      setPx(fold,'--send-to-t3-stream-actions-footer',bottom&&!footer?toolbar.height+8:0);
+      setPx(fold,'--send-to-t3-stream-footer-space',bottom?toolbar.width+8:0);
+    }
+    const centers=sizes.map(({actions,fold,heading,footer,bottom,toolbar})=>{
+      const parent=(actions.offsetParent as HTMLElement|null)??fold;
+      const header=heading.getBoundingClientRect(),box=fold.getBoundingClientRect();
+      const container=parent.getBoundingClientRect(),row=footer?.getBoundingClientRect();
+      const origin=container.top+parent.clientTop,top=header.top+header.height/2;
+      return {actions,top:top-origin,bottom:(row?row.top+row.height/2:box.bottom-(bottom?toolbar.height/2+4:top-box.top))-origin};
+    });
+    for(const {actions,top,bottom} of centers){
+      setPx(actions,'--send-to-t3-stream-top-center',top);
+      setPx(actions,'--send-to-t3-stream-bottom-center',bottom);
+    }
   };
   const schedule=()=>{if(!queued&&!disposed){queued=true;queueMicrotask(refresh);}};
-  const resize=typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(schedule);
+  const resize=typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(entries=>{
+    for(const {target} of entries){
+      const actions=watched.get(target);
+      if(actions)dirtyLayout.add(actions);
+    }
+    schedule();
+  });
   const target=(event:Event)=>{
     const element=event.target instanceof Element?event.target:(event.target as Node)?.parentElement;
     const fold=element?.closest('.callout[data-callout="t3-progress"]')??(element?.closest('.send-to-t3-stream-actions')?.closest('.cm-embed-block')?.querySelector('.callout[data-callout="t3-progress"]'));
