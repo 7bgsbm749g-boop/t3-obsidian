@@ -6,6 +6,17 @@ test('native inbox lab uses the installed product and native vault APIs',async()
  const result=await build({entryPoints:['tests/native/note-inbox-lab.ts'],bundle:true,platform:'browser',format:'cjs',write:false,external:['node:*'],define:{INBOX_LAB_REPORT:'"synthetic-report.json"',INBOX_LAB_VAULT:'"Synthetic test vault"',INBOX_LAB_ENVIRONMENT:'"synthetic-test-machine"'}});
  assert.match(result.outputFiles[0].text,/noteInboxView/);assert.match(result.outputFiles[0].text,/Finish inbox validation/);
 });
+test('idle drag cleanup lets native folder observers finish and connection timers run',async(t)=>{
+ const f=await fixture();t.after(()=>f.controller.dispose());let refreshes=0,indicators:{dispose():void}|undefined;
+ indicators=f.indicators(()=>{
+  refreshes++;if(refreshes===20)indicators?.dispose();
+  f.controller.refresh();
+ });t.after(()=>indicators?.dispose());
+ f.root.querySelector('.nav-files-container')!.classList.add('native-folder-update');
+ await new Promise(resolve=>setTimeout(resolve,0));
+ assert.ok(refreshes<20,`Folder indicators and the disabled inbox must converge; got ${refreshes} refreshes.`);
+ assert.equal(f.document.querySelector('[data-t3-inbox-drop]'),null);
+});
 test('the filter reuses native note rows and handlers and restores their native folder tree on exit',async(t)=>{
  const f=await fixture();t.after(()=>f.controller.dispose());const row=f.rows.get('Docs/Regular.md'),icon=row.title.querySelector('.native-plugin-icon'),before=row.row.outerHTML;
  f.toggle();assert.equal(f.state().enabled,true);assert.deepEqual(f.visibleFiles(),['Docs/Pinned.md','Docs/Regular.md']);

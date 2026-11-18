@@ -73,7 +73,12 @@ export class NoteInboxDrag {
     })().catch(error=>this.host.error(error));
   };
   private key=(event:KeyboardEvent)=>{if(event.key==='Escape')this.finish();};
-  private finish=()=>{this.source=undefined;for(const zone of this.zones)zone.remove();this.zones=[];this.tree.classList.remove('t3-note-inbox-dragging');};
+  private finish=()=>{
+    this.source=undefined;for(const zone of this.zones)zone.remove();this.zones=[];
+    // Native folder indicators observe class changes and refresh this view.
+    // Removing an absent token still writes the attribute and repeats that loop.
+    if(this.tree.classList.contains('t3-note-inbox-dragging'))this.tree.classList.remove('t3-note-inbox-dragging');
+  };
   refresh(){if(!this.host.enabled()||this.notes()?.some(note=>!note))this.finish();}
   dispose(){
     this.finish();this.root.removeEventListener('dragstart',this.start,true);
