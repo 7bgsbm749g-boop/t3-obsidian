@@ -1,12 +1,12 @@
 import {normalizePath,requestUrl,requireApiVersion,Platform,Notice,type App,type PluginManifest} from 'obsidian';
 import {isRecord} from '../shared/values';
-import {installRelease,newerRelease,releaseFiles,type Release,type ReleaseFile,type ReleaseRequest,type UpdateFiles} from './plugin-updates';
+import {newerRelease,releaseManifest,RELEASE_REPOSITORY,type Release,type ReleaseFile,type ReleaseRequest,type UpdateFiles,type UpdateManifest} from './plugin-updates';
 
 export const requestRelease=async(url:string)=>{const response=await requestUrl({url,headers:{Accept:url.includes('api.github.com')?'application/vnd.github+json':'application/octet-stream'},throw:false});return {status:response.status,text:response.text};};
 export function updateStorage(app:App,manifest:PluginManifest):UpdateFiles{
   const directory=manifest.dir??`${app.vault.configDir}/plugins/${manifest.id}`;
   const path=(name:ReleaseFile)=>normalizePath(`${directory}/${name}`),adapter=app.vault.adapter;
-  return {read:async name=>await adapter.exists(path(name))?adapter.read(path(name)):null,write:(name,text)=>adapter.write(path(name),text),remove:name=>adapter.remove(path(name))};
+  return {read:async name=>await adapter.exists(path(name))?adapter.read(path(name)):null};
 }
 export async function installedVersion(storage:UpdateFiles,id:string){
   const raw=await storage.read('manifest.json'),manifest:unknown=raw?JSON.parse(raw):null;
@@ -14,31 +14,43 @@ export async function installedVersion(storage:UpdateFiles,id:string){
   return manifest.version;
 }
 interface PluginManager {
-  loadManifests():Promise<void>;
-  disablePlugin(id:string):Promise<void>;
-  enablePlugin(id:string):Promise<void>;
+  installPlugin(repository:string,tag:string,manifest:UpdateManifest):Promise<unknown>;
+  disablePlugin?(id:string):Promise<void>;
+  loadManifests?():Promise<void>;
+  enablePlugin?(id:string):Promise<void>;
   plugins:Record<string,{manifest?:PluginManifest}|undefined>;
 }
-/** Keep the private host reload API behind a capability check. Downloads and
- * writes use public cross-platform Obsidian APIs; settings are never replaced. */
+/** Obsidian owns runtime downloads and installation. Its internal API can return
+ * after a failure notice or leave the old runtime loaded; verify both versions. */
 export async function updatePlugin(app:App,manifest:PluginManifest,release:Release,prepare:()=>Promise<void>,alive:()=>boolean,request:ReleaseRequest=requestRelease){
   const plugins=(app as App&{plugins?:PluginManager}).plugins;
-  if(!plugins||typeof plugins.loadManifests!=='function'||typeof plugins.disablePlugin!=='function'||typeof plugins.enablePlugin!=='function')throw Error('This Obsidian version cannot reload the plugin. Update it through Community plugins.');
+  if(!plugins||typeof plugins.installPlugin!=='function')throw Error('This Obsidian version cannot install the update here. Update it through Community plugins.');
   const storage=updateStorage(app,manifest),before=await installedVersion(storage,manifest.id);
-  const files=await releaseFiles(release,request,manifest.id,requireApiVersion,Platform.isMobile);
-  await installRelease(files,storage,async()=>{
-    if(!alive())throw Error('The plugin was unloaded.');
-    if(await installedVersion(storage,manifest.id)!==before)throw Error('The installed plugin changed during the download. Check again.');
-    if(!newerRelease(release.version,before))throw Error('This release is already installed or older than your installed version.');
-    await prepare();if(!alive())throw Error('The plugin was unloaded.');
-  });
-  // No application reload or enabled-plugin list change is needed.
+  const loaded=plugins.plugins[manifest.id]?.manifest?.version;
+  const retryReload=before===release.version&&!!loaded&&newerRelease(release.version,loaded);
+  if(newerRelease(loaded??'',release.version)||!retryReload&&!newerRelease(release.version,before))throw Error('This release is already installed or older than your installed version.');
   try{
-    await plugins.disablePlugin(manifest.id);await plugins.loadManifests();await plugins.enablePlugin(manifest.id);
-    if(plugins.plugins[manifest.id]?.manifest?.version!==release.version)throw Error('The new plugin did not load.');
-  }catch{
-    const detail='The update files are installed. Restart Obsidian to load the update.';
-    // The old banner has already unloaded if enabling the new plugin fails.
-    new Notice(detail,0);throw Error(detail);
+    if(!retryReload){
+      const next=await releaseManifest(release,request,manifest.id,requireApiVersion,Platform.isMobile);
+      if(!alive())throw Error('The plugin was unloaded.');
+      await prepare();if(!alive())throw Error('The plugin was unloaded.');
+      if(await installedVersion(storage,manifest.id)!==before)throw Error('The installed plugin changed during the update. Check again.');
+      if(!alive())throw Error('The plugin was unloaded.');
+      await plugins.installPlugin(RELEASE_REPOSITORY,release.tag,next);
+    }
+    if(await installedVersion(storage,manifest.id)!==release.version)throw Error('Obsidian did not install the requested version. Try again or update it through Community plugins.');
+    // Some host versions install files without reloading an enabled plugin.
+    if(plugins.plugins[manifest.id]?.manifest?.version!==release.version&&alive()&&typeof plugins.disablePlugin==='function'&&typeof plugins.loadManifests==='function'&&typeof plugins.enablePlugin==='function'){
+      await prepare();if(!alive())throw Error('The plugin was unloaded.');
+      if(await installedVersion(storage,manifest.id)!==release.version)throw Error('The installed plugin changed before reloading. Check again.');
+      if(!alive())throw Error('The plugin was unloaded.');
+      await plugins.disablePlugin(manifest.id);await plugins.loadManifests();await plugins.enablePlugin(manifest.id);
+    }
+    if(plugins.plugins[manifest.id]?.manifest?.version!==release.version)throw Error('The update files are installed. Restart Obsidian to load the update.');
+    if(await installedVersion(storage,manifest.id)!==release.version)throw Error('The installed plugin changed while reloading. Check again.');
+  }catch(error){
+    // A self-update can unload this banner before an installation/load failure.
+    if(!alive())new Notice(error instanceof Error?error.message:'The update could not be verified. Restart Obsidian and check the installed version.',0);
+    throw error;
   }
 }
