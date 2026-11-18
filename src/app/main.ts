@@ -115,7 +115,7 @@ import { collectImages, imageReferenceDefinitions, MAX_IMAGE_BYTES } from '../no
 import {vaultHost,loadVaultHost,mergeVaultHost,type VaultHost} from './vault-host';
 import {ensureNoProject,verifiedNoProject,NO_PROJECT,isNoProjectKey,noProjectKey,noProjectMachine} from '../projects/no-project';
 import {CompletionSettings,CompletionJob,contentHash} from '../responses/completion';
-import {Connection,Project,Request,RequestDeliveryError,acceptedRequestThread,parseProjects,runBridge,sendRequest,configureBridge,retiredConnection,projectKey,projectLabel} from './bridge';
+import {Connection,Project,Request,RequestDeliveryError,acceptedRequestThread,parseProjects,runBridge,prepareSend,sendRequest,configureBridge,retiredConnection,projectKey,projectLabel} from './bridge';
 import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,type FolderLink} from '../projects/folder-link';
 import {loadFolderLinkChanges,mergeFolderLinkChanges,applyFolderLinkChanges,changedFolderLinks,mergeLegacyFolderLinks,type FolderLinkChange} from '../projects/folder-link-sync';
 import {installPaletteChat,type PaletteChatController} from '../conversations/palette-chat';
@@ -2534,6 +2534,7 @@ export default class SendToT3 extends Plugin {
       const threadId=options?.threadId??(!options?.newThread&&active&&project.id===active.projectId&&((project.connectionId??'')===active.connectionId||!!connection.environmentId&&connection.environmentId===active.environmentId)?active.threadId:undefined);
       await this.assertNoteMode(note?.path,{...connection,projectId:project.id,threadId});
       options?.onTargetResolved?.();
+      const preparing=prepareSend(connection,project,threadId,link.id!=='no-project');
       if(note&&options?.sourceContext?.smartDocument!==undefined){
         const context=options.sourceContext;
         await this.recoverSmartReplies(note.path,context.smartDocument!);
@@ -2580,7 +2581,7 @@ export default class SendToT3 extends Plugin {
       logEvent('request.prepared',{requestId:request.id,threadId:request.threadId,projectId:request.project.id,notePath:note?.path,promptHash:contentHash(request.prompt),promptLength:request.prompt.length});
       this.settings.pending.push(request);
       try{await this.save();logEvent('request.saved',{requestId:request.id});}catch(e){this.settings.pending=this.settings.pending.filter(r=>r!==request);throw e;}
-      await this.dispatch(request);
+      await this.dispatch(request,false,false,preparing);
       if(options?.sourceContext?.smartQuestion)this.app.saveLocalStorage(this.chatDraftKey,'');
       const draft:unknown=this.app.loadLocalStorage(this.chatDraftKey);
       if(typeof draft==='string'&&draft&&(draft===prompt||prompt.endsWith(`\n\n**USER ASKS:**\n${draft}`)))this.app.saveLocalStorage(this.chatDraftKey,'');
@@ -3114,6 +3115,7 @@ export default class SendToT3 extends Plugin {
       const threadId=options?.threadId??remembered?.threadId;
       const connection=this.connection(project);
       await this.assertNoteMode(file.path,{...connection,projectId:project.id,threadId},options?.destinations);
+      const preparing=prepareSend(connection,project,threadId,options?.folderLink?.id!=='no-project');
       const jobOptions=options?.jobOptions??resolveJobOptions({...this.settings.inlineStreaming,enabled:options?.streamReply??(!options?.quiet&&this.settings.inlineStreaming.enabled)});
       const streaming=jobOptions.inline.enabled;
       const inlineView=streaming?await this.editorForNoteSend(file):undefined;
@@ -3134,7 +3136,7 @@ export default class SendToT3 extends Plugin {
       else await this.prepareNoteSteering(request,file.path,smart.text,undefined,undefined,steeringSource);
       await options?.onPrepared?.(request);
       this.settings.pending.push(request); await this.save();
-      const sentThreadId=await this.dispatch(request,options?.quiet,true);
+      const sentThreadId=await this.dispatch(request,options?.quiet,true,preparing);
       return {threadId:sentThreadId,request};
     } catch(e) {if(request)await this.failRequest(request,e,'preparation',startedAt);else this.recordSendFailure(undefined,e,'preparation',startedAt);const detail=`${unsavedMessage(e)} The send failed. See the send failure log.`;if(options?.throwOnError)throw new RequestDeliveryError(detail,false,Boolean(request));new Notice(`T3 Code: ${detail}`,12000);}
     finally {clearSmartSendPreparation(this.smartData());finishPreview();this.busy = false;}
@@ -3334,7 +3336,7 @@ export default class SendToT3 extends Plugin {
     const result=await this.executeAgentCommand({version:1,id:commandId(request.id,'reserve-thread-response'),kind:'reserve-thread-response',source:{threadId:request.threadId??commandId(request.id,'thread'),projectId:request.project.id,environmentId:request.connection.environmentId??await this.localInlineEnvironment()},messageId:commandId(request.id,'message'),responses:[...responses].map(([path,bindingId])=>({path,bindingId}))});
     if(!result.ok)throw Error('error' in result&&typeof result.error==='string'?result.error:'The vault connection machine could not reserve the reply stream.');
   }
-  async dispatch(request:Request,quiet=false,freshIdentity=false) {
+  async dispatch(request:Request,quiet=false,freshIdentity=false,preparing?:ReturnType<typeof prepareSend>) {
     const startedAt=Date.now();let stage='response-registration';
     await this.assertRequestMode(request);
     await this.captureNoteContext(request);
@@ -3360,13 +3362,13 @@ export default class SendToT3 extends Plugin {
       // No mutation can precede the durable command plan. A saved plan may
       // have been sent despite a lost acknowledgement: keep its recovery.
       const unsentMessageId=request.directPlan||acceptedRequestThread(request)?undefined:commandId(request.id,'message');
-      for(const binding of request.inlineBindings??[request.inlineHost])await this.deviceInline.register(binding,undefined,binding.messageId===unsentMessageId&&binding.threadId===(request.threadId??commandId(request.id,'thread'))&&binding.projectId===request.project.id&&binding.threadEnvironmentId===request.connection.environmentId?unsentMessageId:undefined,freshIdentity);
+      for(const binding of request.inlineBindings??[request.inlineHost])await this.deviceInline.register(binding,undefined,binding.messageId===unsentMessageId&&binding.threadId===(request.threadId??commandId(request.id,'thread'))&&binding.projectId===request.project.id&&binding.threadEnvironmentId===request.connection.environmentId?unsentMessageId:undefined,freshIdentity,!request.threadId);
     }else if(request.inlineHost)throw Error('This legacy reply was cancelled. Create a new local reply.');
     // The watcher must acknowledge these exact identities before T3 can expose
     // the new message. Synced settings can arrive after the canonical run.
     stage='stream-reservation';await this.reserveResponseStreams(request);
     stage='dispatch';let result:Awaited<ReturnType<typeof sendRequest>>;
-    try{result=await sendRequest(request);}finally{
+    try{result=await sendRequest(request,preparing);}finally{
       // Acceptance can be lost or lack a start receipt. Never keep the unsent
       // hint after an attempt settles: exact background recovery must resume.
       for(const binding of request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]))this.deviceInline?.attempted(binding.id);

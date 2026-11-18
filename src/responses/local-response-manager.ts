@@ -35,6 +35,7 @@ export class LocalResponseManager {
   private freshRegistrations=new Map<string,string>();
   private explicitMessages=new Map<string,string>();
   private unsentMessages=new Map<string,string>();
+  private pendingThreadCreation=new Set<string>();
   private migrations=new Map<string,Promise<void>>();
   private documents=new Map<string,NoteCache[]>();
   private recoveryStored?:readonly ResponseRequest[];
@@ -62,7 +63,7 @@ export class LocalResponseManager {
   private destination(request:ResponseRequest){const move=this.moves.get(request.id);return move?.from.has(request.notePath)?move.to:request.notePath;}
   private watch(runtime:Runtime,open:boolean){
     this.reportState(runtime);runtime.watchWanted=open;
-    if(runtime.restoring)return;
+    if(runtime.restoring||this.pendingThreadCreation.has(runtime.request.id))return;
     if(runtime.done||runtime.stopped||runtime.detached||runtime.update?.completionVerified&&!runtime.update.questionsPending){runtime.preview.suspend();return;}
     runtime.preview.tick(open);
   }
@@ -78,7 +79,7 @@ export class LocalResponseManager {
         const changed=localFinalIdentity(old.request)!==localFinalIdentity(request);
         old.attemptRevision=undefined;old.request=request;old.record={...old.record,revision:old.record.revision+1,request,state:{...old.record.state!,notePath:request.notePath,messageId:request.localMessageId??request.messageId,steering:request.localSteering}};old.preview.update(old.record);
         void Promise.resolve(this.io.receiveCoordinated?.(old.record)).catch(error=>logFailure('response.local.update',error,{bindingId:request.id}));
-        if(changed){old.update=undefined;old.preview.reconnect(this.io.isOpen(request.notePath));}
+        if(changed){old.update=undefined;if(!this.pendingThreadCreation.has(request.id))old.preview.reconnect(this.io.isOpen(request.notePath));}
       }
       return old;
     }
@@ -122,11 +123,12 @@ export class LocalResponseManager {
     }).catch(error=>logFailure('response.local.final-restore',error,{bindingId:request.id})).finally(()=>{runtime.restoring=false;if(runtime.watchWanted)this.watch(runtime,true);this.finish(runtime);});
     return runtime;
   }
-  async register(request:ResponseRequest,explicitLocation=false,importedSnapshot?:ThreadSnapshot,unsentMessageId?:string,options:{freshIdentity?:boolean;explicitSend?:boolean}={}){
+  async register(request:ResponseRequest,explicitLocation=false,importedSnapshot?:ThreadSnapshot,unsentMessageId?:string,options:{freshIdentity?:boolean;explicitSend?:boolean;pendingThreadCreation?:boolean}={}){
     if(this.closed||request.vaultId!==this.vaultId)throw Error('This response belongs to another vault.');
     if(this.stoppedIds.has(request.id))throw Error('This response was stopped.');
     const fresh=options.freshIdentity&&unsentMessageId===request.messageId&&!this.jobs.has(request.id)&&!this.stored().some(value=>value.id===request.id)&&!explicitLocation&&!importedSnapshot&&!request.importTurn&&!request.localResume&&!request.localMessageId&&!request.localSteering;
     if(fresh)this.freshRegistrations.set(request.id,localFinalIdentity(request));
+    if(options.pendingThreadCreation&&unsentMessageId===request.messageId)this.pendingThreadCreation.add(request.id);
     if(options.explicitSend&&!explicitLocation&&!importedSnapshot&&!request.importTurn)this.explicitMessages.set(request.id,request.localMessageId??request.messageId);
     try{
     // Set before storage can notify recovery readers. Absence of this local
@@ -149,7 +151,12 @@ export class LocalResponseManager {
     const runtime=this.adopt(request);if(importedSnapshot)runtime.preview.seedImport?.(importedSnapshot);this.watch(runtime,true);this.sources.priorityChanged();
     }catch(error){this.explicitMessages.delete(request.id);this.attempted(request.id);throw error;}finally{this.freshRegistrations.delete(request.id);}
   }
-  attempted(id:string){this.unsentMessages.delete(id);this.jobs.get(id)?.preview.pendingSend?.();}
+  attempted(id:string){
+    this.unsentMessages.delete(id);
+    const waiting=this.pendingThreadCreation.delete(id),runtime=this.jobs.get(id);
+    runtime?.preview.pendingSend?.();
+    if(waiting&&runtime&&runtime.watchWanted)this.watch(runtime,true);
+  }
   delivered(id:string,delivery:InlineStartRequest){if(this.unsentMessages.get(id)===delivery.messageId)this.unsentMessages.delete(id);this.jobs.get(id)?.preview.delivery(delivery);}
   accepted(id:string,messageId:string){if(this.unsentMessages.get(id)===messageId)this.attempted(id);this.jobs.get(id)?.preview.accepted(messageId);}
   resume(){
@@ -249,7 +256,15 @@ export class LocalResponseManager {
   }
   foreground(){this.resume();this.sources.tick(true);}
   tick(){this.resume();this.sources.tick();}
-  reconnect(){if(this.closed)return;for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.suspend();for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped){runtime.attemptRevision=undefined;if(!runtime.restoring&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.reconnect(this.io.isOpen(runtime.request.notePath));}this.resume();}
+  reconnect(){
+    if(this.closed)return;
+    for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.suspend();
+    for(const runtime of this.jobs.values())if(!runtime.done&&!runtime.stopped){
+      runtime.attemptRevision=undefined;
+      if(!runtime.restoring&&!this.pendingThreadCreation.has(runtime.request.id)&&(!runtime.update?.completionVerified||runtime.update.questionsPending))runtime.preview.reconnect(this.io.isOpen(runtime.request.notePath));
+    }
+    this.resume();
+  }
   private detach(runtime:Runtime){if(runtime.done||runtime.stopped)return;runtime.detached=true;runtime.pendingSave='note-changed';runtime.preview.suspend();this.reportState(runtime);}
   private saveResult(runtime?:Runtime):LocalResponseSaveResult {
     if(this.closed||!runtime)return {saved:false,reason:'plugin-unavailable'};
@@ -365,7 +380,7 @@ export class LocalResponseManager {
     const save=this.saveResult(runtime);
     return {version:1,bindingId:id,commandId:'',epoch:1,revision:1,hostRecorded:!!runtime.stopAcknowledged,runTerminal:!!runtime.update?.completionVerified&&['complete','interrupted'].includes(runtime.update.phase??''),finalSaved:runtime.saved===true,finalWriterPending:!!runtime.update?.completionVerified&&!runtime.update.questionsPending&&!runtime.done,...(!save.saved&&!runtime.done?{pendingSaveReason:save.reason}:{})};
   }
-  stopLocally(id:string){this.explicitMessages.delete(id);this.freshRegistrations.delete(id);this.stoppedIds.add(id);const runtime=this.jobs.get(id);if(runtime){runtime.stopped=true;runtime.preview.dispose();}}
+  stopLocally(id:string){this.explicitMessages.delete(id);this.freshRegistrations.delete(id);this.unsentMessages.delete(id);this.pendingThreadCreation.delete(id);this.stoppedIds.add(id);const runtime=this.jobs.get(id);if(runtime){runtime.stopped=true;runtime.preview.dispose();}}
   async stop(id:string,body?:string){
     const runtime=this.jobs.get(id);if(!runtime)throw Error('The response is not loaded.');
     const turnId=runtime.update?.turnId;this.stopLocally(id);
@@ -440,5 +455,5 @@ export class LocalResponseManager {
   deleted(path:string){for(const [notePath,note] of this.recoveryNotes)if(notePath===path||notePath.startsWith(path+'/')){note.version++;note.pending=false;}for(const runtime of this.jobs.values())if(runtime.request.notePath===path||runtime.request.notePath.startsWith(path+'/'))this.stopLocally(runtime.request.id);}
   responses(){return [...this.jobs.values()].filter(runtime=>!runtime.stopped&&!runtime.detached&&(!runtime.done||runtime.update?.completionVerified&&runtime.update.phase==='complete')).map(runtime=>({id:runtime.request.id,notePath:runtime.request.notePath,epoch:1,revision:1,completionId:JSON.stringify([runtime.update?.messageId??runtime.request.localMessageId??runtime.request.messageId,runtime.update?.turnId??'']),completion:completionSource(runtime.request,runtime.update?.turnId?runtime.update.checkpoint?.turns?.[runtime.update.turnId]??(runtime.request.importTurn?.turnId===runtime.update.turnId?runtime.request.importTurn:undefined):undefined),active:!runtime.update?.completionVerified&&runtime.update?.phase!=='error',input:!!runtime.update?.questionsPending||!runtime.update?.completionVerified&&!!runtime.update?.questionActivities?.length,complete:!!runtime.update?.completionVerified&&!runtime.update.questionsPending&&runtime.update.phase==='complete'}));}
   health(){return {...this.sources.status(),attachments:this.jobs.size,saveQueued:[...this.finalQueues.values()].reduce((n,queue)=>n+queue.size,0),saveWorkers:this.finalWorkers.size,pending:[...this.jobs.values()].filter(runtime=>!runtime.done).map(runtime=>({bindingId:runtime.request.id,reason:this.saveResult(runtime)})).slice(0,64)};}
-  dispose(){this.closed=true;if(!this.io.threadSources)this.sources.dispose();for(const resolve of this.finalWaiters.values())resolve();this.finalWaiters.clear();for(const runtime of this.jobs.values())runtime.preview.dispose();this.jobs.clear();this.unsentMessages.clear();this.explicitMessages.clear();this.freshRegistrations.clear();}
+  dispose(){this.closed=true;if(!this.io.threadSources)this.sources.dispose();for(const resolve of this.finalWaiters.values())resolve();this.finalWaiters.clear();for(const runtime of this.jobs.values())runtime.preview.dispose();this.jobs.clear();this.unsentMessages.clear();this.pendingThreadCreation.clear();this.explicitMessages.clear();this.freshRegistrations.clear();}
 }

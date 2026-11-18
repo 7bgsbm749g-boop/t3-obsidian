@@ -18,7 +18,11 @@ export function settingsSocket(config:()=>any=modelConfig,onRead:()=>void=()=>{}
         else if(req.tag==='assets.persistChatAttachments')value={attachments:req.payload.attachments.map((a:any,i:number)=>({type:a.type,id:`stored-${req.payload.messageId}-${i}`,name:a.name,mimeType:a.mimeType,sizeBytes:a.sizeBytes}))};
         else {assert.ok(onRequest,`Unexpected RPC ${req.tag}`);value=await onRequest!(req.tag,req.payload);}
         this.onmessage?.({data:JSON.stringify({_tag:'Exit',requestId:req.id,exit:{_tag:'Success',value}})});
-      }catch{this.onerror?.();}});
+      }catch(error){
+        if(error instanceof Error&&'kind' in error&&typeof error.kind==='string'){
+          this.onmessage?.({data:JSON.stringify({_tag:'Exit',requestId:req.id,exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:error.kind}}]}})});
+        }else this.onerror?.();
+      }});
     }
   };
 }

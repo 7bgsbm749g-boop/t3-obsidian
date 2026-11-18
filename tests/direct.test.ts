@@ -208,14 +208,18 @@ test('direct acknowledgement persists exact prompt delivery and the observed act
 test('named direct sends prepare worktrees before starting and replay the saved workspace after a lost reply',async(t)=>{
  const original=globalThis.WebSocket;t.after(()=>{globalThis.WebSocket=original;});
  const config:any=modelConfig();config.settings.defaultThreadEnvMode='worktree';
- const launches:any[]=[];let saved:any,lose=true;
+ const launches:any[]=[];let saved:any,lose=true,shellReads=0,headReads=0;
  globalThis.WebSocket=settingsSocket(()=>config,undefined,(tag,payload)=>{
+  if(tag==='projects.readFile'){headReads++;assert.deepEqual(payload,{cwd:'/repo',relativePath:'.git/HEAD',allowMissing:true});return {contents:'ref: refs/heads/main\n'};}
   if(tag==='vcs.refreshStatus')return {isRepo:true,refName:'main'};
   assert.equal(tag,'orchestration.launchThread');launches.push(payload);
   if(lose){lose=false;throw Error('Lost acknowledgement');}return {threadId:payload.threadId};
  }) as any;
  const request:Request={id:crypto.randomUUID(),project:{id:'p',title:'P',workspaceRoot:'/repo'},connection:{transport:'direct',url,environmentId:eid,host:'direct',executable:''},title:'Named note',prompt:'Content'};
- const fetcher:any=async(u:string)=>response(u.endsWith('/environment')?descriptor:u.endsWith('/shell')?{projects:[{id:'p',workspaceRoot:'/repo'}]}:{ticket:'test'});
+ const fetcher:any=async(u:string)=>{
+  if(u.endsWith('/shell')){shellReads++;return response({projects:[{id:'p',workspaceRoot:'/repo'}]});}
+  return response(u.endsWith('/environment')?descriptor:{ticket:'test'});
+ };
  const save=async()=>{saved=structuredClone(request);};
  await assert.rejects(sendDirect(request,session,save,fetcher),/Cannot reach/);
  assert.deepEqual(launches[0].workspaceStrategy,{type:'worktree',baseRef:'main',startFromOrigin:false});
@@ -223,6 +227,12 @@ test('named direct sends prepare worktrees before starting and replay the saved 
  config.settings.defaultThreadEnvMode='local';
  await sendDirect(saved,session,async()=>{},fetcher);
  assert.deepEqual(launches[1],launches[0]);
+ assert.equal(shellReads,0,'A current server needs no thread catalog to launch');
+ assert.equal(headReads,1,'A saved retry keeps its original branch');
+ config.settings.projectSettingsFolded=false;
+ config.settings.defaultThreadEnvMode='worktree';
+ await sendDirect({...request,id:crypto.randomUUID(),directPlan:undefined},session,async()=>{},fetcher);
+ assert.equal(shellReads,1,'An older server retains the project lookup');
 });
 test('a new MCP-enabled pairing requests agent configuration access and refuses a restricted bootstrap grant',async()=>{
  const scopes=AGENT_SETUP_PERMISSIONS;let grant=scopes.join(' '),requested='';
@@ -276,5 +286,40 @@ test('composer models reach new and existing messages, and retry refuses a chang
   const request:Request={id:'98e4d70e-cbd5-4a23-aad0-a50732a59bf2',threadId,project:{id:'p',title:'P',workspaceRoot:'/'},connection:{transport:'direct',url,environmentId:eid,host:'direct',executable:''},title:'Named',prompt:'Prompt',context:{version:1,records:[{version:1,contextId:'ctx',label:'README.md',kind:'mention',path:'README.md'}]},jobOptions:{version:1,interactionMode:'plan',inline:{enabled:true,intermediateMode:'collapse',finalAnswerFormat:'formatted'},modelSelection:{instanceId:'codex',model:'chosen',options:[{id:'reasoningEffort',value:'high'}]}}};
   commands.length=0;await sendDirect(request,session,async()=>{},fetcher);assert.ok(commands.length);assert.ok(commands.some(command=>command.interactionMode==='plan'));assert.equal(commands.at(-1).context.records[0].path,'README.md');assert.equal(commands.at(-1).modelSelection.model,'chosen');assert.equal(commands.at(-1).modelSelection.options[0].value,'high');
   request.jobOptions!.modelSelection!.model='changed';await assert.rejects(sendDirect(request,session,async()=>{},fetcher),/no longer matches/);
+ }
+});
+
+test('new sends retry failed early preparation and preserve worktree selection', async t => {
+ const original=globalThis.WebSocket;
+ t.after(()=>{globalThis.WebSocket=original;});
+ const config=modelConfig();
+ const workspaceConfig={...config,settings:{...config.settings,defaultThreadEnvMode:'worktree'}};
+ for(const fixture of [
+  {file:{contents:'a'.repeat(40)},ref:'HEAD'},
+  {file:{exists:false,contents:''},ref:'topic'},
+  {file:{contents:'ref: refs/heads/-invalid'},ref:'topic'},
+  {file:new Error('linked worktree'),ref:'topic'},
+  {file:{exists:false},moved:true,ref:'topic'},
+ ]){
+  let reads=0,launches=0,saved=false;
+  globalThis.WebSocket=settingsSocket(()=>workspaceConfig,()=>{reads++;},(tag,payload)=>{
+   if(tag==='projects.readFile'){
+    if(fixture.file instanceof Error)throw Object.assign(fixture.file,{kind:'ProjectReadFileError'});
+    return fixture.file;
+   }
+   if(tag==='vcs.listRefs')return fixture.moved&&payload.cwd==='/repo'?{isRepo:false,refs:[]}:{isRepo:true,refs:[{current:true,name:'topic'}]};
+   assert.equal(tag,'orchestration.launchThread');
+   assert.equal(saved,true);
+   assert.equal(payload.workspaceStrategy.baseRef,fixture.ref);
+   launches++;
+   return {threadId:payload.threadId};
+  }) as any;
+  const request:Request={id:crypto.randomUUID(),project:{id:'p',title:'P',workspaceRoot:'/repo'},connection:{transport:'direct',url,environmentId:eid,host:'direct',executable:''},title:'Named note',prompt:'Content'};
+  const fetcher:any=async(u:string)=>response(u.endsWith('/environment')?descriptor:u.endsWith('/shell')?{projects:[{id:'p',workspaceRoot:'/moved'}]}:{ticket:'test'});
+  const preparing=Promise.reject(new Error('Early connection failed'));
+  void preparing.catch(()=>{});
+  await sendDirect(request,session,async()=>{saved=true;},fetcher,undefined,undefined,preparing);
+  assert.equal(reads,1);
+  assert.equal(launches,1);
  }
 });

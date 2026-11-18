@@ -101,20 +101,22 @@ test('workspace defaults inherit environment and project settings without changi
  assert.deepEqual(resolveNewThreadDefaults(config,{id:'p'}).workspaceStrategy,{type:'root'});
  config.settings.projectSettingsOverrides.p={defaultThreadEnvMode:null};
  assert.equal(resolveNewThreadDefaults(config,{id:'p'}).workspaceStrategy?.type,'worktree');
+ assert.equal(resolveNewThreadDefaults(config,{id:'other',defaultThreadEnvMode:'local'}).workspaceStrategy?.type,'worktree');
+ config.settings.projectSettingsFolded=false;
  assert.deepEqual(resolveNewThreadDefaults(config,{id:'other',defaultThreadEnvMode:'local'}).workspaceStrategy,{type:'root'});
  config.settings.defaultThreadEnvMode='invalid';
  assert.throws(()=>resolveNewThreadDefaults(config,{id:'p'}),/invalid workspace default/);
 });
 
 test('workspace preparation uses the repository branch and keeps non-repository projects local',async()=>{
- for(const isRepo of [true,false]){
+ for(const [isRepo,current] of [[true,true],[true,false],[false,false]]){
   const config:any=modelConfig();config.settings.defaultThreadEnvMode='worktree';
   const Socket=settingsSocket(()=>config,undefined,(tag,payload)=>{
-   assert.equal(tag,'vcs.refreshStatus');assert.deepEqual(payload,{cwd:'/project',localOnly:true});
-   return {isRepo,refName:isRepo?'topic':null};
+   assert.equal(tag,'vcs.listRefs');assert.deepEqual(payload,{cwd:'/project',refKind:'local',limit:1,refresh:true});
+   return {isRepo,refs:isRepo?[{name:'topic',current}]:[]};
   });
   const api:any=async()=>({ticket:'test'});
   const defaults=await readNewThreadDefaults(api,'https://t3.example',{id:'p',workspaceRoot:'/project'},url=>new Socket(url) as any);
-  assert.deepEqual(defaults.workspaceStrategy,isRepo?{type:'worktree',baseRef:'topic',startFromOrigin:false}:{type:'root'});
+  assert.deepEqual(defaults.workspaceStrategy,isRepo?{type:'worktree',baseRef:current?'topic':'HEAD',startFromOrigin:false}:{type:'root'});
  }
 });

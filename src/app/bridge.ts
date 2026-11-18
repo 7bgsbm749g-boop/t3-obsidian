@@ -3,7 +3,7 @@ import type {SmartCapture} from '../notes/smart-send';
 import type {ResolvedJobOptions} from '../conversations/job-options';
 import type {NoteCommand} from '../notes/note-command';
 import {logEvent,logFailure} from './diagnostics';
-import {readDirect,sendDirect,type PairedSession,type DirectPlan,type DirectReadOptions} from '../connection/direct';
+import {prepareNewThreadSend,readDirect,sendDirect,type PairedSession,type DirectPlan,type DirectReadOptions} from '../connection/direct';
 import {abortableRead,requestAborted} from '../connection/t3-api';
 import type {OutgoingContext} from '../connection/send-contracts';
 import type { ImageAttachment } from '../notes/images';
@@ -49,11 +49,21 @@ export async function runBridge(connection:Connection,args:string[],input='',opt
   logEvent('transport.operation.completed',{operation,control:options.control,elapsedMs:Date.now()-started,transport:connection.transport??'desktop',environmentId:connection.environmentId});return result;
   }catch(error){logFailure('transport.operation.failed',error,{operation,control:options.control,cancelled:options.signal?.aborted,elapsedMs:Date.now()-started,transport:connection.transport??'desktop',environmentId:connection.environmentId});throw error;}
 }
-export async function sendRequest(request: Request) {
+export function prepareSend(connection:Connection,project:Project,threadId:string|undefined,parallelHead:boolean){
+  const open=runtime?.access;
+  if(threadId||connection.transport!=='direct'||!connection.environmentId||!open)return;
+  const work=open(connection.environmentId).then(async access=>{
+    try{return await prepareNewThreadSend(project,access.api,access.origin,parallelHead);}finally{await access.close?.();}
+  });
+  // Preparation can outlive a locally rejected or empty send.
+  void work.catch(()=>{});
+  return work;
+}
+export async function sendRequest(request: Request,preparing?:ReturnType<typeof prepareSend>) {
   if(request.connection.transport==='direct'){
     if(!runtime?.saveRequest)throw Error('Direct request storage is unavailable.');
     const access=request.connection.environmentId&&runtime.access?await runtime.access(request.connection.environmentId):undefined;
-    try{return await sendDirect(request,access?undefined:await runtime.pairedSession?.(request.connection.connectionId??''),()=>runtime!.saveRequest!(request),undefined,access,request.hideObsidianThread?()=>runtime!.beforeThreadCreate?.(request):undefined);}finally{await access?.close?.();}
+    try{return await sendDirect(request,access?undefined:await runtime.pairedSession?.(request.connection.connectionId??''),()=>runtime!.saveRequest!(request),undefined,access,request.hideObsidianThread?()=>runtime!.beforeThreadCreate?.(request):undefined,preparing);}finally{await access?.close?.();}
   }
   throw Error('Reconnect this request through T3 Connect before sending.');
 }

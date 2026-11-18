@@ -1,5 +1,5 @@
-import {isRecord,records} from '../shared/values';
-import {acquireT3UnaryRpc,type T3Api,type SocketFactory} from '../connection/t3-rpc';
+import {hasControlCharacters,isRecord,records} from '../shared/values';
+import {acquireT3UnaryRpc,type T3Api,type T3RpcConnection,type SocketFactory} from '../connection/t3-rpc';
 
 export interface ModelSelection {instanceId:string;model:string;options?:{id:string;value:unknown}[]}
 export type RuntimeMode='approval-required'|'auto-accept-edits'|'auto'|'full-access';
@@ -46,23 +46,62 @@ export function resolveNewThreadDefaults(config:unknown,project:Project):NewThre
   const runtimeMode=projectMode!==undefined?projectMode:config.settings.defaultRuntimeMode!==undefined?config.settings.defaultRuntimeMode:'full-access';
   if(typeof runtimeMode!=='string'||!['approval-required','auto-accept-edits','auto','full-access'].includes(runtimeMode))throw Error('T3 returned an invalid access default. Choose an access mode in T3 settings and retry.');
   const storedMode=isRecord(overrides)?overrides.defaultThreadEnvMode:undefined;
-  const workspaceMode=storedMode??project.defaultThreadEnvMode??config.settings.defaultThreadEnvMode??'local';
+  const workspaceMode=storedMode??(!config.settings.projectSettingsFolded?project.defaultThreadEnvMode:undefined)??config.settings.defaultThreadEnvMode??'local';
   if(workspaceMode!=='local'&&workspaceMode!=='worktree')throw Error('T3 returned an invalid workspace default. Choose a workspace mode in T3 settings and retry.');
   const fromOrigin=config.settings.newWorktreesStartFromOrigin??false;
   if(typeof fromOrigin!=='boolean')throw Error('T3 returned an invalid worktree origin default.');
   return {modelSelection,runtimeMode:runtimeMode as RuntimeMode,workspaceStrategy:workspaceMode==='worktree'?{type:'worktree',baseRef:'HEAD',startFromOrigin:fromOrigin}:{type:'root'}};
 }
 
-export async function readNewThreadDefaults(api:T3Api,origin:string,project:Project,makeSocket?:SocketFactory):Promise<NewThreadDefaults>{
+async function readRepositoryHead(rpc:T3RpcConnection,cwd:string):Promise<string|undefined>{
+  try{
+    const file=await rpc.call('projects.readFile',{cwd,relativePath:'.git/HEAD',allowMissing:true});
+    if(!isRecord(file)||file.truncated||typeof file.contents!=='string')return;
+    const head=file.contents.trimEnd();
+    if(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(head))return 'HEAD';
+    // Read only a normal clone's symbolic local branch. Linked worktrees,
+    // nested folders and unfamiliar HEAD formats use T3's VCS API.
+    const branch=/^ref: refs\/heads\/(.+)$/u.exec(head)?.[1];
+    if(branch&&!hasControlCharacters(branch,true)&&!/[ ~^:?*[\\]/u.test(branch)&&!branch.startsWith('-')&&!branch.includes('..')&&!branch.includes('@{'))return branch;
+  }catch(error){
+    if(!isRecord(error)||!['ProjectReadFileError','EnvironmentAuthorizationError'].includes(String(error.kind)))throw error;
+  }
+}
+
+export async function readNewThreadDefaults(api:T3Api,origin:string,project:Project,makeSocket?:SocketFactory,readLegacyProject?:()=>Promise<Project>,parallelHead=false):Promise<NewThreadDefaults>{
   const rpc=await acquireT3UnaryRpc(api,origin,makeSocket);
   try{
-    const defaults=resolveNewThreadDefaults(await rpc.call('server.getConfig',{}),project);
+    const configRead=rpc.call('server.getConfig',{});
+    // This read is optional until fresh defaults require a worktree. Start
+    // both on the same connection to avoid a second round trip on that path.
+    const headRead=parallelHead&&project.workspaceRoot?readRepositoryHead(rpc,project.workspaceRoot):undefined;
+    void headRead?.catch(()=>{});
+    const config=await configRead;
+    const migrated=isRecord(config)&&isRecord(config.settings)&&config.settings.projectSettingsFolded===true;
+    // Current servers migrate aggregate defaults into projectSettingsOverrides.
+    if(readLegacyProject&&!migrated)project=await readLegacyProject();
+    const defaults=resolveNewThreadDefaults(config,project);
     if(defaults.workspaceStrategy?.type==='worktree'&&project.workspaceRoot){
-      const status=await rpc.call('vcs.refreshStatus',{cwd:project.workspaceRoot,localOnly:true});
+      const head=migrated&&readLegacyProject?await (headRead??readRepositoryHead(rpc,project.workspaceRoot)):undefined;
+      if(head){defaults.workspaceStrategy.baseRef=head;return defaults;}
+      const readRefs=(cwd:string)=>rpc.call('vcs.listRefs',{cwd,refKind:'local',limit:1,refresh:true});
+      let status=migrated
+        ?await readRefs(project.workspaceRoot)
+        :await rpc.call('vcs.refreshStatus',{cwd:project.workspaceRoot,localOnly:true});
+      // A moved project must not silently become a root launch.
+      if(migrated&&readLegacyProject&&isRecord(status)&&status.isRepo===false){
+        const current=await readLegacyProject();
+        if(current.workspaceRoot&&current.workspaceRoot!==project.workspaceRoot)status=await readRefs(current.workspaceRoot);
+      }
       if(!isRecord(status)||typeof status.isRepo!=='boolean')throw Error('T3 did not return the project repository status. Retry the saved request.');
+      // The ref endpoint puts the checked-out local branch first. It reads
+      // refs without scanning the worktree or computing changes and upstream status.
+      const current=records(status.refs)[0];
+      const refName=migrated?(current?.current===true?current.name:undefined):status.refName;
       // Non-repository folders and No project stay in their T3-managed folder.
       if(!status.isRepo)defaults.workspaceStrategy={type:'root'};
-      else if(typeof status.refName==='string'&&status.refName)defaults.workspaceStrategy.baseRef=status.refName;
+      else if(migrated&&!Array.isArray(status.refs))throw Error('T3 did not return project refs. Retry the saved request.');
+      else if(typeof refName==='string'&&refName)defaults.workspaceStrategy.baseRef=refName;
     }
     return defaults;
   }
