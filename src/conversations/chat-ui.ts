@@ -76,7 +76,7 @@ class SendModelModal extends Modal {
     this.titleEl.setText('Model for this send');this.contentEl.empty();
     new Setting(this.contentEl).setName('Model').addDropdown(dropdown=>{
       dropdown.addOption('',this.defaultLabel);
-      this.models.forEach((model,index)=>dropdown.addOption(String(index),`${model.provider} · ${model.label}`));
+      this.models.forEach((model,index)=>{dropdown.addOption(String(index),`${model.provider} · ${model.label}`);});
       const index=this.models.findIndex(model=>model.selection.instanceId===this.selection?.instanceId&&model.selection.model===this.selection.model);
       dropdown.setValue(index<0?'':String(index)).onChange(value=>{this.selection=value===''?undefined:{...this.models[Number(value)].selection};this.onOpen();});
     });

@@ -45,7 +45,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
     if(!group)return;
     event.preventDefault();group.open=true;
     for(let parent=group.parentElement;parent;parent=parent.parentElement){
-      if(parent.matches('details'))(parent as HTMLDetailsElement).open=true;
+      if(parent.matches('details'))parent.setAttribute('open','');
       if(parent.matches('.callout.is-collapsed'))parent.querySelector<HTMLElement>(':scope > .callout-title')?.click();
     }
     group.scrollIntoView({block:'nearest'});
