@@ -1,4 +1,4 @@
-import {clockForDocument} from '../shared/clock';
+import {responseControlsChanged} from './response-controls-event';
 import type {App,MarkdownView} from 'obsidian';
 import {nativeResponses} from './native-response-manager';
 import {streamBlock} from './stream-block';
@@ -10,7 +10,6 @@ import {installStreamStopControls} from './stream-stop-control';
 /** Keep Live Preview's source cursor outside generated history, while native
  * browser selection, links, dropdowns and copy controls continue to work. */
 export function installStreamBlockControls(app:App,root:Document,icon:(element:HTMLElement,name:string)=>void,onError:(error:unknown)=>void,onSignIn:()=>void=()=>{},onStop?:(id:string,view:MarkdownView)=>Promise<void>):()=>void {
-  const {setInterval,clearInterval}=clockForDocument(root);
   const stopDrag=installResponseDrag(app,root,icon,onError);
   const owned=new Map<HTMLElement,{close:HTMLElement;follow:HTMLElement;signIn:HTMLButtonElement;reading:boolean;fold:HTMLElement;footer?:HTMLElement}>();
   const watched=new Set<Element>();
@@ -128,6 +127,7 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
   root.addEventListener('pointerdown',pointer,true);root.addEventListener('mousedown',pointer,true);root.addEventListener('click',click,true);
   root.addEventListener(responseScrollChanged,schedule);
   const observer=new MutationObserver(records=>{if(records.some(record=>record.type==='childList'||record.target.instanceOf(Element)&&record.target.matches('.callout[data-callout="t3-progress"]')&&((record.oldValue??'').split(/\s+/).includes('is-collapsed')!==record.target.classList.contains('is-collapsed'))))schedule();});observer.observe(root.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class'],attributeOldValue:true});
-  const timer=setInterval(refresh,1000);refresh();
-  return ()=>{disposed=true;stopControls();stopDrag();observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener(responseScrollChanged,schedule);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('mousedown',pointer,true);root.removeEventListener('click',click,true);for(const [actions,controls] of owned){controls.close.remove();controls.follow.remove();controls.signIn.remove();controls.footer?.classList.remove('send-to-t3-stream-footer');controls.fold.style.removeProperty('--send-to-t3-stream-footer-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading){actions.parentElement?.classList.remove('send-to-t3-has-reading-actions');actions.remove();}actions.closest('.cm-embed-block')?.classList.remove('send-to-t3-stream-collapsed');}owned.clear();};
+  root.addEventListener(responseControlsChanged,schedule);
+  refresh();
+  return ()=>{disposed=true;root.removeEventListener(responseControlsChanged,schedule);stopControls();stopDrag();observer.disconnect();resize?.disconnect();root.removeEventListener(responseScrollChanged,schedule);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('mousedown',pointer,true);root.removeEventListener('click',click,true);for(const [actions,controls] of owned){controls.close.remove();controls.follow.remove();controls.signIn.remove();controls.footer?.classList.remove('send-to-t3-stream-footer');controls.fold.style.removeProperty('--send-to-t3-stream-footer-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading){actions.parentElement?.classList.remove('send-to-t3-has-reading-actions');actions.remove();}actions.closest('.cm-embed-block')?.classList.remove('send-to-t3-stream-collapsed');}owned.clear();};
 }

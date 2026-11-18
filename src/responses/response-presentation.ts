@@ -63,6 +63,16 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   const seen=new WeakMap<Element,{heading:HTMLElement;key:string|undefined}>();
   const watched=new Set<Element>(),aligned=new Set<HTMLElement>();
   let restoring=false,queued=false,disposed=false;
+  const liveTimers=new Map<HTMLElement,()=>string>();
+  let timerTick:ReturnType<typeof setInterval>|undefined;
+  const stopTimers=()=>{if(timerTick!==undefined){clearInterval(timerTick);timerTick=undefined;}};
+  const updateTimers=()=>{
+    for(const [element,format] of liveTimers){
+      if(!element.isConnected){liveTimers.delete(element);continue;}
+      const text=format();if(element.textContent!==text)element.textContent=text;
+    }
+    if(!liveTimers.size)stopTimers();
+  };
   const refresh=()=>{
     queued=false;if(disposed)return;
     // Old notes keep their exact canonical bytes. Remove legacy tool detail
@@ -75,18 +85,23 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
       details.replaceWith(row);
     }
     const layout=new Set<Element>(),actionsInUse=new Set<HTMLElement>();
+    liveTimers.clear();
     for(const timer of Array.from(root.querySelectorAll<HTMLElement>('[data-t3-setup-start]'))){
       const start=Number(timer.dataset.t3SetupStart),end=timer.dataset.t3SetupEnd;
       if(!Number.isFinite(start))continue;
+      if(!end)liveTimers.set(timer,()=>setupDuration(Date.now()-start));
       const text=setupDuration((end!==undefined&&Number.isFinite(Number(end))?Number(end):Date.now())-start);
       if(timer.textContent!==text)timer.textContent=text;
     }
     for(const timer of Array.from(root.querySelectorAll<HTMLElement>('.send-to-t3-run-timer[data-t3-start]'))){
       const start=Number(timer.dataset.t3Start),end=timer.dataset.t3End;
       if(!Number.isFinite(start))continue;
+      if(!end)liveTimers.set(timer,()=>elapsedRun({startedAt:new Date(start).toISOString()}));
       const text=elapsedRun({startedAt:new Date(start).toISOString(),...(end&&Number.isFinite(Number(end))?{finishedAt:new Date(Number(end)).toISOString()}:{})});
       if(timer.textContent!==text)timer.textContent=text;
     }
+    if(liveTimers.size&&timerTick===undefined)timerTick=setInterval(updateTimers,1000);
+    else if(!liveTimers.size)stopTimers();
     for(const time of Array.from(root.querySelectorAll<HTMLElement>('.send-to-t3-thought-time[data-t3-thought-at], .send-to-t3-notification-time[data-t3-notification-at]'))){
       const at=Number(time.dataset.t3ThoughtAt??time.dataset.t3NotificationAt);if(!Number.isFinite(at))continue;
       const date=new Date(at),text=date.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
@@ -219,6 +234,6 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   const observer=new MutationObserver(records=>{if(records.some(record=>[...Array.from(record.addedNodes),...Array.from(record.removedNodes)].some(node=>node.nodeType===1)))schedule();});
   observer.observe(root.body,{childList:true,subtree:true});
   root.addEventListener('click',click,true);root.addEventListener('keydown',keyboard);root.addEventListener('toggle',rememberTool,true);
-  const timer=setInterval(refresh,1000);refresh();
-  return ()=>{root.removeEventListener('click',openActivity);disposed=true;observer.disconnect();resize?.disconnect();for(const actions of aligned){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');}clearInterval(timer);root.removeEventListener('click',click,true);root.removeEventListener('keydown',keyboard);root.removeEventListener('toggle',rememberTool,true);};
+  refresh();
+  return ()=>{root.removeEventListener('click',openActivity);disposed=true;observer.disconnect();resize?.disconnect();for(const actions of aligned){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');}stopTimers();liveTimers.clear();root.removeEventListener('click',click,true);root.removeEventListener('keydown',keyboard);root.removeEventListener('toggle',rememberTool,true);};
 }

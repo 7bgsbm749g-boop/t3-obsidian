@@ -1,4 +1,4 @@
-import {clockForDocument} from '../shared/clock';
+import {responseControlsChanged} from './response-controls-event';
 import type {MarkdownView} from 'obsidian';
 
 export interface StreamStopTarget {id:string;key:string;view:MarkdownView}
@@ -6,7 +6,6 @@ export interface StreamStopTarget {id:string;key:string;view:MarkdownView}
 /** UI state belongs to a response in a pane, never to note Markdown. Resolve
  * again at activation: a retained DOM node can outlive the run it displayed. */
 export function installStreamStopControls(root:Document,resolve:(fold:HTMLElement)=>StreamStopTarget|undefined,stop:(target:StreamStopTarget)=>Promise<void>,icon:(element:HTMLElement,name:string)=>void,onError:(error:unknown)=>void):()=>void {
-  const {setInterval,clearInterval}=clockForDocument(root);
   const controls=new Map<HTMLElement,HTMLButtonElement>(),pending=new Set<string>();
   let active:StreamStopTarget|undefined,disposed=false,queued=false,suppressPointerFocus=false;
   const identity=(target:StreamStopTarget)=>JSON.stringify([target.id,target.key]);
@@ -62,6 +61,7 @@ export function installStreamStopControls(root:Document,resolve:(fold:HTMLElemen
   const reveal=(event:Event)=>{
     const target=targetAt(event.target);
     if(target&&(interactive(event.target)||suppressPointerFocus))return;
+    if(!target&&!active||same(active,target))return;
     active=target;refresh();
   };
   const pointer=(event:Event)=>{suppressPointerFocus=!!interactive(event.target);if(active&&!same(active,targetAt(event.target))){active=undefined;refresh();}};
@@ -95,6 +95,7 @@ export function installStreamStopControls(root:Document,resolve:(fold:HTMLElemen
   root.addEventListener('pointerdown',pointer,true);root.addEventListener('pointercancel',resetPointerFocus,true);root.addEventListener('keydown',resetPointerFocus,true);root.addEventListener('click',click,true);root.addEventListener('focusin',reveal,true);root.addEventListener('focusout',blur,true);
   const resize=typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(schedule);
   const observer=new MutationObserver(schedule);observer.observe(root.body,{childList:true,subtree:true});
-  const timer=setInterval(refresh,1000);refresh();
-  return ()=>{disposed=true;observer.disconnect();resize?.disconnect();clearInterval(timer);root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('pointercancel',resetPointerFocus,true);root.removeEventListener('keydown',resetPointerFocus,true);root.removeEventListener('click',click,true);root.removeEventListener('focusin',reveal,true);root.removeEventListener('focusout',blur,true);for(const [fold,button] of controls){button.remove();fold.classList.remove('send-to-t3-stream-stoppable','send-to-t3-stop-visible');fold.closest('.cm-embed-block')?.classList.remove('send-to-t3-stop-visible');fold.style.removeProperty('--send-to-t3-stop-center');}controls.clear();};
+  root.addEventListener(responseControlsChanged,schedule);
+  refresh();
+  return ()=>{disposed=true;root.removeEventListener(responseControlsChanged,schedule);observer.disconnect();resize?.disconnect();root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('pointercancel',resetPointerFocus,true);root.removeEventListener('keydown',resetPointerFocus,true);root.removeEventListener('click',click,true);root.removeEventListener('focusin',reveal,true);root.removeEventListener('focusout',blur,true);for(const [fold,button] of controls){button.remove();fold.classList.remove('send-to-t3-stream-stoppable','send-to-t3-stop-visible');fold.closest('.cm-embed-block')?.classList.remove('send-to-t3-stop-visible');fold.style.removeProperty('--send-to-t3-stop-center');}controls.clear();};
 }
