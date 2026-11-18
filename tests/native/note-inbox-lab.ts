@@ -9,6 +9,7 @@ import {readNewThreadDefaults} from '../../src/conversations/model-defaults';
 import {deviceState} from '../../src/storage/device-state';
 declare const INBOX_LAB_REPORT:string;
 declare const INBOX_LAB_VAULT:string;
+declare const INBOX_LAB_ENVIRONMENT:string;
 const folder='T3 inbox validation';
 export default class InboxLab extends Plugin {
   private cleanup?:()=>Promise<void>;
@@ -21,7 +22,7 @@ export default class InboxLab extends Plugin {
     this.registerDomEvent(window,'error',event=>{if(event.error instanceof TypeError||event.error instanceof ReferenceError){const message=String(event.error.message).replace(/https?:\/\/\S+/g,'[URL]').slice(0,300);require('node:fs').appendFileSync(INBOX_LAB_REPORT.replace('.json','-errors.jsonl'),JSON.stringify({name:event.error.name,message})+'\n');}});
     this.addCommand({id:'cleanup',name:'Finish inbox validation',callback:()=>{if(this.cleanup)void this.cleanup().catch(error=>{this.write({phase:'cleanup-failed',error:String(error)});new Notice(String(error));});}});
     this.registerEvent(this.app.workspace.on('files-menu',(_menu,files,source)=>{if(files.length&&files.every(file=>file.path.startsWith(folder+'/'))){this.selectionProof={source,paths:files.map(file=>file.path)};this.write({phase:'native-selection'});}}));
-    this.app.workspace.onLayoutReady(()=>void this.start().catch(error=>{this.write({error:String(error)});new Notice(String(error));}));
+    this.app.workspace.onLayoutReady(()=>void this.start().catch(error=>{this.write({phase:'setup-failed',error:String(error)});new Notice(String(error));}));
   }
   private write(value:unknown){require('node:fs').writeFileSync(INBOX_LAB_REPORT,JSON.stringify({...value as object,nativeFilter:this.nativeProof,nativeSelection:this.selectionProof,nativeCapabilities:this.capabilities,backend:this.backend,threadIds:this.ownedThreads,notePaths:this.files.map(file=>file.path),notesStayedInFolder:this.files.every(file=>file.path.startsWith(folder+'/'))},null,2));}
   private async start(){
@@ -30,7 +31,6 @@ export default class InboxLab extends Plugin {
     const product=plugins.plugins['t-three-code'];if(!product?.noteInboxView)throw Error('The candidate inbox plugin is not loaded.');
     if(!this.app.workspace.getLeavesOfType('file-explorer').length){const leaf=this.app.workspace.getLeftLeaf(false);if(!leaf)throw Error('The file explorer is unavailable.');await leaf.setViewState({type:'file-explorer',active:true});}
     if(this.app.vault.getAbstractFileByPath(folder))throw Error('Fixture folder already exists. Preserve it.');
-    await this.app.vault.createFolder(folder);
     const original={save:product.save,bindings:product.settings.responseBindings,inbox:product.settings.noteInbox,explorer:product.deviceInline.explorerResponses,view:product.inboxViewState};
     const created:string[]=[],ids:string[]=[],responses:any[]=[],actions:any[]=[];
     this.cleanup=async()=>{
@@ -66,9 +66,11 @@ export default class InboxLab extends Plugin {
       }
       product.refreshFolderIndicators();this.write({phase:'clean',ownedThreadsDeleted:this.ownedThreads.length,version:product.manifest.version,ownedNotesRemoved:!this.app.vault.getFolderByPath(folder)&&this.files.every(file=>this.app.vault.getAbstractFileByPath(file.path)!==file),fixtureBindingsRemoved:ids.every(id=>!product.settings.responseBindings[id]&&!product.responseBindingReplica[id]),fixtureStateRemoved:ids.every(id=>!product.settings.noteInbox[id]),actions});new Notice('Inbox validation fixtures removed.');
     };
-    const environmentId=product.eventLocalEnvironmentId??await product.localInlineEnvironment();
+    const environmentId=INBOX_LAB_ENVIRONMENT;
+    if(!product.settings.paired.some((connection:{environmentId:string})=>connection.environmentId===environmentId))throw Error('Connect the configured native test machine first.');
     this.access=await product.inlineThreadAccess(environmentId);const access=this.access!;
     const project=await product.commandProject(environmentId),defaults=await readNewThreadDefaults(access.api,access.origin,project);
+    await this.app.vault.createFolder(folder);
     const createThread=async(title:string)=>{
       const threadId=crypto.randomUUID();this.ownedThreads.push(threadId);
       await access.api('/api/orchestration/dispatch',{type:'thread.create',commandId:crypto.randomUUID(),threadId,projectId:project.id,title:'Synthetic inbox validation: '+title,modelSelection:defaults.modelSelection,runtimeMode:defaults.runtimeMode,interactionMode:'default',branch:null,worktreePath:null,createdAt:new Date().toISOString()});

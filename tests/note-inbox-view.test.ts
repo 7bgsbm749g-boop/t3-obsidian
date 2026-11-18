@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {build} from './build-fixture';
 import {nativeInboxFixture as fixture} from './native-inbox-fixture';
 test('native inbox lab uses the installed product and native vault APIs',async()=>{
- const result=await build({entryPoints:['tests/native/note-inbox-lab.ts'],bundle:true,platform:'browser',format:'cjs',write:false,external:['node:*'],define:{INBOX_LAB_REPORT:'"synthetic-report.json"',INBOX_LAB_VAULT:'"Synthetic test vault"'}});
+ const result=await build({entryPoints:['tests/native/note-inbox-lab.ts'],bundle:true,platform:'browser',format:'cjs',write:false,external:['node:*'],define:{INBOX_LAB_REPORT:'"synthetic-report.json"',INBOX_LAB_VAULT:'"Synthetic test vault"',INBOX_LAB_ENVIRONMENT:'"synthetic-test-machine"'}});
  assert.match(result.outputFiles[0].text,/noteInboxView/);assert.match(result.outputFiles[0].text,/Finish inbox validation/);
 });
 test('the filter reuses native note rows and handlers and restores their native folder tree on exit',async(t)=>{
