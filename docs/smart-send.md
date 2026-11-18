@@ -10,7 +10,9 @@ sending is available only after T3 confirms a send from that stable note identit
 Preparation, cancellation, folder links, and imported runs do not establish that
 confirmation. An imported thread can still be chosen explicitly in the selector.
 Later sends use the previous thread, unless Control or Choose destination requests
-the selector, or there is no new source for the previous thread. Notes with no
+the selector, or there is no new source for the previous thread. With **Always
+show composer** enabled in **Replies** settings, Send and Ask open the composer
+before dispatch and preselect the previous thread when one is available. Notes with no
 retained confirmed-send record use the first-send selector. The native fixture
 `node scripts/build-native-response-lab.mjs evidence/TASK/native --first-send`
 checks cancellation, explicit thread choice, confirmed continuation, selection

@@ -53,6 +53,18 @@ test('native controls save their values and refresh through the supported index 
  h.plugin.cloudChanged();assert.equal(h.updates(),1);assert.equal(h.plugin.nativeAccount,undefined);
  const settle=replies.find((row:any)=>row.name==='Settle completed threads'),toggle=new h.Setting(new Element());settle.render(toggle);await toggle.el.controls[0].change(false);assert.equal(h.plugin.settings.settlementJobs.length,0);
 });
+test('always show composer defaults off and saves each toggle',async()=>{
+ const h=await harness(),row=h.tab.getSettingDefinitions().find((page:any)=>page.name==='Replies').items.find((row:any)=>row.name==='Always show composer');
+ const setting=new h.Setting(new Element());row.render(setting);
+ const toggle=setting.el.controls[0];assert.equal(toggle.value,false);
+ await toggle.change(true);assert.equal(h.plugin.settings.alwaysShowComposer,true);
+ await toggle.change(false);assert.equal(h.plugin.settings.alwaysShowComposer,false);
+ assert.equal(h.saves(),2);
+ const plugin=Object.assign(Object.create(h.Plugin.prototype),{settings:h.plugin.settings});
+ assert.equal(plugin.sharedData({alwaysShowComposer:true}).alwaysShowComposer,true);
+ assert.equal(plugin.sharedData({}).alwaysShowComposer,false);
+});
+
 test('thread and note mode changes preserve links and reply streaming',async()=>{
  const h=await harness(true);h.plugin.settings.noteThreads=[{notePath:'A.md',threadId:'thread'}];const before=JSON.stringify(h.plugin.settings.noteThreads),pages=h.tab.getSettingDefinitions(),beta=pages.find((page:any)=>page.name==='Replies').items.find((item:any)=>item.name==='Beta');
  const setting=new h.Setting(new Element());beta.items[0].render(setting);assert.equal(setting.el.controls[0].value,'free');await setting.el.controls[0].change('one-to-one');assert.equal(h.plugin.settings.threadNoteMode,'one-to-one');assert.equal(JSON.stringify(h.plugin.settings.noteThreads),before);assert.equal(h.plugin.settings.inlineStreaming.enabled,true);
