@@ -210,6 +210,7 @@ test('named direct sends prepare worktrees before starting and replay the saved 
  const config:any=modelConfig();config.settings.defaultThreadEnvMode='worktree';
  const launches:any[]=[];let saved:any,lose=true,shellReads=0;
  globalThis.WebSocket=settingsSocket(()=>config,undefined,(tag,payload)=>{
+  if(tag==='vcs.listRefs')return {isRepo:true,refs:[{current:true,name:'main'}]};
   if(tag==='vcs.refreshStatus')return {isRepo:true,refName:'main'};
   assert.equal(tag,'orchestration.launchThread');launches.push(payload);
   if(lose){lose=false;throw Error('Lost acknowledgement');}return {threadId:payload.threadId};

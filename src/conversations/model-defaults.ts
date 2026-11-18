@@ -61,11 +61,19 @@ export async function readNewThreadDefaults(api:T3Api,origin:string,project:Proj
     if(readLegacyProject&&isRecord(config)&&isRecord(config.settings)&&config.settings.projectSettingsFolded!==true)project=await readLegacyProject();
     const defaults=resolveNewThreadDefaults(config,project);
     if(defaults.workspaceStrategy?.type==='worktree'&&project.workspaceRoot){
-      const status=await rpc.call('vcs.refreshStatus',{cwd:project.workspaceRoot,localOnly:true});
+      const migrated=isRecord(config)&&isRecord(config.settings)&&config.settings.projectSettingsFolded===true;
+      const status=migrated
+        ?await rpc.call('vcs.listRefs',{cwd:project.workspaceRoot,refKind:'local',limit:1,refresh:true})
+        :await rpc.call('vcs.refreshStatus',{cwd:project.workspaceRoot,localOnly:true});
       if(!isRecord(status)||typeof status.isRepo!=='boolean')throw Error('T3 did not return the project repository status. Retry the saved request.');
+      // The ref endpoint puts the checked-out local branch first. It reads
+      // refs without scanning the worktree or computing changes and upstream status.
+      const current=records(status.refs)[0];
+      const refName=migrated?(current?.current===true?current.name:undefined):status.refName;
       // Non-repository folders and No project stay in their T3-managed folder.
       if(!status.isRepo)defaults.workspaceStrategy={type:'root'};
-      else if(typeof status.refName==='string'&&status.refName)defaults.workspaceStrategy.baseRef=status.refName;
+      else if(migrated&&!Array.isArray(status.refs))throw Error('T3 did not return project refs. Retry the saved request.');
+      else if(typeof refName==='string'&&refName)defaults.workspaceStrategy.baseRef=refName;
     }
     return defaults;
   }
