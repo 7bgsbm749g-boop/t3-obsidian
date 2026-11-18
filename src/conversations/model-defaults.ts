@@ -71,13 +71,18 @@ async function readRepositoryHead(rpc:T3RpcConnection,cwd:string):Promise<string
 export async function readNewThreadDefaults(api:T3Api,origin:string,project:Project,makeSocket?:SocketFactory,readLegacyProject?:()=>Promise<Project>):Promise<NewThreadDefaults>{
   const rpc=await acquireT3UnaryRpc(api,origin,makeSocket);
   try{
-    const config=await rpc.call('server.getConfig',{});
+    const configRead=rpc.call('server.getConfig',{});
+    // This read is optional until fresh defaults require a worktree. Start
+    // both on the same connection to avoid a second round trip on that path.
+    const headRead=readLegacyProject&&project.workspaceRoot?readRepositoryHead(rpc,project.workspaceRoot):undefined;
+    void headRead?.catch(()=>{});
+    const config=await configRead;
     // Current servers migrate aggregate defaults into projectSettingsOverrides.
     if(readLegacyProject&&isRecord(config)&&isRecord(config.settings)&&config.settings.projectSettingsFolded!==true)project=await readLegacyProject();
     const defaults=resolveNewThreadDefaults(config,project);
     if(defaults.workspaceStrategy?.type==='worktree'&&project.workspaceRoot){
       const migrated=isRecord(config)&&isRecord(config.settings)&&config.settings.projectSettingsFolded===true;
-      const head=migrated&&readLegacyProject?await readRepositoryHead(rpc,project.workspaceRoot):undefined;
+      const head=migrated?await headRead:undefined;
       if(head){defaults.workspaceStrategy.baseRef=head;return defaults;}
       const status=migrated
         ?await rpc.call('vcs.listRefs',{cwd:project.workspaceRoot,refKind:'local',limit:1,refresh:true})
