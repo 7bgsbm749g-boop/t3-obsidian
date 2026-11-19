@@ -45,7 +45,7 @@ async function pluginFixture(){
   class Base{}
   const module={exports:{} as any},api={Plugin:Base,PluginSettingTab:Base,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,Notice:Base,Platform:{isMobile:true}};
   runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},crypto:webcrypto,URL,TextEncoder,TextDecoder,console,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})}});
-  const p=new module.exports.default();p.settings={threadNoteMode:'one-to-one',noteThreads:[pair()],paired:[{id:'connection',environmentId:'machine'}],completion:{action:'keep'},inlineStreaming:{enabled:true}};
+  const p=new module.exports.default();p.settings={threadNoteMode:'one-to-one',noteThreads:[pair()],paired:[{id:'connection',environmentId:'machine'}],completion:{action:'keep'},inlineStreaming:{enabled:true},pending:[]};
   const project={id:'project',workspaceRoot:'/project',connectionId:'connection'};
   p.connection=()=>({connectionId:'connection',environmentId:'machine'});p.projectForNoteThread=()=>project;
   p.chatTarget=async()=>({project,link:{}});p.projectReadinessError=()=>undefined;p.recordSendFailure=()=>{};
@@ -55,12 +55,15 @@ async function pluginFixture(){
 test('real Send, Ask, import, attachment and dispatch boundaries reject conflicts before note or network work',async()=>{
   const {p,project}=await pluginFixture();let mutations=0;
   const forbidden=async()=>{mutations++;throw Error('unexpected side effect');};
-  p.app={};p.editorForNoteSend=forbidden;p.readImportHistory=forbidden;p.deviceInline={};p.captureNoteContext=forbidden;
+  p.app={};p.editorForNoteSend=forbidden;p.readImportHistory=forbidden;p.deviceInline={};p.captureNoteContext=forbidden;p.save=async()=>{};
   await assert.rejects(p.send({path:'A.md'},project,{newThread:true,throwOnError:true}),/1:1 mode/);
   await assert.rejects(p.sendChat('Question',{path:'A.md'},{newThread:true}),/1:1 mode/);
   await assert.rejects(p.importRun('B.md',project,'one','message'),/1:1 mode/);
   await assert.rejects(p.prepareStreamBindings({project,connection:p.connection(),threadId:'one'},['B.md'],undefined,undefined,'A.md'),/1:1 mode/);
-  await assert.rejects(p.dispatch({project,connection:p.connection(),threadId:'one',noteThread:{notePath:'B.md'}}),/1:1 mode/);
+  const conflicting={id:'conflict',project,connection:p.connection(),threadId:'one',noteThread:{notePath:'B.md'}};
+  p.settings.pending.push(conflicting);
+  await assert.rejects(p.dispatch(conflicting),/1:1 mode/);
+  assert.equal(p.settings.pending.length,0);
   assert.equal(mutations,0);
   assert.equal(p.noteThread('A.md').threadId,'one');
   assert.deepEqual(Array.from(await p.availableModeThreads('B.md',project,[{id:'one'},{id:'two'}]),(thread:any)=>thread.id),['two']);

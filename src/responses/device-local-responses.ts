@@ -68,7 +68,10 @@ export class DeviceResponseManager {
   accepted(_host:ResponseStorageTarget,id:string,messageId:string){this.local?.accepted(id,messageId);}
   delivered(_host:ResponseStorageTarget,id:string,delivery:InlineStartRequest){this.local?.delivered(id,delivery);return Promise.resolve();}
   stopLocally(id:string){this.stops.add(id);this.io.saveStops?.([...this.stops]);this.local?.stopLocally(id);}
-  failResponse(_host:ResponseStorageTarget,id:string){return this.local?.cancel(id)??Promise.resolve();}
+  failResponse(request:ResponseRequest){
+    this.stopLocally(request.id);
+    return this.manager().cancel(request);
+  }
   stopResponse(_host:ResponseStorageTarget,id:string,body?:string,_operationId?:string):Promise<ResponseStopReceipt>{return this.manager().stop(id,body);}
   responseStatus(id:string){return this.local?.status(id);}
   health(){return this.local?.health();}
@@ -81,6 +84,7 @@ export class DeviceResponseManager {
   follow(_host:ResponseStorageTarget,id:string,previous:string,messageId:string,path?:string){return this.manager().follow(id,messageId,path,previous);}
   steer(_host:ResponseStorageTarget,id:string,input:SteeringInput){return this.manager().steer(id,input);}
   discardSteering(id:string,messageId:string){return this.local?.discardSteering(id,messageId)??Promise.resolve();}
+  discardFollow(id:string,messageId:string,previousMessageId:string){return this.local?.discardFollow(id,messageId,previousMessageId)??Promise.resolve();}
   resume(){if(!this.stopped)this.manager().resume();}
   foreground(){if(!this.stopped)this.manager().foreground();}
   reconnect(){if(!this.stopped)this.manager().reconnect();}

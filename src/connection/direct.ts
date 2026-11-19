@@ -97,7 +97,7 @@ export async function environmentApi(c:Connection,s:PairedSession|undefined,fetc
    if(path==='/api/orchestration/shell'&&payload===undefined)cache.observe(identity,work);
    return await work;
   }
-  catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403)){cache.delete(identity);api.disposeUnaryRpc?.();}throw error;}
+  catch(error){if(error instanceof T3HttpError&&(error.status===401||error.status===403)){cache.delete(identity);if(!unary)api.disposeUnaryRpc?.();}throw error;}
  };
  routed.acquireUnaryRpc=api.acquireUnaryRpc;
  routed.disposeUnaryRpc=api.disposeUnaryRpc;
@@ -155,9 +155,9 @@ export function prepareNewThreadSend(project:Project,api:ThreadAccess['api'],ori
  },parallelHead);
 }
 
-export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Promise<void>,fetcher?:Fetcher,access?:ThreadAccess,beforeThreadCreate?:()=>void|Promise<void>,preparing?:Promise<NewThreadDefaults>){
+export async function sendDirect(r:Request,s:PairedSession|undefined,save:()=>Promise<void>,fetcher?:Fetcher,access?:ThreadAccess,beforeThreadCreate?:()=>void|Promise<void>,preparing?:Promise<NewThreadDefaults>,transmission?:Pick<T3RequestOptions,'sendTransmission'|'signal'>){
  const environment=access?.api??await environmentApi(r.connection,s,fetcher);
- const requestOptions=beforeThreadCreate?{beforeThreadCreate}:undefined;
+ const requestOptions={beforeThreadCreate,...transmission};
  const api=(path:string,payload?:unknown)=>environment('/api/orchestration/'+path,payload,requestOptions);
  const hash=Buffer.from(sha256(Buffer.from(JSON.stringify({project:r.project.id,title:r.title,prompt:r.prompt,attachments:r.attachments??[],context:r.context??null,...(r.threadId?{threadId:r.threadId}:{}),...(r.jobOptions?.modelSelection?{modelSelection:r.jobOptions.modelSelection}:{}),...(r.jobOptions?.interactionMode?{interactionMode:r.jobOptions.interactionMode}:{})})))).toString('hex');
  if(r.directPlan&&(r.directPlan.hash!==hash||r.directPlan.environmentId!==r.connection.environmentId))throw Error('Saved request no longer matches its original content or environment.');

@@ -4,7 +4,7 @@ import type {ResolvedJobOptions} from '../conversations/job-options';
 import type {NoteCommand} from '../notes/note-command';
 import {logEvent,logFailure} from './diagnostics';
 import {prepareNewThreadSend,readDirect,sendDirect,type PairedSession,type DirectPlan,type DirectReadOptions} from '../connection/direct';
-import {abortableRead,requestAborted} from '../connection/t3-api';
+import {abortableRead,requestAborted,type SendTransmission} from '../connection/t3-api';
 import type {OutgoingContext} from '../connection/send-contracts';
 import type { ImageAttachment } from '../notes/images';
 import type { NoteCompletion } from '../responses/completion';
@@ -59,11 +59,11 @@ export function prepareSend(connection:Connection,project:Project,threadId:strin
   void work.catch(()=>{});
   return work;
 }
-export async function sendRequest(request: Request,preparing?:ReturnType<typeof prepareSend>) {
+export async function sendRequest(request: Request,preparing?:ReturnType<typeof prepareSend>,sendTransmission?:SendTransmission,signal?:AbortSignal) {
   if(request.connection.transport==='direct'){
     if(!runtime?.saveRequest)throw Error('Direct request storage is unavailable.');
-    const access=request.connection.environmentId&&runtime.access?await runtime.access(request.connection.environmentId):undefined;
-    try{return await sendDirect(request,access?undefined:await runtime.pairedSession?.(request.connection.connectionId??''),()=>runtime!.saveRequest!(request),undefined,access,request.hideObsidianThread?()=>runtime!.beforeThreadCreate?.(request):undefined,preparing);}finally{await access?.close?.();}
+    const access=request.connection.environmentId&&runtime.access?await abortableRead(runtime.access(request.connection.environmentId),signal):undefined;
+    try{return await sendDirect(request,access?undefined:await runtime.pairedSession?.(request.connection.connectionId??''),()=>runtime!.saveRequest!(request),undefined,access,request.hideObsidianThread?()=>runtime!.beforeThreadCreate?.(request):undefined,preparing,{sendTransmission,signal});}finally{await access?.close?.();}
   }
   throw Error('Reconnect this request through T3 Connect before sending.');
 }

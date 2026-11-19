@@ -21,7 +21,7 @@ async function fixture(){
   const plugin=new module.exports.default(),commands:any[]=[],failures:any[]=[];
   plugin.settings={};plugin.vaultConnection=()=>({workspaceRoot:'/synthetic-vault'});plugin.localInlineEnvironment=async()=>source.environmentId;
   plugin.executeAgentCommand=async(input:any)=>{commands.push(JSON.parse(JSON.stringify(input)));return {id:input.id,ok:true};};
-  plugin.assertRequestMode=async()=>{};plugin.captureNoteContext=async()=>{};plugin.responseGuard=async()=>{};plugin.failRequest=async(_request:any,error:Error,stage:string)=>{failures.push({error:error.message,stage});};
+  plugin.assertRequestMode=async()=>{};plugin.captureNoteContext=async()=>{};plugin.failRequest=async(_request:any,error:Error,stage:string)=>{failures.push({error:error.message,stage});};
   plugin.deviceInline={register:async()=>{}};
   const id=randomUUID(),binding={id:randomUUID(),version:4,notePath:'Note.md',messageId:'',threadId:source.threadId,projectId:source.projectId,threadEnvironmentId:source.environmentId};
   const request={id,project:{id:source.projectId},connection:{transport:'direct',environmentId:source.environmentId},threadId:source.threadId,inlineBindings:[binding],inlineHost:binding};
@@ -48,7 +48,7 @@ test('dispatch waits for the watcher acknowledgement and refuses to send when it
   assert.deepEqual(h.failures,[{error:'watcher storage unavailable',stage:'stream-reservation'}]);
 });
 
-test('dispatch suppresses history only before a durable plan and releases that proof on a failed attempt',async()=>{
+test('dispatch resumes recovery only when an existing plan could have sent a message',async()=>{
  for(const saved of [{},{mismatchedBinding:true},{directPlan:{phase:'created'}},{acceptedThreadId:source.threadId}]){
   const h=await fixture(),hints:unknown[]=[],attempts:string[]=[];
   h.binding.messageId=commandId(h.request.id,'message');if('mismatchedBinding' in saved)h.binding.threadId='other-thread';
@@ -57,7 +57,7 @@ test('dispatch suppresses history only before a durable plan and releases that p
   if('acceptedThreadId' in saved)assert.equal(await dispatched,source.threadId);
   else await assert.rejects(dispatched,/Direct request storage is unavailable/);
   assert.deepEqual(hints,[Object.keys(saved).length?undefined:h.binding.messageId]);
-  assert.deepEqual(attempts,[h.binding.id],'An unconfirmed attempt must restore genuine recovery');
+  assert.deepEqual(attempts,'directPlan' in saved?[h.binding.id]:[],'Only a possibly transmitted message needs recovery');
  }
 });
 

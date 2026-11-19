@@ -26,6 +26,38 @@ test('related defaults and mutations use the same authenticated API socket',asyn
  assert.equal(tickets,1);assert.equal(opens,1);assert.equal(dispatches,1);api.disposeUnaryRpc!();
 });
 
+test('pool invalidation cannot cancel an explicit send waiting for its acknowledgement',async()=>{
+ const owner=new T3UnaryRpcOwner();
+ let sent=0,complete!:(value:unknown)=>void,started!:()=>void,opens=0,closes=0;
+ const transmitted=new Promise<void>(resolve=>started=resolve);
+ const Socket=settingsSocket(undefined,undefined,tag=>{
+  assert.equal(tag,'orchestration.launchThread');
+  return new Promise(resolve=>complete=resolve);
+ });
+ class Tracked extends Socket {close(){closes++;super.close();}}
+ const api=t3Api(async()=>({ticket:'synthetic'}),'https://synthetic',url=>{opens++;return new Tracked(url) as any;},Infinity,owner);
+ await readNewThreadDefaults(api,'https://synthetic',{id:'project'});
+ const work=api('/api/orchestration/launch',{threadId:'thread',initialMessage:{messageId:'message',text:'Prompt',attachments:[]}},{sendTransmission:{onMessageSent:()=>{sent++;started();},onThreadCreateSent:()=>assert.fail('Launch also delivers the message')}});
+ await transmitted;
+ owner.dispose();
+ assert.equal(closes,1,'Only the read socket closes');
+ complete({threadId:'thread'});
+ assert.deepEqual(await work,{threadId:'thread'});
+ assert.equal(sent,1);
+ assert.equal(opens,2);
+ assert.equal(closes,2,'The send closes its own socket');
+});
+
+test('a socket lost before launch transmits neither the thread nor its message',async()=>{
+ let socket!:InstanceType<ReturnType<typeof settingsSocket>>;
+ const Socket=settingsSocket(undefined,undefined,()=>assert.fail('No RPC should reach T3'));
+ const api=t3Api(async()=>({ticket:'synthetic'}),'https://synthetic',url=>(socket=new Socket(url)) as any);
+ await assert.rejects(api('/api/orchestration/launch',{threadId:'thread',initialMessage:{messageId:'message',text:'Prompt',attachments:[]}},{
+  beforeThreadCreate:()=>socket.close(),
+  sendTransmission:{onMessageSent:()=>assert.fail('No message transmitted'),onThreadCreateSent:()=>assert.fail('No thread create transmitted')},
+ }),/closed/);
+});
+
 test('concurrent leases share opening, reader cancellation is isolated, and late replies are harmless',async()=>{
  const h=fixture(),abort=new AbortController(),first=h.pool.acquire(abort.signal),second=h.pool.acquire();
  const [a,b]=await Promise.all([first,second]);assert.equal(h.tickets(),1);

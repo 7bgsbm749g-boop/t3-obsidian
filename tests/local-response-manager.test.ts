@@ -29,6 +29,30 @@ function fixture(binding=request(),initial?:string,records:ResponseBindingData={
 const drain=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
 const recover=async(h:ReturnType<typeof fixture>)=>{h.manager.resume();await (h.manager as any).recoveryWork;await drain();};
 
+test('failure before response registration removes only its prepared anchor',async()=>{
+  const h=fixture();
+  assert.equal(h.manager.has(h.binding.id),false);
+  h.write(h.read()+'\nUser edit');
+  await h.manager.cancel(h.binding);
+  assert.doesNotMatch(h.read(),new RegExp(h.binding.id));
+  assert.match(h.read(),/After\nUser edit/);
+  assert.deepEqual(h.manager.health().pending,[]);
+  h.manager.dispose();
+});
+
+test('failed follow-up restores the previous response only if it still owns the binding',async()=>{
+  const h=fixture(),failed=randomUUID(),newer=randomUUID();
+  await h.manager.register(h.binding);
+  await h.manager.follow(h.binding.id,failed);
+  await h.manager.discardFollow(h.binding.id,failed,h.binding.messageId);
+  assert.equal(h.manager.request(h.binding.id)?.localMessageId,h.binding.messageId);
+  await h.manager.follow(h.binding.id,newer);
+  await h.manager.discardFollow(h.binding.id,failed,h.binding.messageId);
+  assert.equal(h.manager.request(h.binding.id)?.localMessageId,newer);
+  assert.equal(h.writes(),0);
+  h.manager.dispose();
+});
+
 test('reload restores Working and its watch before the saved note is opened',async()=>{
   const binding=request(),h=fixture(binding,undefined,updateResponseBindingData({},binding,'A'));h.open(false);
   let ticks=0;await recover(h);

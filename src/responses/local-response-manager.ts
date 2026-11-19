@@ -393,7 +393,11 @@ export class LocalResponseManager {
     if(saveFailure)throw toError(saveFailure);
     return this.status(id)!;
   }
-  async cancel(id:string){const runtime=this.jobs.get(id);if(!runtime)return;this.stopLocally(id);await this.saveStopped(runtime,'');}
+  async cancel(request:ResponseRequest){
+    const runtime=this.jobs.get(request.id)??this.adopt(request);
+    this.stopLocally(request.id);
+    await this.saveStopped(runtime,'',undefined,request);
+  }
   frozenBody(id:string){return this.jobs.get(id)?.stopBody;}
   async retrySave(binding:ResponseRequest,expectedHash:string,frozenBody?:string):Promise<LocalResponseSaveResult>{
     if(this.closed||binding.vaultId!==this.vaultId)throw Error('This reply is unavailable on this client.');
@@ -413,17 +417,17 @@ export class LocalResponseManager {
     if(body!==undefined){runtime.stopBody=body;this.stopLocally(binding.id);await this.saveStopped(runtime,body,expectedHash);return this.saveResult(runtime);}
     runtime.retryAt=0;runtime.attemptRevision=undefined;this.finish(runtime);return this.waitForSave(binding.id);
   }
-  private async saveStopped(runtime:Runtime,body:string,expectedHash?:string){
+  private async saveStopped(runtime:Runtime,body:string,expectedHash?:string,failedSend?:ResponseRequest){
     await runtime.work;if(runtime.done)return;
-    return this.writeNote(runtime.request.notePath,()=>this.saveStoppedNote(runtime,body,expectedHash));
+    return this.writeNote(runtime.request.notePath,()=>this.saveStoppedNote(runtime,body,expectedHash,failedSend));
   }
-  private async saveStoppedNote(runtime:Runtime,body:string,expectedHash?:string){
+  private async saveStoppedNote(runtime:Runtime,body:string,expectedHash?:string,failedSend?:ResponseRequest){
     if(this.closed||runtime.done)return;
     const path=runtime.request.notePath,current=await this.notes.read(path);if(current===undefined)throw Error('The frozen response note is unavailable.');
     if(expectedHash!==undefined&&contentHash(current)!==expectedHash)throw Error('The reviewed note changed.');
     const document=await this.io.localFinalDraft?.(current,this.range(current,runtime.request.id)?.request??runtime.request)??current;
     if(document!==current)await this.io.rememberNoteEdits?.(runtime.request,current,document);
-    const range=this.range(document,runtime.request.id);
+    const range=this.range(document,runtime.request.id)??(failedSend&&localResponseRange(document,failedSend.id,[failedSend]));
     if(!range&&runtime.request.localStage)throw Error('The reply was removed before its proposed note edit could be saved. The proposal is retained.');
     if(range)await this.io.rememberResponse?.(runtime.request,body,document.slice(0,range.from),document.slice(range.to),range.from);
     const after=range?document.slice(0,range.from)+body+document.slice(range.to):document;
@@ -449,6 +453,10 @@ export class LocalResponseManager {
     const request=this.jobs.get(id)?.request;
     if(!request?.localSteering?.some(input=>input.messageId===messageId&&!input.confirmed))return Promise.resolve();
     return this.changeBinding(id,request=>({...request,localSteering:request.localSteering?.filter(input=>input.messageId!==messageId||input.confirmed)}));
+  }
+  discardFollow(id:string,messageId:string,previousMessageId:string){
+    if(this.jobs.get(id)?.request.localMessageId!==messageId)return Promise.resolve();
+    return this.follow(id,previousMessageId,undefined,messageId);
   }
   renamed(before:string,after:string){
     for(const request of [...this.stored(),...[...this.jobs.values()].map(runtime=>runtime.request)]){const path=this.destination(request);if(path===before||path.startsWith(before+'/')){const old=this.moves.get(request.id),from=old?.from??new Set<string>();from.add(request.notePath);from.add(path);this.moves.set(request.id,{from,to:after+path.slice(before.length)});}}for(const [path,note] of [...this.recoveryNotes])if(path===before||path.startsWith(before+'/')){note.version++;this.recoveryNotes.delete(path);this.recoveryNotes.set(after+path.slice(before.length),{...note,pending:true,retryAt:0});}for(const runtime of this.jobs.values())if(runtime.request.notePath===before||runtime.request.notePath.startsWith(before+'/')){runtime.request={...runtime.request,notePath:after+runtime.request.notePath.slice(before.length)};runtime.retryAt=0;}}

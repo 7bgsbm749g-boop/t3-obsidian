@@ -84,6 +84,14 @@ export class InlineChatManager {
     if(job.phase!=='error'||job.finalized)throw Error('This response is no longer waiting for a continuation.');
     job.messageId=messageId;delete job.turnId;job.phase='reconnecting';this.persist();this.start(job);
   }
+  discardFollow(id:string,messageId:string,previousMessageId:string){
+    const job=this.find(id);
+    if(!job||job.hosted||job.finalized||job.messageId!==messageId||job.phase!=='reconnecting')return;
+    const runtime=this.runtime(job);
+    runtime.monitor?.stop();runtime.monitor=undefined;
+    if(runtime.timer)clearTimeout(runtime.timer);runtime.timer=undefined;
+    job.messageId=previousMessageId;job.phase='error';this.persist();
+  }
   steer(job:InlineJob,input:SteeringInput){
     if(!validSteeringInput(input))throw Error('Invalid steering message.');
     const existing=job.steering?.find(item=>item.messageId===input.messageId);

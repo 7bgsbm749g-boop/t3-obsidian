@@ -24,6 +24,11 @@ export class ThreadVisibility {
     if(this.jobs.length>=1000)throw Error('Too many pending thread tags. Connect T3 before creating more hidden threads.');
     this.jobs.push(job);this.store.save(this.jobs);
   }
+  discard(id:string){
+    const remaining=this.jobs.filter(job=>job.id!==id);
+    if(remaining.length===this.jobs.length)return;
+    this.store.save(remaining);this.jobs=remaining;
+  }
   apply(access:ThreadAccess,environmentId:string,enabled:boolean,credentialKey:string,force=false):Promise<void>{
     if(this.stopped)return Promise.resolve();
     const pending=this.work.get(environmentId);

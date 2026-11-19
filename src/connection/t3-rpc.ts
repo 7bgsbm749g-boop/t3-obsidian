@@ -4,7 +4,7 @@ import {T3_PROTOCOL_VERSION} from './orchestration-v2';
 import type {RouteConnection} from './route-status';
 
 export type T3Api=((path:string,payload?:unknown,options?:import('./t3-api').T3RequestOptions)=>Promise<unknown>)&{acquireUnaryRpc?:(signal?:AbortSignal)=>Promise<T3RpcConnection>;disposeUnaryRpc?:()=>void;trackConnection?:(connection:RouteConnection)=>void;cachedImportThreads?:(projectId:string)=>import('../conversations/thread-target').ThreadChoice[]|undefined;importCacheIdentity?:object;prepareImportCatalog?:(signal?:AbortSignal)=>Promise<void>;watchImportThreads?:(projectId:string,changed:()=>void)=>()=>void};
-export interface T3RpcConnection extends RouteConnection {call(tag:string,payload:unknown):Promise<unknown>;close():void}
+export interface T3RpcConnection extends RouteConnection {call(tag:string,payload:unknown,onSent?:()=>void):Promise<unknown>;close():void}
 export type SocketFactory=(url:string)=>WebSocket;
 export interface RpcClock {now():number;timer(callback:()=>void,milliseconds:number):ReturnType<typeof setTimeout>;clear(timer:ReturnType<typeof setTimeout>):void}
 const clock:RpcClock={now:()=>typeof performance==='undefined'?Date.now():performance.now(),timer:(callback,milliseconds)=>{const timer=setTimeout(callback,milliseconds);if(typeof timer!=='number')timer.unref?.();return timer;},clear:timer=>clearTimeout(timer)};
@@ -62,13 +62,14 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
     }catch{fail(Error('T3 returned an incompatible response.'));}
   };
   try{await ready;}catch(error){fail(error instanceof Error?error:Error(String(error)));throw toError(error);}
-  const rpc=async(tag:string,payload:unknown):Promise<unknown>=>{
+  const rpc=async(tag:string,payload:unknown,onSent?:()=>void):Promise<unknown>=>{
     const result=await new Promise<unknown>((resolve,reject)=>{
     if(closed){reject(Error('The machine connection closed. Choose the machine again.'));return;}
     if(pending.size>=maxPending){reject(Error('Too many pending unary requests. Retry when the current work finishes.'));return;}
     const id=String(++nextId),started=time.now();
     pending.set(id,{resolve,reject,method:tag,started});
     try{socket.send(JSON.stringify({_tag:'Request',id,tag,payload,headers:[]}));}catch{fail(Error('Cannot send the request to this machine.'));}
+    if(!closed)onSent?.();
     });
     return result;
   };
@@ -124,9 +125,9 @@ export class T3UnaryRpcPool {
     const cancel=()=>release();entry.users.add(release);signal?.addEventListener('abort',cancel,{once:true});
     try{
       const rpc=await unaryRead(entry.work,reader.signal);
-      return {get closed(){return released||rpc.closed;},get error(){return rpc.error;},call:(tag,payload)=>{
+      return {get closed(){return released||rpc.closed;},get error(){return rpc.error;},call:(tag,payload,onSent)=>{
         if(released)return Promise.reject(Error('Unary reader released.'));
-        return unaryRead(rpc.call(tag,payload),reader.signal);
+        return unaryRead(rpc.call(tag,payload,onSent),reader.signal);
       },close:release};
     }catch(error){release();throw error;}
   }
