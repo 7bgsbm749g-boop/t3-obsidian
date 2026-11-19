@@ -40,7 +40,13 @@ export function deviceNoteIO(app:App){
   let locator=locators.get(app);
   if(!locator){locator=new ResponseNoteLocator(()=>[],readNote);locators.set(app,locator);}
   const locations=locator;
+  const missing=async(path:string)=>{
+    if(!app.vault?.getFileByPath||!app.vault.adapter?.exists)return false;
+    const present=()=>!!app.vault.getFileByPath(path)||views(path).length>0;
+    return !present()&&!await app.vault.adapter.exists(path)&&!present();
+  };
   return {
+    missing,
     locateNote:(id:string,path:string)=>locations.locate(id,path),
     noteChanged:(path:string)=>locations.changed(path),
     noteRenamed:(before:string,after:string)=>locations.renamed(before,after),
@@ -102,7 +108,7 @@ export function deviceFinalNoteIO(app:App,allowed:()=>boolean){
   const observed=new Map<string,{file:unknown;disk:string;current:string}>();
   const recovered=new Map<string,{file:unknown;expected:string}>();
   const acquire=async(path:string,review=false)=>manager.beginFinalSave(path,review);
-  const compareAndSetAttempt=async(path:string,before:string,after:string,_attemptId:string,guard=()=>true):Promise<FinalWriteOutcome>=>{
+  const compareAndSetAttempt=async(path:string,before:string,after:string,_attemptId:string,guard=()=>true,checkBinding?:()=>Promise<boolean>):Promise<FinalWriteOutcome>=>{
     let release:(()=>void)|undefined,prepared=false,written=false,ioStarted=false;
     const changed=Error('The local note changed before final save.'),started=Date.now();
     let reason='not-started';
@@ -118,6 +124,7 @@ export function deviceFinalNoteIO(app:App,allowed:()=>boolean){
       if(!snapshot||snapshot.file!==file||snapshot.current!==before)return outcome({status:'no-write'},'plan-revision-changed');
       if(!same())return outcome({status:'no-write'},reason);
       if(await app.vault.read(file)!==snapshot.disk)return outcome({status:'no-write'},'disk-revision-changed');
+      if(checkBinding&&!await checkBinding())return outcome({status:'no-write'},'attachment-changed');
       if(!same())return outcome({status:'no-write'},reason);
       if(diagnosticEnabled('note.save.prepared'))logEvent('note.save.prepared',{attemptId:_attemptId,noteAlias:contentHash(path),baseHash:contentHash(snapshot.disk),projectionHash:contentHash(before),proposedHash:contentHash(after)});
       const ids=responseIds(before).filter(id=>responseRegion(before,id)&&!responseRegion(after,id));
@@ -135,6 +142,7 @@ export function deviceFinalNoteIO(app:App,allowed:()=>boolean){
     }finally{if(prepared)manager.cancel(path);release?.();}
   };
   return {
+    missing:io.missing,
     readCommitted:async(path:string)=>{
       const file=app.vault.getFileByPath(path);if(!file||!allowed())return;
       const disk=await app.vault.read(file);
@@ -185,6 +193,6 @@ export function deviceFinalNoteIO(app:App,allowed:()=>boolean){
       }finally{release();}
     },
     compareAndSetAttempt,
-    compareAndSet:async(path:string,before:string,after:string,guard?:()=>boolean)=>(await compareAndSetAttempt(path,before,after,randomId(),guard)).status==='verified',
+    compareAndSet:async(path:string,before:string,after:string,guard?:()=>boolean,checkBinding?:()=>Promise<boolean>)=>(await compareAndSetAttempt(path,before,after,randomId(),guard,checkBinding)).status==='verified',
   };
 }

@@ -15,9 +15,10 @@ const require=createRequire(import.meta.url);
 const compiled=build({stdin:{contents:"export {default} from './src/app/main'; export {RequestDeliveryError} from './src/app/bridge'; export {nativeResponses} from './src/responses/native-response-manager'; export {InlineChatManager} from './src/conversations/inline-chat';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
 async function fixture(document='First paragraph.\n\nLater paragraph.'){
   class Base{}
+  class Plugin extends Base{async loadData(){return null;}}
   const notices:string[]=[];
   class Notice{constructor(text:string){notices.push(text);}}
-  const api={Plugin:Base,MarkdownView:Base,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice,Platform:{isMobile:false}};
+  const api={Plugin,MarkdownView:Base,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice,Platform:{isMobile:false}};
   const module={exports:{} as any};
   runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?api:require(id),process,Buffer,Uint8Array,console,TextEncoder,TextDecoder,crypto:webcrypto,URL,setTimeout,clearTimeout,setInterval,clearInterval,performance,AbortController});
   let value=document,disk=document,cursor=document.indexOf('Later')-1,mode='source',active=true,selection: [number,number]|undefined;

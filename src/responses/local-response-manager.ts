@@ -23,7 +23,8 @@ import type {ThreadSnapshot} from '../connection/wire-types';
 
 export interface LocalFinalNoteIO {
   read(path:string):Promise<string|undefined>;
-  compareAndSet(path:string,before:string,after:string,guard?:()=>boolean):Promise<boolean>;
+  missing?(path:string):Promise<boolean>;
+  compareAndSet(path:string,before:string,after:string,guard?:()=>boolean,checkBinding?:()=>Promise<boolean>):Promise<boolean>;
 }
 type Runtime={request:ResponseRequest;record:ResponseRecord;preview:DirectInlinePreview;update?:DirectInlineUpdate;restoring?:boolean;retained?:Promise<void>;work?:Promise<void>;stopped?:boolean;stopBody?:string;stopAcknowledged?:boolean;done?:boolean;saved?:boolean;detached?:boolean;pendingSave?:LocalSavePendingReason;retryAt:number;watchWanted?:boolean;attemptRevision?:number;diagnosticState?:string};
 type NoteCache={document:string;bindings:ResponseRequest[];references:Map<string,ResponseRequest|undefined>};
@@ -394,9 +395,50 @@ export class LocalResponseManager {
     return this.status(id)!;
   }
   async cancel(request:ResponseRequest){
-    const runtime=this.jobs.get(request.id)??this.adopt(request);
-    this.stopLocally(request.id);
-    await this.saveStopped(runtime,'',undefined,request);
+    const id=request.id,identity=localFinalIdentity(request);
+    const stored=()=>this.stored().find(binding=>binding.id===id);
+    const runtime=()=>this.jobs.get(id);
+    const owns=(binding?:ResponseRequest)=>!binding||localFinalIdentity(binding)===identity;
+    const latest=async()=>await this.io.latestLocalBinding?.(id)??stored();
+    const active=()=>{
+      if(this.closed)throw Error('Failed send cleanup is waiting for Obsidian to reopen.');
+      return owns(stored())&&owns(runtime()?.request);
+    };
+    const binding=await latest();
+    if(!active()||!owns(binding))return false;
+    const owner=binding??runtime()?.request??request;
+    const target={...owner,notePath:this.destination(owner)};
+    const path=target.notePath;
+    const checkBinding=async()=>{
+      const current=await latest();
+      if(!active()||!owns(current))return false;
+      if(this.destination(current??runtime()?.request??target)!==path)throw Error('The response note moved during cleanup.');
+      return true;
+    };
+    await runtime()?.work;
+    return this.writeNote(path,async()=>{
+      if(!await checkBinding())return false;
+      const document=await this.notes.read(path);
+      if(document===undefined&&!await this.notes.missing?.(path))throw Error('The response note is temporarily unavailable.');
+      const range=document===undefined?undefined:localResponseRange(document,id,[target]);
+      if(range&&document!==undefined){
+        const after=document.slice(0,range.from)+document.slice(range.to);
+        if(!await checkBinding())return false;
+        if(!await this.notes.compareAndSet(path,document,after,active,checkBinding)){
+          if(!await checkBinding())return false;
+          throw Error('The failed reply is waiting for its checked note save.');
+        }
+      }
+      if(!await checkBinding())return false;
+      // Retire only this message. A later reply can reuse the binding ID.
+      await this.io.retainLocalCompletion?.(target,false);
+      if(!await checkBinding())return false;
+      this.explicitMessages.delete(id);this.freshRegistrations.delete(id);this.unsentMessages.delete(id);this.pendingThreadCreation.delete(id);
+      const current=runtime();
+      if(current){current.done=true;current.saved=false;current.preview.dispose();this.jobs.delete(id);}
+      this.io.localCompleted?.(id,path);
+      return true;
+    });
   }
   frozenBody(id:string){return this.jobs.get(id)?.stopBody;}
   async retrySave(binding:ResponseRequest,expectedHash:string,frozenBody?:string):Promise<LocalResponseSaveResult>{
@@ -417,18 +459,17 @@ export class LocalResponseManager {
     if(body!==undefined){runtime.stopBody=body;this.stopLocally(binding.id);await this.saveStopped(runtime,body,expectedHash);return this.saveResult(runtime);}
     runtime.retryAt=0;runtime.attemptRevision=undefined;this.finish(runtime);return this.waitForSave(binding.id);
   }
-  private async saveStopped(runtime:Runtime,body:string,expectedHash?:string,failedSend?:ResponseRequest){
+  private async saveStopped(runtime:Runtime,body:string,expectedHash?:string){
     await runtime.work;if(runtime.done)return;
-    return this.writeNote(runtime.request.notePath,()=>this.saveStoppedNote(runtime,body,expectedHash,failedSend));
+    return this.writeNote(runtime.request.notePath,()=>this.saveStoppedNote(runtime,body,expectedHash));
   }
-  private async saveStoppedNote(runtime:Runtime,body:string,expectedHash?:string,failedSend?:ResponseRequest){
-    if(this.closed&&failedSend)throw Error('Failed send cleanup is waiting for Obsidian to reopen.');
+  private async saveStoppedNote(runtime:Runtime,body:string,expectedHash?:string){
     if(this.closed||runtime.done)return;
     const path=runtime.request.notePath,current=await this.notes.read(path);if(current===undefined)throw Error('The frozen response note is unavailable.');
     if(expectedHash!==undefined&&contentHash(current)!==expectedHash)throw Error('The reviewed note changed.');
     const document=await this.io.localFinalDraft?.(current,this.range(current,runtime.request.id)?.request??runtime.request)??current;
     if(document!==current)await this.io.rememberNoteEdits?.(runtime.request,current,document);
-    const range=this.range(document,runtime.request.id)??(failedSend&&localResponseRange(document,failedSend.id,[failedSend]));
+    const range=this.range(document,runtime.request.id);
     if(!range&&runtime.request.localStage)throw Error('The reply was removed before its proposed note edit could be saved. The proposal is retained.');
     if(range)await this.io.rememberResponse?.(runtime.request,body,document.slice(0,range.from),document.slice(range.to),range.from);
     const after=range?document.slice(0,range.from)+body+document.slice(range.to):document;

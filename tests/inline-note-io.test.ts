@@ -36,6 +36,27 @@ test('a pane edit after planning the final write is preserved before any atomic 
  assert.equal(await h.io.compareAndSet('Note.md',before,after),false);assert.equal(h.writes(),0);assert.match(h.visible(),/New outside edit/);h.manager.dispose();
 });
 
+test('a changed saved binding refuses the checked write before any note mutation',async()=>{
+ const h=localFinalFixture(),before=(await h.io.read('Note.md'))!,after=before.replace(responseAnchor(h.id),'');
+ let checked=false;
+ assert.equal(await h.io.compareAndSet('Note.md',before,after,()=>true,async()=>{checked=true;return false;}),false);
+ assert.equal(checked,true);
+ assert.equal(h.writes(),0);
+ assert.equal(h.disk(),before);
+ h.manager.dispose();
+});
+
+test('note absence requires both the vault and its storage adapter to confirm it',async()=>{
+ let hasFile=false,exists=true;
+ const file={path:'Note.md'};
+ const io=deviceNoteIO({workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:()=>hasFile?file:undefined,adapter:{exists:async()=>exists}}} as any);
+ assert.equal(await io.missing('Note.md'),false);
+ exists=false;
+ assert.equal(await io.missing('Note.md'),true);
+ hasFile=true;
+ assert.equal(await io.missing('Note.md'),false);
+});
+
 test('an equal pane opened inside the atomic callback invalidates fence membership before writing',async()=>{
  const h=localFinalFixture(),before=(await h.io.read('Note.md'))!,after=before.replace(responseAnchor(h.id),'> Final response');let value=before;
  const late={file:h.views[0].file,editor:{getValue:()=>value},getViewData:()=>value,setViewData:(text:string)=>{value=text;},getMode:()=> 'source' as const,requestSave:()=>{},save:async()=>{throw Error('Late native save must wait');}};

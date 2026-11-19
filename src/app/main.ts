@@ -360,12 +360,28 @@ export default class SendToT3 extends Plugin {
       if(this.stopped)return;
     }
     let cleanupFailed=false;
+    const cleanedBindings=new Set<string>();
     for(const binding of bindings){
-      if(binding.nativeProjection)try{await nativeResponses(this.app).stop(binding.id,binding.notePath,true);}catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
-      else try{await deviceNoteIO(this.app).updateNote(binding.notePath,document=>{const change=finalizeRegion(document,binding.id,binding.initialHash,'');return change?document.slice(0,change.from)+change.text+document.slice(change.to):document;},()=>!this.stopped);}catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
       try{
-        if(this.deviceInline&&binding.localOnly)await this.deviceInline.failResponse(binding);
+        if(this.deviceInline&&binding.localOnly&&binding.nativeProjection){
+          if(await this.deviceInline.failResponse(binding)!==false)cleanedBindings.add(binding.id);
+          continue;
+        }
+        const owns=(latest?:ResponseRequest)=>!latest||localFinalIdentity(latest)===localFinalIdentity(binding);
+        const latest=await this.latestResponseBinding(binding.id);
+        if(!owns(latest))continue;
+        const path=latest?.notePath??binding.notePath;
+        if(this.stopped)throw Error('Failed send cleanup is waiting for Obsidian to reopen.');
+        if(binding.nativeProjection)await nativeResponses(this.app).stop(binding.id,path,true);
+        else {
+          const io=deviceNoteIO(this.app);
+          const saved=await io.updateNote(path,document=>{const change=finalizeRegion(document,binding.id,binding.initialHash,'');return change?document.slice(0,change.from)+change.text+document.slice(change.to):document;},()=>!this.stopped&&owns(this.responseBindingReplica[binding.id]?.request));
+          if(saved===undefined&&!await io.missing(path))throw Error('The response note is temporarily unavailable.');
+        }
+        if(!owns(await this.latestResponseBinding(binding.id)))continue;
+        if(this.deviceInline&&binding.localOnly){if(await this.deviceInline.failResponse(binding)===false)continue;}
         else await this.stopHostedInline(binding.id,binding.host);
+        cleanedBindings.add(binding.id);
       }catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt);}
     }
     // Refusing a new input must not stop the existing response or its T3 turn.
@@ -380,7 +396,12 @@ export default class SendToT3 extends Plugin {
       if(attached.host)await this.deviceInline?.discardFollow(attached.jobId,attached.messageId,attached.previousMessageId);
       else this.inlineChat?.discardFollow(attached.jobId,attached.messageId,attached.previousMessageId);
     }catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'follow-cleanup',startedAt);}
-    const job=this.inlineChat?.find(request.id);if(job)try{await this.inlineChat!.deliveryFailed(job);}catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt);}
+    const job=this.inlineChat?.find(request.id);
+    if(job)try{
+      const binding=bindings.find(value=>value.id===job.id);
+      if(!binding)await this.inlineChat!.deliveryFailed(job);
+      else if(cleanedBindings.has(job.id)&&job.messageId===(binding.localMessageId??binding.messageId))this.inlineChat!.retireFailedJob(job);
+    }catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt);}
     if(!cleanupFailed&&(!this.stopped||!needsCleanup))this.settings.pending=this.settings.pending.filter(item=>item.id!==request.id);
     // Save cleanup independently of the network. A cleanup failure never
     // recreates a request or schedules another prompt dispatch.
@@ -582,6 +603,7 @@ export default class SendToT3 extends Plugin {
         if(saved&&(update?.turnId||this.smartHistoryRevision>this.smartHistoryPublished))await this.save(true);
       },
       localBindings:()=>responseBindingRequests(this.settings.responseBindings??this.responseBindingReplica),
+      latestLocalBinding:id=>this.latestResponseBinding(id),
       saveLocalBinding:request=>this.saveResponseBinding(request),
       rewriteLocalBinding:async(id,change)=>{
         await this.save(true,bindings=>{
@@ -3096,6 +3118,10 @@ export default class SendToT3 extends Plugin {
     if(next===this.responseBindingReplica&&JSON.stringify(persisted[request.id])===JSON.stringify(next[request.id]))return;
     this.responseBindingReplica=next;this.settings.responseBindings=next;
     await this.save(true);
+  }
+  private async latestResponseBinding(id:string){
+    const disk=await this.loadSettings();
+    return mergeResponseBindingData({[id]:this.responseBindingReplica[id]},{[id]:disk?.responseBindings?.[id]})[id]?.request;
   }
   private sharedSnapshot():SharedSettings{const {pending,completionJobs,settlementJobs,connection,projects,directProjects,selected,directSelected,directScanId,smartSend,...shared}=this.settings;return {...jsonClone(shared),...(smartSend?{smartSend:snapshotSmartSend(smartSend)}:{})};}
   private sharedData(input:unknown):SharedSettings{

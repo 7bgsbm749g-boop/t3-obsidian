@@ -27,7 +27,7 @@ function fixture(binding=request(),initial?:string,records:ResponseBindingData={
     return records[id]?.request;
   };
   io.loadStops=()=>stops;
-  const notes={read:async(_path?:string):Promise<string|undefined>=>document,compareAndSet:async(_path:string,before:string,after:string,guard?:()=>boolean)=>{if(hold||document!==before||guard?.()===false)return false;document=after;writes++;return true;}};
+  const notes={read:async(_path?:string):Promise<string|undefined>=>document,missing:async(_path:string)=>false,compareAndSet:async(_path:string,before:string,after:string,guard?:()=>boolean,checkBinding?:()=>Promise<boolean>)=>{if(checkBinding&&!await checkBinding()||hold||document!==before||guard?.()===false)return false;document=after;writes++;return true;}};
   const manager=new LocalResponseManager(randomUUID(),'vault',io,notes,()=>now,(record,_access,receive)=>{callbacks.set(record.request.id,receive);return {tick:()=>{},update:()=>{},delivery:()=>{},reconnect:()=>{},suspend:()=>{},dispose:()=>{}} as any;});
   return {binding,manager,io,notes,records:()=>records,receiveRecords:(value:ResponseBindingData)=>records=value,callbacks,registered,errors,finished,read:()=>document,write:(text:string)=>document=text,open:(value:boolean)=>open=value,ready:(value:boolean)=>ready=value,hold:(value:boolean)=>{hold=value;if(!value)manager.changed(binding.notePath);},advance:()=>now+=1100,writes:()=>writes,emit:(body='Final answer',verified=true,messageId=binding.messageId)=>callbacks.get(binding.id)!({request:binding,messageId,sequence:5,body,turnId:'exact-turn',phase:'complete',completionVerified:verified})};
 }
@@ -41,6 +41,44 @@ test('failure before response registration removes only its prepared anchor',asy
   await h.manager.cancel(h.binding);
   assert.doesNotMatch(h.read(),new RegExp(h.binding.id));
   assert.match(h.read(),/After\nUser edit/);
+  assert.deepEqual(h.manager.health().pending,[]);
+  h.manager.dispose();
+});
+
+test('failed-send cleanup preserves the anchor if a newer peer message wins before the note write',async()=>{
+  const h=fixture();
+  await h.manager.register(h.binding);
+  const peer={...h.binding,localMessageId:randomUUID()};
+  let latest=h.binding;
+  h.io.latestLocalBinding=async()=>latest;
+  const compareAndSet=h.notes.compareAndSet;
+  h.notes.compareAndSet=(...args)=>{latest=peer;return compareAndSet(...args);};
+  h.io.retainLocalCompletion=()=>assert.fail('The peer reply must not receive a removal receipt');
+  const before=h.read();
+  assert.equal(await h.manager.cancel(h.binding),false);
+  assert.equal(h.read(),before);
+  assert.equal(h.writes(),0);
+  assert.deepEqual(h.finished,[]);
+  assert.equal(h.manager.responses()[0].active,true);
+  h.receiveRecords(updateResponseBindingData(h.records(),peer,'peer'));
+  await recover(h);
+  assert.equal(h.manager.request(h.binding.id)?.localMessageId,peer.localMessageId);
+  assert.equal(h.manager.responses()[0].active,true);
+  h.manager.dispose();
+});
+
+test('a confirmed missing note retires failed-send cleanup after an unavailable read leaves it pending',async()=>{
+  const h=fixture(),receipts:Array<{messageId:string;saved:boolean}>=[];
+  h.notes.read=async()=>undefined;
+  h.io.retainLocalCompletion=async(binding:ResponseRequest,saved:boolean)=>{receipts.push({messageId:binding.messageId,saved});};
+  await assert.rejects(h.manager.cancel(h.binding),/temporarily unavailable/);
+  assert.deepEqual(h.finished,[]);
+  assert.deepEqual(receipts,[]);
+  h.notes.missing=async()=>true;
+  assert.equal(await h.manager.cancel(h.binding),true);
+  assert.deepEqual(h.finished,[h.binding.id]);
+  assert.deepEqual(receipts,[{messageId:h.binding.messageId,saved:false}]);
+  assert.equal(h.writes(),0);
   assert.deepEqual(h.manager.health().pending,[]);
   h.manager.dispose();
 });

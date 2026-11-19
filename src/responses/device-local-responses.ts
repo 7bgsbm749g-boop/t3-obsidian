@@ -15,6 +15,7 @@ export interface DeviceResponseIO {
   threadSources?:import('../conversations/shared-thread-stream').SharedThreadStreams;
   localFinalNotes?:LocalFinalNoteIO;
   localBindings?():readonly ResponseRequest[];
+  latestLocalBinding?(id:string):Promise<ResponseRequest|undefined>;
   saveLocalBinding?(request:ResponseRequest):Promise<void>;
   rewriteLocalBinding?(id:string,change:(request:ResponseRequest)=>ResponseRequest):Promise<ResponseRequest|undefined>;
   openedNotes?():Array<{path:string;document:string}>;
@@ -70,7 +71,7 @@ export class DeviceResponseManager {
   delivered(_host:ResponseStorageTarget,id:string,delivery:InlineStartRequest){this.local?.delivered(id,delivery);return Promise.resolve();}
   stopLocally(id:string){this.stops.add(id);this.io.saveStops?.([...this.stops]);this.local?.stopLocally(id);}
   failResponse(request:ResponseRequest){
-    this.stopLocally(request.id);
+    if(this.stopped)throw Error('Failed send cleanup is waiting for Obsidian to reopen.');
     return this.manager().cancel(request);
   }
   stopResponse(_host:ResponseStorageTarget,id:string,body?:string,_operationId?:string):Promise<ResponseStopReceipt>{return this.manager().stop(id,body);}

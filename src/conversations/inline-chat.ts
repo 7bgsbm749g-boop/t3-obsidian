@@ -154,7 +154,7 @@ export class InlineChatManager {
     }
   }
   async deliveryFailed(job:InlineJob,_uncertain=false){
-    const runtime=this.runtime(job),native=nativeResponses(this.app);
+    const native=nativeResponses(this.app);
     if(job.hosted&&this.nativeViewFor(job))await native.stop(job.id,job.path,true);
     else {
       const editor=this.editorFor(job),document=editor?.getValue(),found=document&&regionBody(document,job.id);
@@ -164,7 +164,11 @@ export class InlineChatManager {
         if(change)replaceChangedText(editor,document,document.slice(0,change.from)+change.text+document.slice(change.to));
       }
     }
-    runtime.monitor?.stop();if(runtime.timer)clearTimeout(runtime.timer);
+    this.retireFailedJob(job);
+  }
+  retireFailedJob(job:InlineJob){
+    const runtime=this.runtimes.get(job.id);
+    runtime?.monitor?.stop();if(runtime?.timer)clearTimeout(runtime.timer);
     this.jobs=this.jobs.filter(j=>j!==job);this.runtimes.delete(job.id);this.persist();
   }
   start(job:InlineJob){
