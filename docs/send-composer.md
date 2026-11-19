@@ -9,8 +9,10 @@ model, and destination.
 - Use the streaming switch to control replies in the editor for this send.
 - Switch the final answer between Quoted Markdown and Raw Markdown. The
   format switch is disabled while editor streaming is off.
-- The model button reads the chosen machine's provider catalog and advertised
-  model options. Changes apply to this send. They do not change global settings.
+- The model button opens the same searchable picker as the sidebar composer.
+  It shows the chosen machine's providers, favorites and advertised model options.
+  Model choices apply to this send. Use **Use destination default** to reset
+  the model choice. The send keeps the destination's existing permissions.
 
 The thread dropdown sits beside the arrow send button. It starts at New thread.
 Choose Existing thread to open the thread picker. Selecting a thread changes the

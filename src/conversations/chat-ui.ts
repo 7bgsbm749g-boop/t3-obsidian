@@ -1,8 +1,9 @@
 import type {ThreadSummary} from './thread-target';
 import {resolveJobOptions,type JobOverrides,type ResolvedJobOptions,type InlineDefaults} from './job-options';
 import {logEvent,logFailure} from '../app/diagnostics';
-import {App, FuzzySuggestModal, Menu, Modal, Notice, Setting, setIcon} from 'obsidian';
+import {App, FuzzySuggestModal, Menu, Notice, setIcon} from 'obsidian';
 import {composerModelLabel,type ComposerModel} from './composer-models';
+import {ComposerModelPicker} from './composer-model-picker';
 import {ComposerSuggestions} from './composer-suggestions';
 import {setComposerProviderIcon} from './composer-provider';
 import type {ModelSelection} from './model-defaults';
@@ -69,30 +70,6 @@ class ChatProjectModal extends FuzzySuggestModal<{key:string;label:string}> {
   onChooseItem(item:{key:string;label:string}){void this.choose(item.key);}
 }
 
-/** The model draft uses only capabilities advertised by the selected T3 machine. */
-class SendModelModal extends Modal {
-  private selection?:ModelSelection;
-  constructor(app:App,private models:ComposerModel[],selection:ModelSelection|undefined,private apply:(selection:ModelSelection|undefined)=>void,private defaultLabel='Default model'){super(app);this.selection=selection?structuredClone(selection):undefined;}
-  onOpen(){
-    this.titleEl.setText('Model for this send');this.contentEl.empty();
-    new Setting(this.contentEl).setName('Model').addDropdown(dropdown=>{
-      dropdown.addOption('',this.defaultLabel);
-      this.models.forEach((model,index)=>{dropdown.addOption(String(index),`${model.provider} · ${model.label}`);});
-      const index=this.models.findIndex(model=>model.selection.instanceId===this.selection?.instanceId&&model.selection.model===this.selection.model);
-      dropdown.setValue(index<0?'':String(index)).onChange(value=>{this.selection=value===''?undefined:{...this.models[Number(value)].selection};this.onOpen();});
-    });
-    const model=this.models.find(model=>model.selection.instanceId===this.selection?.instanceId&&model.selection.model===this.selection.model);
-    for(const option of model?.options??[]){
-      const saved=this.selection?.options?.find(value=>value.id===option.id)?.value??option.currentValue;
-      const change=(value:string|boolean|undefined)=>{const selection=this.selection!;selection.options=[...(selection.options??[]).filter(item=>item.id!==option.id),...(value===undefined?[]:[{id:option.id,value}])];};
-      const setting=new Setting(this.contentEl).setName(option.label);
-      if(option.type==='boolean')setting.addToggle(toggle=>toggle.setValue(saved===true).onChange(change));
-      else setting.addDropdown(dropdown=>{dropdown.addOption('','Use default');for(const choice of option.options)dropdown.addOption(choice.id,choice.label);dropdown.setValue(typeof saved==='string'?saved:'').onChange(value=>change(value||undefined));});
-    }
-    new Setting(this.contentEl).addButton(button=>button.setButtonText('Cancel').onClick(()=>this.close())).addButton(button=>button.setButtonText('Apply').setCta().onClick(()=>{this.apply(this.selection);this.close();}));
-  }
-}
-
 type Destination='default'|'new'|'existing';
 
 /** One draft and one submit action for notes, selections, questions and steering. */
@@ -110,6 +87,8 @@ export class SendComposer extends NoteTabPanel {
   private destination?:ChatDestination;
   private check?:{key?:string;controller:AbortController;work:Promise<ChatDestination>};
   private models:ComposerModel[]=[];
+  private modelPicker?:ComposerModelPicker;
+  private modelOpening?:HTMLButtonElement;
   private picker?:AbortController;
   private suggestions?:ComposerSuggestions;
   private defaultSelection?:ModelSelection;
@@ -154,6 +133,7 @@ export class SendComposer extends NoteTabPanel {
     finally{this.choosing=false;if(this.opened)this.onOpen();}
   }
   onOpen(){
+    this.modelPicker?.close(false);
     this.capture();this.suggestions?.dispose();this.suggestions=undefined;this.opened=true;const revision=++this.revision;
     logEvent('ui.destination.opened',{notePath:this.host.getNotePath(),steering:this.host.steering,projectKey:this.projectKey});
     this.titleEl.setText('Send composer');this.titleEl.hidden=true;this.modalEl.classList.add('t3-send-panel');this.contentEl.empty();
@@ -167,7 +147,7 @@ export class SendComposer extends NoteTabPanel {
     project.createSpan({text:this.host.getProjectName(this.projectKey)});setIcon(project.createSpan(),'chevron-down');project.title=this.host.getTargetDescription(this.projectKey);
     const promptName=composer.createSpan({text:'Ask about this note or selection',attr:{id:`t3-send-prompt-${crypto.randomUUID()}`,hidden:''}});
     this.field=composer.createEl('textarea',{cls:'t3-send-input',attr:{'aria-labelledby':promptName.id,placeholder:'Ask anything. @ files, $ skills, / commands',rows:'2'}});this.field.value=this.prompt;
-    this.suggestions=new ComposerSuggestions(this.field,composer,{action:name=>{if(name==='model')void this.chooseModel();else{this.overrides.interactionMode=name==='plan'?'plan':'default';this.refreshAvailability?.();new Notice(name==='plan'?'Plan mode enabled':'Normal mode enabled');}},catalog:async()=>{await this.modelReady;return {model:this.selectedModel()};},files:query=>this.host.searchFiles?.(query,this.projectKey,this.target==='new'?undefined:this.destination)??Promise.resolve([]),changed:()=>{this.overrides.context=this.suggestions?.context();this.capture();this.refreshAvailability?.();}},this.overrides.context);
+    this.suggestions=new ComposerSuggestions(this.field,composer,{action:name=>{if(name==='model')void this.chooseModel(model);else{this.overrides.interactionMode=name==='plan'?'plan':'default';this.refreshAvailability?.();new Notice(name==='plan'?'Plan mode enabled':'Normal mode enabled');}},catalog:async()=>{await this.modelReady;return {model:this.selectedModel()};},files:query=>this.host.searchFiles?.(query,this.projectKey,this.target==='new'?undefined:this.destination)??Promise.resolve([]),changed:()=>{this.overrides.context=this.suggestions?.context();this.capture();this.refreshAvailability?.();}},this.overrides.context);
     this.field.addEventListener('input',()=>{this.capture();this.refreshAvailability?.();});
     this.field.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();void this.choose();}});
     const controls=composer.createDiv({cls:'t3-send-controls'});
@@ -180,7 +160,7 @@ export class SendComposer extends NoteTabPanel {
     // this control accessible without covering its expanding visible label.
     const formatName=options.createSpan({attr:{id:`t3-send-format-${crypto.randomUUID()}`,hidden:''}});format.setAttribute('aria-labelledby',formatName.id);format.removeAttribute('aria-label');format.removeAttribute('title');
     const actions=controls.createDiv({cls:'t3-send-actions'});
-    const model=this.button(actions,'Choose model','bot',()=>{void this.chooseModel();},'t3-send-model');
+    const model=this.button(actions,'Choose model','bot',()=>{void this.chooseModel(model);},'t3-send-model');
     model.empty();const providerIcon=model.createSpan({cls:'t3-send-provider'}),modelLabel=model.createSpan();setIcon(model.createSpan(),'chevron-down');
     const thread=this.button(actions,'Choose thread','message-circle',()=>{
       const menu=new Menu();
@@ -209,6 +189,7 @@ export class SendComposer extends NoteTabPanel {
       modelLabel.setText(selection?composerModelLabel(selection,this.models):this.modelError?'Model unavailable':'Loading model…');
       setComposerProviderIcon(providerIcon,this.models.find(item=>item.selection.instanceId===selection?.instanceId&&item.selection.model===selection?.model)?.driver);
       model.title=this.modelError??[modelLabel.textContent,this.overrides.interactionMode==='plan'?'Plan mode':undefined].filter(Boolean).join(' · ');model.setAttribute('aria-description',model.title);
+      if(disabled)this.modelPicker?.close(false);
       project.disabled=disabled||Boolean(restriction);thread.disabled=disabled||Boolean(restriction);model.disabled=disabled||!this.host.getModels;
       streaming.disabled=disabled||continuing;streaming.setAttribute('aria-checked',String(inline.enabled));streamingLabel.setText(`Stream replies into note: ${inline.enabled?'On':'Off'}`);streaming.setAttribute('aria-description',continuing?'This running response keeps its streaming choices':streamingLabel.textContent??'');
       format.disabled=disabled||continuing||!inline.enabled;const formatLabel=inline.finalAnswerFormat==='formatted'?'Quoted Markdown':'Raw Markdown';
@@ -234,7 +215,7 @@ export class SendComposer extends NoteTabPanel {
     if(!this.opened||revision!==this.revision)return;
     const key=JSON.stringify([this.projectKey,this.target,destination?.threadId]);
     if(this.modelLoadKey!==key){
-      this.modelLoadKey=key;this.modelError=undefined;this.defaultSelection=undefined;
+      this.modelLoadKey=key;this.modelError=undefined;this.models=[];this.defaultSelection=undefined;
       this.modelTask=this.host.getModels(this.projectKey,this.target==='new'?undefined:destination).then(result=>{
         if(!this.opened||this.modelLoadKey!==key)return;
         this.models=result.models;this.defaultSelection=result.selection;
@@ -243,16 +224,24 @@ export class SendComposer extends NoteTabPanel {
     }
     await this.modelTask;if(this.opened&&revision===this.revision)this.refreshAvailability?.();
   }
-  private async chooseModel(){
-    if(this.choosing||this.host.busy||!this.host.getModels)return;
-    const revision=this.revision;this.capture();
+  private async chooseModel(anchor:HTMLButtonElement){
+    if(this.modelPicker){this.modelPicker.close();return;}
+    if(this.choosing||this.host.busy||!this.host.getModels||this.modelOpening===anchor)return;
+    const revision=this.revision;this.modelOpening=anchor;this.capture();
     try{
-      if(this.modelError){this.modelLoadKey=undefined;this.modelReady=this.loadModels(revision);}
+      if(this.modelError&&!this.models.length){this.modelLoadKey=undefined;this.modelReady=this.loadModels(revision);}
       await this.modelReady;
-      if(!this.opened||revision!==this.revision)return;
+      if(!this.opened||revision!==this.revision||!anchor.isConnected||anchor.disabled)return;
       if(!this.models.length)throw Error(this.modelError??'No models are available on this T3 machine.');
-      new SendModelModal(this.app,this.models,this.overrides.modelSelection??this.defaultSelection,selection=>{if(!this.opened||revision!==this.revision||this.choosing)return;this.overrides.modelSelection=selection;this.onOpen();},this.defaultSelection?'Default · '+composerModelLabel(this.defaultSelection,this.models):'Choose model').open();
-    }catch(error){new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`);}
+      this.modelPicker=new ComposerModelPicker(anchor,this.models,{modelSelection:this.overrides.modelSelection??this.defaultSelection},async settings=>{
+        this.overrides.modelSelection=settings.modelSelection;
+        this.refreshAvailability?.();
+      },()=>{this.modelPicker=undefined;},{defaultSelection:this.defaultSelection});
+      this.modelPicker.open();
+    }catch(error){
+      this.modelPicker?.close(false);
+      new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`);
+    }finally{if(this.modelOpening===anchor)this.modelOpening=undefined;}
   }
   private async pickExisting(){
     if(this.choosing||this.host.busy||this.host.getThreadChoiceRestriction?.()||!this.host.chooseExisting)return;
@@ -262,7 +251,7 @@ export class SendComposer extends NoteTabPanel {
     catch(error){new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`);}
     finally{this.choosing=false;this.refreshAvailability?.();}
   }
-  onClose(){this.picker?.abort();this.capture();this.suggestions?.dispose();this.suggestions=undefined;this.opened=false;this.unwatchBusy?.();this.unwatchBusy=undefined;this.cancelCheck();logEvent('ui.destination.closed',{notePath:this.host.getNotePath(),submitted:this.choosing});}
+  onClose(){this.modelPicker?.close(false);this.picker?.abort();this.capture();this.suggestions?.dispose();this.suggestions=undefined;this.opened=false;this.unwatchBusy?.();this.unwatchBusy=undefined;this.cancelCheck();logEvent('ui.destination.closed',{notePath:this.host.getNotePath(),submitted:this.choosing});}
   private async choose(){
     if(this.choosing||this.host.busy||!this.opened)return;
     this.capture();const target=this.target,revision=this.revision;this.choosing=true;this.refreshAvailability?.();
