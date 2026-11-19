@@ -229,7 +229,7 @@ export class SendComposer extends NoteTabPanel {
     if(this.choosing||this.host.busy||!this.host.getModels||this.modelOpening===anchor)return;
     const revision=this.revision;this.modelOpening=anchor;this.capture();
     try{
-      if(this.modelError){this.modelLoadKey=undefined;this.modelReady=this.loadModels(revision);}
+      if(this.modelError&&!this.models.length){this.modelLoadKey=undefined;this.modelReady=this.loadModels(revision);}
       await this.modelReady;
       if(!this.opened||revision!==this.revision||!anchor.isConnected||anchor.disabled)return;
       if(!this.models.length)throw Error(this.modelError??'No models are available on this T3 machine.');

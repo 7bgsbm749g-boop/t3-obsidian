@@ -131,7 +131,8 @@ test('reset uses the destination model and changing thread closes its picker',as
 test('a model override can be cleared when the destination model is unknown',async()=>{
  const h=await fixture(),{models}=await h.host.getModels();
  h.host.getModels=async()=>({models});
- h.modal.modelLoadKey=undefined;h.modal.onOpen();
+ h.modal.modelLoadKey=undefined;h.modal.onOpen();await h.modal.modelReady;
+ h.host.getModels=async()=>{throw Error('Temporarily offline');};
  await h.modal.chooseModel(h.button('Choose model'));
  const picker=h.document.querySelector('[aria-label="Model for this send"]')!;
  picker.querySelector<HTMLButtonElement>('.t3-model-picker-model')!.click();await Promise.resolve();
