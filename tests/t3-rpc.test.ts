@@ -43,3 +43,14 @@ test('MCP provider permission failures remain actionable without closing the con
  h.emit({_tag:'Exit',requestId:'1',exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:'EnvironmentAuthorizationError',requiredPermission:'providers:manage'}}]}});
  await rejected;assert.equal(rpc.closed,false);rpc.close();
 });
+
+test('only the matching disabled-provider launch response proves pre-creation rejection',async()=>{
+ const h=fixture(),rpc=await h.open();
+ for(const [index,message] of ['Provider instance "codex" is disabled for project project.','Failed to launch thread'].entries()){
+   const pending=rpc.call('orchestration.launchThread',{projectId:'project',modelSelection:{instanceId:'codex'}});
+   const rejected=assert.rejects(pending,(error:any)=>error.launchRefused===(index===0));
+   h.emit({_tag:'Exit',requestId:String(index+1),exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:'OrchestrationV2ThreadLaunchError',message}}]}});
+   await rejected;
+ }
+ rpc.close();
+});

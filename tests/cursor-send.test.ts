@@ -12,7 +12,7 @@ import {loadSmartSend} from '../src/notes/smart-send';
 import {sendDirect} from '../src/connection/direct';
 
 const require=createRequire(import.meta.url);
-const compiled=build({stdin:{contents:"export {default} from './src/app/main'; export {nativeResponses} from './src/responses/native-response-manager'; export {InlineChatManager} from './src/conversations/inline-chat';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
+const compiled=build({stdin:{contents:"export {default} from './src/app/main'; export {RequestDeliveryError} from './src/app/bridge'; export {nativeResponses} from './src/responses/native-response-manager'; export {InlineChatManager} from './src/conversations/inline-chat';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
 async function fixture(document='First paragraph.\n\nLater paragraph.'){
   class Base{}
   const api={Plugin:Base,MarkdownView:Base,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base,Platform:{isMobile:false}};
@@ -60,6 +60,21 @@ test('Ask waits for its destination then shows the indicator and hands off to on
   ready();await sending;
   assert.deepEqual(events,['show','handoff','clear']);assert.equal(h.value().split('<!-- t3-inline:start:').length-1,1);
   assert.ok(h.value().indexOf('t3-inline:end:')<h.value().indexOf('Later paragraph.'));manager.dispose();
+});
+
+test('Ask leaves the reply available when T3 loses the send acknowledgement',async()=>{
+  const h=await fixture(),manager=new h.exports.InlineChatManager(h.app,'jobs',async()=>undefined);
+  h.plugin.sendPreviews={begin:()=>()=>{},hide:()=>{}};
+  manager.prepare=async()=>{};
+  manager.deliveryFailed=async()=>assert.fail('Unconfirmed delivery must preserve the reply');
+  h.plugin.inlineChat=manager;
+  h.plugin.sendChat=async(_prompt:any,_note:any,options:any)=>{
+    await options.onPrepared({id:options.requestId,title:'Synthetic'});
+    throw new h.exports.RequestDeliveryError('Delivery unconfirmed',false,true,true);
+  };
+  await assert.rejects(h.plugin.sendInlineChat('Ask',{path:h.file.path},{editor:h.editor,view:h.view},{newThread:true}),/Delivery unconfirmed/);
+  assert.match(h.value(),/t3-inline:start:/);
+  manager.dispose();
 });
 
 for(const question of ['', 'Why this passage?'])test(`palette selection ${question?'questions':'sends'} stay below the selected occurrence after focus clears it`,async()=>{

@@ -45,7 +45,7 @@ test('direct pairing works in mobile bundle, keeps sessions local, and never rep
  const localValues=new Map<string,unknown>();
  class Base{};class File{path='direct.md';name='direct.md';basename='direct';extension='md';stat={ctime:123,size:50};};const file=new File();
  class Plugin{
-  app={loadLocalStorage:(key:string)=>key==='send-to-t3-code-device-v1'?local:localValues.get(key),saveLocalStorage:(key:string,v:any)=>{if(key==='send-to-t3-code-device-v1')local=v;else localValues.set(key,v);},workspace:{onLayoutReady:()=>{},on:()=>{}},vault:{read:async()=>markdown,readBinary:async()=>Uint8Array.from(Buffer.from(png,'base64')).buffer,getName:()=> 'Notes'},metadataCache:{getFirstLinkpathDest:()=>file}};
+  app={loadLocalStorage:(key:string)=>key==='send-to-t3-code-device-v1'?local:localValues.get(key),saveLocalStorage:(key:string,v:any)=>{if(key==='send-to-t3-code-device-v1')local=v;else localValues.set(key,v);},workspace:{onLayoutReady:()=>{},on:()=>{},getLeavesOfType:()=>[]},vault:{read:async()=>markdown,readBinary:async()=>Uint8Array.from(Buffer.from(png,'base64')).buffer,getName:()=> 'Notes'},metadataCache:{getFirstLinkpathDest:()=>file}};
   async loadData(){return {paired:[{id:'c',name:'Laptop',url:'https://t3.example',environmentId:'env'}],directScanId:'c',directProjects:[project],directSelected:['c:p']};}
   async saveData(d:any){shared.push(d);}addSettingTab(){}registerEvent(){}addCommand(){}register(_cleanup:()=>void){}
  }
@@ -86,6 +86,15 @@ test('direct pairing works in mobile bundle, keeps sessions local, and never rep
  assert.deepEqual(recovery,[uncertain.id]);
  assert.equal(commands.length,4);
  assert.equal((localValues.get(`t3-send-failures-v1:${q.settings.vaultId}`) as any[]).at(-1).delivery,'unconfirmed');
+ const interrupted=makeRequest('e3c2e64d-cab0-47e7-9cad-5fcba62e389d');
+ q.settings.pending.push(interrupted);
+ q.deviceInline.failResponse=async()=>{throw Error('The note writer closed');};
+ failTicket=true;
+ await assert.rejects(q.dispatch(interrupted,true),/No message was sent or queued/);
+ const stored=await deviceState<{pending:Array<{id:string;cleanupOnly?:true}>}>(q.deviceId);
+ assert.equal(stored?.pending.find(item=>item.id===interrupted.id)?.cleanupOnly,true);
+ await assert.rejects(q.dispatch(interrupted,true),/local reply cleanup is pending/);
+ assert.equal(commands.length,4);
  q.onunload();
  for(const s of shared){assert.ok(!JSON.stringify(s).includes('private-session'));assert.ok(!('pending' in s));}
  assert.ok(local.pairedSessions.c.token);assert.ok(!JSON.stringify(sent).includes('private-session'));

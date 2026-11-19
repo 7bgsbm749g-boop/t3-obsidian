@@ -422,6 +422,7 @@ export class LocalResponseManager {
     return this.writeNote(runtime.request.notePath,()=>this.saveStoppedNote(runtime,body,expectedHash,failedSend));
   }
   private async saveStoppedNote(runtime:Runtime,body:string,expectedHash?:string,failedSend?:ResponseRequest){
+    if(this.closed&&failedSend)throw Error('Failed send cleanup is waiting for Obsidian to reopen.');
     if(this.closed||runtime.done)return;
     const path=runtime.request.notePath,current=await this.notes.read(path);if(current===undefined)throw Error('The frozen response note is unavailable.');
     if(expectedHash!==undefined&&contentHash(current)!==expectedHash)throw Error('The reviewed note changed.');

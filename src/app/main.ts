@@ -320,9 +320,9 @@ export default class SendToT3 extends Plugin {
   private async failRequest(request:Request,error:unknown,stage:string,startedAt:number,uncertain=false){
     if(this.failedRequests.has(request))return;this.failedRequests.add(request);
     this.recordSendFailure(request,error,stage,startedAt,uncertain);
-    this.settings.pending=this.settings.pending.filter(item=>item.id!==request.id);
     const accepted=acceptedRequestThread(request);
     if(accepted){
+      this.settings.pending=this.settings.pending.filter(item=>item.id!==request.id);
       // Local rendering cannot revoke an acknowledged T3 message. Retain its
       // registered response and note/thread link; recovery never sends again.
       this.rememberStarted(request,accepted);
@@ -333,12 +333,20 @@ export default class SendToT3 extends Plugin {
     if(request.agentCommand)try{this.app.saveLocalStorage(`${this.localKey}-note-command-${request.agentCommand.id}`,{command:request.agentCommand,discarded:true});}catch(saveError){this.recordSendFailure(request,saveError,'command-failure-save',startedAt,uncertain);}
     // Lost delivery acknowledgements need an exact server check. The durable
     // bindings can recover the exact reply without dispatching another prompt.
-    if(uncertain){try{await this.save();}catch(saveError){this.recordSendFailure(request,saveError,'failure-save',startedAt,true);}return;}
+    if(uncertain){this.settings.pending=this.settings.pending.filter(item=>item.id!==request.id);try{await this.save();}catch(saveError){this.recordSendFailure(request,saveError,'failure-save',startedAt,true);}return;}
     const bindings=request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]);
+    const needsCleanup=bindings.length||request.inlineFollow||request.inlineSteering;
+    if(needsCleanup){
+      request.cleanupOnly=true;
+      if(!this.settings.pending.some(item=>item.id===request.id))this.settings.pending.push(request);
+      try{await this.save();}catch(saveError){this.recordSendFailure(request,saveError,'failure-save',startedAt);}
+      if(this.stopped)return;
+    }
+    let cleanupFailed=false;
     for(const binding of bindings){
-      if(binding.nativeProjection)try{await nativeResponses(this.app).stop(binding.id,binding.notePath,true);}catch(cleanupError){this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
-      else try{await deviceNoteIO(this.app).updateNote(binding.notePath,document=>{const region=regionBody(document,binding.id);if(!region)return document;const change=finalizeRegion(document,binding.id,contentHash(region.body),'');return change?document.slice(0,change.from)+change.text+document.slice(change.to):document;},()=>!this.stopped);}catch(cleanupError){this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
-      if(this.deviceInline&&binding.localOnly)try{await this.deviceInline.failResponse(binding);}catch(cleanupError){this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt);}
+      if(binding.nativeProjection)try{await nativeResponses(this.app).stop(binding.id,binding.notePath,true);}catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
+      else try{await deviceNoteIO(this.app).updateNote(binding.notePath,document=>{const region=regionBody(document,binding.id);if(!region)return document;const change=finalizeRegion(document,binding.id,contentHash(region.body),'');return change?document.slice(0,change.from)+change.text+document.slice(change.to):document;},()=>!this.stopped);}catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
+      if(this.deviceInline&&binding.localOnly)try{await this.deviceInline.failResponse(binding);}catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt);}
       else void this.stopHostedInline(binding.id,binding.host).catch(cleanupError=>this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt));
     }
     // Refusing a new input must not stop the existing response or its T3 turn.
@@ -346,14 +354,15 @@ export default class SendToT3 extends Plugin {
       for(const target of request.inlineSteering.targets??[request.inlineSteering])try{
         if(target.host)await this.deviceInline?.discardSteering(target.jobId,request.inlineSteering.input.messageId);
         else {const job=this.inlineChat?.find(target.jobId);if(job)this.inlineChat!.discardSteering(job,request.inlineSteering.input.messageId);}
-      }catch(cleanupError){this.recordSendFailure(request,cleanupError,'steering-input-cleanup',startedAt);}
+      }catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'steering-input-cleanup',startedAt);}
     }
     const attached=request.inlineFollow;
     if(attached)try{
       if(attached.host)await this.deviceInline?.discardFollow(attached.jobId,attached.messageId,attached.previousMessageId);
       else this.inlineChat?.discardFollow(attached.jobId,attached.messageId,attached.previousMessageId);
-    }catch(cleanupError){this.recordSendFailure(request,cleanupError,'follow-cleanup',startedAt);}
-    const job=this.inlineChat?.find(request.id);if(job)try{await this.inlineChat!.deliveryFailed(job);}catch(cleanupError){this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt);}
+    }catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'follow-cleanup',startedAt);}
+    const job=this.inlineChat?.find(request.id);if(job)try{await this.inlineChat!.deliveryFailed(job);}catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt);}
+    if(!cleanupFailed&&!this.stopped)this.settings.pending=this.settings.pending.filter(item=>item.id!==request.id);
     // Save cleanup independently of the network. A cleanup failure never
     // recreates a request or schedules another prompt dispatch.
     try{await this.save();}catch(saveError){this.recordSendFailure(request,saveError,'failure-save',startedAt);}
@@ -666,7 +675,7 @@ export default class SendToT3 extends Plugin {
       },1500));
     });
     this.sharedBaseline=JSON.stringify(this.sharedSnapshot());
-    for(const request of [...this.settings.pending])await this.failRequest(request,Error('The previous send ended without a local confirmation.'),'startup-recovery',Date.now(),Boolean(request.directPlan)||retiredConnection(request.connection));
+    for(const request of [...this.settings.pending])await this.failRequest(request,Error('The previous send ended without a local confirmation.'),'startup-recovery',Date.now(),!request.cleanupOnly&&(Boolean(request.directPlan)||retiredConnection(request.connection)));
     const migrateConnection=(c:Connection):Connection=>{if(c.transport==='direct')return c;const paired=this.settings.paired.find(value=>value.environmentId===c.environmentId);return paired?{executable:'',host:'direct',transport:'direct',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId}:c;};
     for(const request of this.settings.pending)request.connection=migrateConnection(request.connection);
     for(const job of this.settings.completionJobs){job.connection=migrateConnection(job.connection);if(retiredConnection(job.connection)&&job.status==='watching'){job.status='kept';job.detail='Kept note: the companion mode was removed. Check the original thread in T3.';}}
@@ -1918,7 +1927,7 @@ export default class SendToT3 extends Plugin {
     if(activeId&&!options?.newThread&&!options?.threadId)return this.sendInlineSteering(activeId,prompt,note,context,options);
     const jobOptions=options?.jobOptions??resolveJobOptions(this.settings.inlineStreaming);
     const requestId=randomId(),initialInput=context.initialQuestion?{messageId:commandId(requestId,'message'),text:context.initialQuestion}:undefined;
-    let job:InlineJob|undefined,delivered=false;
+    let job:InlineJob|undefined;
     let finishPreview:(()=>void)|undefined;
     try{
       await this.sendChat(prompt,note,{...options,jobOptions,requestId,sourceContext:context,onTargetResolved:()=>{
@@ -1930,8 +1939,8 @@ export default class SendToT3 extends Plugin {
         job=context.anchor&&!context.referenceSelection&&!activeId?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path,initialInput,request.title,jobOptions):context.insertion?manager.reserveAtCursor(context.editor,context.view,context.insertion,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
         this.sendPreviews.hide(context.view as MarkdownView);
         await manager.prepare(job,request);
-      }});delivered=true;if(job)manager.start(job);
-    }catch(error){if(job)await manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)));throw error;}finally{finishPreview?.();}
+      }});if(job)manager.start(job);
+    }catch(error){if(job&&!(error instanceof RequestDeliveryError&&(error.terminal||error.deliveryUnconfirmed)))await manager.deliveryFailed(job);throw error;}finally{finishPreview?.();}
   }
   private async steeringRecord(id:string):Promise<{record:ResponseRecord;host:ResponseStorageTarget}|undefined>{return this.deviceInline?.cachedResponse(id);}
   private async steeringDestination(id:string,signal?:AbortSignal){
@@ -3018,7 +3027,7 @@ export default class SendToT3 extends Plugin {
   }
   async forgetPairing(id:string){this.disposeUnaryOwner(id);this.noProjectProjects.delete(id);this.noProjectIdentities.delete(id);delete this.pairedSessions[id];this.projectDiscovery?.invalidate();await this.save();this.refreshProjectsInBackground(true);}
   async removeConnection(id:string){
-    if(this.settings.pending.some(r=>r.connection.connectionId===id)||this.settings.completionJobs.some(j=>j.connection.connectionId===id&&j.status==='watching')||this.settings.settlementJobs.some(j=>j.connection.connectionId===id))throw Error('This connection has an unconfirmed request or completion check. Resolve or stop it before removing the connection.');
+    if(this.settings.pending.some(r=>!r.cleanupOnly&&r.connection.connectionId===id)||this.settings.completionJobs.some(j=>j.connection.connectionId===id&&j.status==='watching')||this.settings.settlementJobs.some(j=>j.connection.connectionId===id))throw Error('This connection has an unconfirmed request or completion check. Resolve or stop it before removing the connection.');
     this.disposeUnaryOwner(id);this.projectDiscovery?.invalidate();for(const [key,c] of this.accountCandidates)if(c.id===id)this.accountCandidates.delete(key);
     this.noProjectProjects.delete(id);this.noProjectIdentities.delete(id);
     this.settings.paired=this.settings.paired.filter(c=>c.id!==id);this.settings.directProjects=this.settings.directProjects.filter(p=>p.connectionId!==id);this.settings.directSelected=this.settings.directSelected.filter(k=>!k.startsWith(id+':'));delete this.pairedSessions[id];if(this.settings.directScanId===id)this.settings.directScanId=this.settings.paired[0]?.id??'';this.syncProjectSources();await this.save();
@@ -3339,6 +3348,7 @@ export default class SendToT3 extends Plugin {
   }
   async dispatch(request:Request,quiet=false,freshIdentity=false,preparing?:ReturnType<typeof prepareSend>) {
     const startedAt=Date.now();let stage='response-registration';
+    if(request.cleanupOnly)throw new RequestDeliveryError('This send ended. Its local reply cleanup is pending.',false,true);
     const hadSavedPlan=Boolean(request.directPlan);
     let messageSent=false,creationSent=false;
     const bindings=request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]);
@@ -3396,7 +3406,7 @@ export default class SendToT3 extends Plugin {
     if(!quiet)new Notice('Sent successfully.');return result.threadId;
     }catch(error){
       // A refusal of this attempt cannot rule out delivery by an earlier plan.
-      const refused=error instanceof T3RpcError&&error.kind==='EnvironmentAuthorizationError';
+      const refused=error instanceof T3RpcError&&(error.kind==='EnvironmentAuthorizationError'||error.launchRefused);
       const uncertain=hadSavedPlan||messageSent&&!refused;
       if(uncertain)for(const binding of bindings)this.deviceInline?.attempted(binding.id);
       const creationUnconfirmed=creationSent&&!(refused&&request.directPlan?.phase==='prepared');
@@ -3404,7 +3414,7 @@ export default class SendToT3 extends Plugin {
       logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId,messageSent,creationSent});await this.failRequest(request,error,stage,startedAt,uncertain);
       const accepted=acceptedRequestThread(request);
       if(accepted){new Notice(`T3 received your message in thread ${accepted.slice(0,8)}. The local response needs recovery. See the send failure log.`,12000);return accepted;}
-      throw new RequestDeliveryError(`${unsavedMessage(error)} ${uncertain?'T3 did not confirm delivery. Check the thread before sending again.':'No message was sent or queued.'}`,false,true);
+      throw new RequestDeliveryError(`${unsavedMessage(error)} ${uncertain?'T3 did not confirm delivery. Check the thread before sending again.':'No message was sent or queued.'}`,false,true,uncertain);
     }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
   onunload(){this.connectionSetupOwner.abort();this.disposeUnaryOwners();if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.conversationSources.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.noteInboxView?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void Promise.allSettled([this.saving,this.diagnostics?.close()]).then(()=>closeSharedStateDatabase());void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
@@ -3521,7 +3531,7 @@ export default class SendToT3 extends Plugin {
     const current=()=>!this.stopped&&!this.busy&&this.settings.autoSettleThreads&&this.settings.settlementJobs.includes(job);
     if(!current())return;
     try{
-      if(this.settings.pending.some(request=>request.threadId===job.threadId&&request.connection.environmentId===job.connection.environmentId))return;
+      if(this.settings.pending.some(request=>!request.cleanupOnly&&request.threadId===job.threadId&&request.connection.environmentId===job.connection.environmentId))return;
       const shell=await runBridge(job.connection,['threads','--project',job.projectId]);
       const summary=readThreadList(shell).find(thread=>thread.id===job.threadId);
       const full=readThreadSnapshot({thread:await runBridge(job.connection,['read',job.threadId])}).thread;
