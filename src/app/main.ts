@@ -346,8 +346,10 @@ export default class SendToT3 extends Plugin {
     for(const binding of bindings){
       if(binding.nativeProjection)try{await nativeResponses(this.app).stop(binding.id,binding.notePath,true);}catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
       else try{await deviceNoteIO(this.app).updateNote(binding.notePath,document=>{const region=regionBody(document,binding.id);if(!region)return document;const change=finalizeRegion(document,binding.id,contentHash(region.body),'');return change?document.slice(0,change.from)+change.text+document.slice(change.to):document;},()=>!this.stopped);}catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
-      if(this.deviceInline&&binding.localOnly)try{await this.deviceInline.failResponse(binding);}catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt);}
-      else void this.stopHostedInline(binding.id,binding.host).catch(cleanupError=>this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt));
+      try{
+        if(this.deviceInline&&binding.localOnly)await this.deviceInline.failResponse(binding);
+        else await this.stopHostedInline(binding.id,binding.host);
+      }catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt);}
     }
     // Refusing a new input must not stop the existing response or its T3 turn.
     if(request.inlineSteering){
@@ -501,6 +503,7 @@ export default class SendToT3 extends Plugin {
       migratedNoteThreads=true;
     }
     this.settings.pending=this.settings.pending.filter(request=>{
+      if(request.cleanupOnly)return true;
       if(request.inlineHost&&!request.inlineHost.localOnly||request.inlineBindings?.some(binding=>!binding.localOnly))return false;
       const continuation=request.inlineSteering??request.inlineFollow;
       return !continuation?.host||responseBindingRequests(this.settings.responseBindings??{}).some(binding=>binding.id===continuation.jobId);
@@ -1946,7 +1949,11 @@ export default class SendToT3 extends Plugin {
         job=context.anchor&&!context.referenceSelection&&!activeId?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path,initialInput,request.title,jobOptions):context.insertion?manager.reserveAtCursor(context.editor,context.view,context.insertion,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
         this.sendPreviews.hide(context.view as MarkdownView);
         await manager.prepare(job,request);
-      }});if(job)manager.start(job);
+      }});
+      if(job)try{manager.start(job);}catch(error){
+        logFailure('response.reader.start',error,{bindingId:job.id});
+        new Notice('T3 received your message. The local reply needs recovery.',12000);
+      }
     }catch(error){if(job&&!(error instanceof RequestDeliveryError&&(error.terminal||error.deliveryUnconfirmed)))await manager.deliveryFailed(job);throw error;}finally{finishPreview?.();}
   }
   private async steeringRecord(id:string):Promise<{record:ResponseRecord;host:ResponseStorageTarget}|undefined>{return this.deviceInline?.cachedResponse(id);}
@@ -2600,9 +2607,11 @@ export default class SendToT3 extends Plugin {
       this.settings.pending.push(request);
       try{await this.save();logEvent('request.saved',{requestId:request.id});}catch(e){this.settings.pending=this.settings.pending.filter(r=>r!==request);throw e;}
       await this.dispatch(request,false,false,preparing);
-      if(options?.sourceContext?.smartQuestion)this.app.saveLocalStorage(this.chatDraftKey,'');
-      const draft:unknown=this.app.loadLocalStorage(this.chatDraftKey);
-      if(typeof draft==='string'&&draft&&(draft===prompt||prompt.endsWith(`\n\n**USER ASKS:**\n${draft}`)))this.app.saveLocalStorage(this.chatDraftKey,'');
+      try{
+        if(options?.sourceContext?.smartQuestion)this.app.saveLocalStorage(this.chatDraftKey,'');
+        const draft:unknown=this.app.loadLocalStorage(this.chatDraftKey);
+        if(typeof draft==='string'&&draft&&(draft===prompt||prompt.endsWith(`\n\n**USER ASKS:**\n${draft}`)))this.app.saveLocalStorage(this.chatDraftKey,'');
+      }catch(error){this.recordSendFailure(request,error,'draft-cleanup',startedAt);}
     }catch(e){if(request)await this.failRequest(request,e,'preparation',startedAt);else if(!(e instanceof ProjectCreationCancelled))this.recordSendFailure(undefined,e,'preparation',startedAt);if(e instanceof ProjectCreationCancelled||e instanceof RequestDeliveryError)throw e;throw new RequestDeliveryError(`${unsavedMessage(e)} No message was sent or queued.`,false,Boolean(request));}
     finally{clearSmartSendPreparation(this.smartData());this.busy=false;}
   }

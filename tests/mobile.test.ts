@@ -86,14 +86,19 @@ test('direct pairing works in mobile bundle, keeps sessions local, and never rep
  assert.deepEqual(recovery,[uncertain.id]);
  assert.equal(commands.length,4);
  assert.equal((localValues.get(`t3-send-failures-v1:${q.settings.vaultId}`) as any[]).at(-1).delivery,'unconfirmed');
- const interrupted=makeRequest('e3c2e64d-cab0-47e7-9cad-5fcba62e389d');
- q.settings.pending.push(interrupted);
- q.deviceInline.failResponse=async()=>{throw Error('The note writer closed');};
+ const failCleanup=async()=>{throw Error('The note writer closed');};
+ q.deviceInline.failResponse=failCleanup;
+ q.stopHostedInline=failCleanup;
  failTicket=true;
- await assert.rejects(q.dispatch(interrupted,true),/No message was sent or queued/);
- const stored=await deviceState<{pending:Array<{id:string;cleanupOnly?:true}>}>(q.deviceId);
- assert.equal(stored?.pending.find(item=>item.id===interrupted.id)?.cleanupOnly,true);
- await assert.rejects(q.dispatch(interrupted,true),/local reply cleanup is pending/);
+ for(const [id,localOnly] of [['e3c2e64d-cab0-47e7-9cad-5fcba62e389d',true],['c4eb62c1-ff79-4352-8f55-e67e3c1d0817',false]] as const){
+  const interrupted=makeRequest(id);
+  interrupted.inlineHost.localOnly=localOnly;
+  q.settings.pending.push(interrupted);
+  await assert.rejects(q.dispatch(interrupted,true),/No message was sent or queued/);
+  const stored=await deviceState<{pending:Array<{id:string;cleanupOnly?:true}>}>(q.deviceId);
+  assert.equal(stored?.pending.find(item=>item.id===id)?.cleanupOnly,true);
+  await assert.rejects(q.dispatch(interrupted,true),/local reply cleanup is pending/);
+ }
  assert.equal(commands.length,4);
  q.onunload();
  for(const s of shared){assert.ok(!JSON.stringify(s).includes('private-session'));assert.ok(!('pending' in s));}

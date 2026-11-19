@@ -77,6 +77,19 @@ test('Ask leaves the reply available when T3 loses the send acknowledgement',asy
   manager.dispose();
 });
 
+test('a reader startup failure does not discard an acknowledged Ask reply',async()=>{
+  const h=await fixture(),manager=new h.exports.InlineChatManager(h.app,'jobs',async()=>undefined);
+  h.plugin.sendPreviews={hide:()=>{}};
+  manager.prepare=async()=>{};
+  manager.start=()=>{throw Error('Reader failed');};
+  manager.deliveryFailed=async()=>assert.fail('The message was already delivered');
+  h.plugin.inlineChat=manager;
+  h.plugin.sendChat=async(_prompt:any,_note:any,options:any)=>options.onPrepared({id:options.requestId,title:'Synthetic'});
+  await h.plugin.sendInlineChat('Ask',{path:h.file.path},{editor:h.editor,view:h.view},{newThread:true});
+  assert.match(h.value(),/t3-inline:start:/);
+  manager.dispose();
+});
+
 for(const question of ['', 'Why this passage?'])test(`palette selection ${question?'questions':'sends'} stay below the selected occurrence after focus clears it`,async()=>{
   const passage='Repeated passage.',document=passage+'\n\nBetween paragraphs.\n\n'+passage+'\n\nLater paragraph.',h=await fixture(document),start=document.lastIndexOf(passage);
   const manager=new h.exports.InlineChatManager(h.app,'jobs',async()=>undefined),errors:unknown[]=[];
@@ -260,14 +273,16 @@ test('only matching per-send title metadata skips the duplicate read; other path
   await assert.rejects(h.plugin.requestTitle(connection,project,'t','Note.md'),/Unavailable thread/);
 });
 
-for(const race of ['unchanged','approval','stopped'])test(`a prepared title keeps fresh dispatch authority when ${race}`,async()=>{
+for(const race of ['unchanged','approval','stopped','draft-storage'])test(`a prepared title keeps fresh dispatch authority when ${race}`,async()=>{
   const h=await fixture(),project={id:'p',title:'P',workspaceRoot:'/'},connection={connectionId:'c',environmentId:'e',host:'direct',executable:''};
   const thread={id:'t',projectId:'p',title:'Selected title',session:{status:'ready'}};
   const preparation=h.plugin.titlePreparation(connection,thread);
   h.plugin.settings.pending=[];h.plugin.chatTarget=async()=>({project,link:{}});h.plugin.connection=()=>connection;
   h.plugin.projectReadinessError=()=>undefined;h.plugin.assertNoteMode=async()=>{};h.plugin.folderLinkIntent=()=>({});
   h.plugin.readChatThread=async()=>assert.fail('No second title-only read');
-  h.plugin.recordSendFailure=()=>{};h.plugin.failRequest=async()=>{};
+  const diagnostics:string[]=[];
+  h.plugin.recordSendFailure=(_request:unknown,_error:unknown,stage:string)=>diagnostics.push(stage);
+  h.plugin.failRequest=async()=>{if(race==='draft-storage')assert.fail('The message was already delivered');};
   let controls=0,mutations=0;const persisted:any[]=[];
   h.plugin.save=async()=>{persisted.push(structuredClone(h.plugin.settings.pending));};
   h.plugin.dispatch=async(request:any)=>{
@@ -278,11 +293,12 @@ for(const race of ['unchanged','approval','stopped'])test(`a prepared title keep
       assert.ok(persisted.some(items=>items[0]?.directPlan?.phase==='created'),'the exact plan is durable before mutation');
       mutations++;return {sequence:1};
     }});
+    if(race==='draft-storage')h.app.loadLocalStorage=()=>{throw Error('Local storage failed');};
   };
   h.plugin.prepareImages=async(markdown:string)=>{if(race==='stopped')h.plugin.stopped=true;return {markdown,attachments:[]};};
   const sending=h.plugin.sendChat('Question',undefined,{threadId:'t',preparation});
-  if(race==='unchanged')await sending;else await assert.rejects(sending,race==='approval'?/approval/:/disabled/);
-  assert.equal(controls,race==='stopped'?0:1);assert.equal(mutations,race==='unchanged'?1:0);assert.equal(h.plugin.busy,false);
+  if(race==='unchanged'||race==='draft-storage')await sending;else await assert.rejects(sending,race==='approval'?/approval/:/disabled/);
+  assert.equal(controls,race==='stopped'?0:1);assert.equal(mutations,race==='unchanged'||race==='draft-storage'?1:0);if(race==='draft-storage')assert.deepEqual(diagnostics,['draft-cleanup']);assert.equal(h.plugin.busy,false);
 });
 
 for(const selected of [false,true])for(const ask of ['', 'Explain this.'])test(`unified composer routes ${selected?'selection':'note'} with ${ask?'an ask':'an empty ask'} and preserves its captured location`,async()=>{
