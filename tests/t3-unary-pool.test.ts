@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {T3UnaryRpcPool,T3UnaryRpcOwner,type RpcClock} from '../src/connection/t3-rpc';
-import {t3Api} from '../src/connection/t3-api';
+import {t3Api,SEND_ACKNOWLEDGEMENT_MS} from '../src/connection/t3-api';
 import {readNewThreadDefaults} from '../src/conversations/model-defaults';
 import {settingsSocket} from './rpc-fixture';
 
@@ -44,13 +44,36 @@ test('pool invalidation, pairing removal and expiry cannot cancel an acknowledge
  await transmitted;
  owner.dispose();
  pairing.abort(Error('Pairing removed'));
- mock.timers.tick(30_000);
+ mock.timers.tick(SEND_ACKNOWLEDGEMENT_MS-1);
  assert.equal(closes,1,'Only the read socket closes');
  complete({threadId:'thread'});
  assert.deepEqual(await work,{threadId:'thread'});
  assert.equal(sent,1);
  assert.equal(opens,2);
  assert.equal(closes,2,'The send closes its own socket');
+});
+
+test('a silent socket closes at the send acknowledgement deadline without a second frame',async({mock})=>{
+ mock.timers.enable({apis:['Date','setTimeout']});
+ let began!:()=>void,frames=0,closed=false;
+ const transmitted=new Promise<void>(resolve=>began=resolve);
+ const Socket=settingsSocket();
+ class Silent extends Socket {
+  send(data:string){assert.equal(JSON.parse(data).tag,'orchestration.launchThread');frames++;}
+  close(){closed=true;super.close();}
+ }
+ const api=t3Api(async()=>({ticket:'synthetic'}),'https://synthetic',url=>new Silent(url) as any);
+ const work=api('/api/orchestration/launch',{threadId:'thread',initialMessage:{messageId:'message',text:'Prompt',attachments:[]}},{
+  sendTransmission:{onMessageSent:began,onThreadCreateSent:()=>assert.fail('Launch also delivers the message')},
+ });
+ const failure=assert.rejects(work,/Timed out waiting for the T3 acknowledgement/);
+ await transmitted;
+ mock.timers.tick(SEND_ACKNOWLEDGEMENT_MS-1);
+ assert.equal(closed,false);
+ mock.timers.tick(1);
+ await failure;
+ assert.equal(closed,true);
+ assert.equal(frames,1);
 });
 
 test('credential expiry cancels an upload that never gets a reply',async({mock})=>{

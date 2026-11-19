@@ -9,6 +9,7 @@ import {scheduleTimeout,cancelTimeout,type TimerHandle} from '../shared/clock';
 
 interface Attachment {id:string;dataUrl?:string;type?:string;name?:string;mimeType?:string;sizeBytes?:number}
 
+export const SEND_ACKNOWLEDGEMENT_MS=120_000;
 export interface SendTransmission {onMessageSent:()=>void;onThreadCreateSent:()=>void}
 export interface T3RequestOptions {beforeThreadCreate?:()=>void|Promise<void>;beforeSendTransmission?:()=>void;sendPreparationSignal?:AbortSignal;sendTransmission?:SendTransmission;signal?:AbortSignal;compactImport?:boolean;deferHistoricalDetails?:{messageIds:string[];turnIds:string[]};continueHistory?:()=>boolean;onImportSnapshot?:(snapshot:import('./wire-types').ThreadSnapshot)=>void}
 export type AbortableT3Api=(path:string,payload?:unknown,options?:T3RequestOptions)=>Promise<unknown>;
@@ -47,7 +48,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
     const cancelRequest=()=>controller.abort(signal?.reason);
     const cancelPreparation=()=>controller.abort(authority?.reason);
     const expired=()=>Error('The T3 pairing session expired before sending.');
-    let expiry:TimerHandle|undefined;
+    let expiry:TimerHandle|undefined,acknowledgement:TimerHandle|undefined;
     const expire=()=>{
       const remaining=validUntil-Date.now();
       if(remaining<=0)controller.abort(expired());
@@ -69,12 +70,18 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
         checkTransmission();
         return await abortableRead(run(rpc,(tag,payload,onSent)=>{
           checkTransmission();
-          // Once sent, only the caller can cancel the acknowledgement.
-          return rpc.call(tag,payload,()=>{finishPreparation();onSent?.();});
+          // Bound the confirmation wait separately from credential lifetime.
+          // The caller can recover a transmitted command without replaying it.
+          return rpc.call(tag,payload,()=>{
+            finishPreparation();
+            acknowledgement=scheduleTimeout(()=>controller.abort(Error('Timed out waiting for the T3 acknowledgement.')),SEND_ACKNOWLEDGEMENT_MS);
+            onSent?.();
+          });
         }),controller.signal);
       }finally{rpc.close();}
     }finally{
       finishPreparation();
+      cancelTimeout(acknowledgement);
       signal?.removeEventListener('abort',cancelRequest);
       isolated.dispose();
     }

@@ -8,6 +8,7 @@ import {webcrypto,createHash} from 'node:crypto';
 import {contentHash,initialMessageId} from '../src/responses/completion';
 import {settingsSocket} from './rpc-fixture';
 import type {DirectPlan} from '../src/connection/direct';
+import {SEND_ACKNOWLEDGEMENT_MS} from '../src/connection/t3-api';
 
 test('mobile upgrade removes old credentials and ends uncertain sends without replay or note cleanup',async()=>{
  globalThis.indexedDB=indexedDB;
@@ -41,6 +42,11 @@ test('direct pairing works in mobile bundle, keeps sessions local, and never rep
  let local:any={mode:'direct',pairedSessions:{c:{url:'https://t3.example',environmentId:'env',token:'private-session',expiresAt:Date.now()+600000,permissions:['orchestration:read','orchestration:operate']}}};
  const shared:any[]=[];let lose=true,failTicket=false;const commands:any[]=[];
  let holdUpload:((resume:()=>void)=>void)|undefined;
+ let suppressAcknowledgement:(()=>void)|undefined,acknowledgementDeadline:(()=>void)|undefined;
+ const schedule=(callback:()=>void,delay:number)=>{
+  if(delay===SEND_ACKNOWLEDGEMENT_MS)acknowledgementDeadline=callback;
+  return setTimeout(callback,delay);
+ };
  const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=';
  const markdown='# Mobile 🧪\nBefore\n![[photo.png]]\nAfter\n![same](photo.png)';
  const project={id:'p',title:'P',workspaceRoot:'/',connectionId:'c',connectionName:'Laptop'};
@@ -59,7 +65,15 @@ test('direct pairing works in mobile bundle, keeps sessions local, and never rep
   if(url.endsWith('/api/auth/session'))return new Response(JSON.stringify({authenticated:true,permissions:['orchestration:read']}));
   if(url.endsWith('/websocket-ticket'))return failTicket?new Response('{}',{status:503}):new Response(JSON.stringify({ticket:'ephemeral'}));
   if(url.endsWith('/shell'))return new Response(JSON.stringify({projects:[{...project,defaultModelSelection:{instanceId:'codex',model:'default'}}],threads:[]}));
-  const c=JSON.parse(o.body);commands.push(c);if(c.type==='message.dispatch'&&lose){lose=false;throw Error('lost reply');}return new Response('{}');
+  const c=JSON.parse(o.body);commands.push(c);
+  if(c.type==='message.dispatch'){
+   if(lose){lose=false;throw Error('lost reply');}
+   if(suppressAcknowledgement){
+    const received=suppressAcknowledgement;suppressAcknowledgement=undefined;received();
+    return new Promise<Response>(()=>{});
+   }
+  }
+  return new Response('{}');
  };
  const Socket=settingsSocket(undefined,undefined,async(tag,payload)=>{assert.equal(tag,'orchestration.dispatchCommand');return (await fetcher('rpc:dispatch',{credentials:'omit',redirect:'error',headers:{Authorization:'Bearer private-session'},body:JSON.stringify(payload)})).json();});
  class PausableSocket extends Socket {
@@ -68,7 +82,7 @@ test('direct pairing works in mobile bundle, keeps sessions local, and never rep
    else super.send(data);
   }
  }
- const module={exports:{} as any};runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,WebSocket:PausableSocket,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:{getRandomValues:webcrypto.getRandomValues.bind(webcrypto)},setTimeout,clearTimeout,console},{timeout:5000});
+ const module={exports:{} as any};runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,WebSocket:PausableSocket,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:{getRandomValues:webcrypto.getRandomValues.bind(webcrypto)},setTimeout:schedule,clearTimeout,console},{timeout:5000});
  const p=new module.exports.default();await p.onload();assert.equal(p.mode,'direct');assert.equal(p.projects()[0].connectionId,'c');await p.send(file,project);assert.equal(p.settings.pending.length,0);assert.equal(commands[0].title,file.basename);const sent=commands[1];assert.ok(sent.text.startsWith('# Mobile 🧪\nBefore\n'));assert.equal(sent.text.split('t3-context://').length-1,2);p.onunload();
  const q=new module.exports.default();await q.onload();assert.equal(commands.length,2);assert.equal(typeof q.retry,'undefined');assert.equal(q.settings.pending.length,0);
  const cleanup:string[]=[],recovery:string[]=[];
@@ -88,8 +102,13 @@ test('direct pairing works in mobile bundle, keeps sessions local, and never rep
  assert.equal((localValues.get(`t3-send-failures-v1:${q.settings.vaultId}`) as any[]).at(-1).delivery,'not-started');
  const uncertain:ReturnType<typeof makeRequest>&{directPlan?:DirectPlan}=makeRequest('e8bc0c09-26bd-4e36-aeff-778ad0944277');
  q.settings.pending.push(uncertain);
- failTicket=false;lose=true;
- await assert.rejects(q.dispatch(uncertain,true),/T3 did not confirm delivery/);
+ failTicket=false;
+ const received=new Promise<void>(resolve=>suppressAcknowledgement=resolve);
+ const unconfirmed=assert.rejects(q.dispatch(uncertain,true),/Timed out waiting for the T3 acknowledgement.*T3 did not confirm delivery/);
+ await received;
+ assert.ok(acknowledgementDeadline);
+ acknowledgementDeadline();
+ await unconfirmed;
  assert.equal(q.settings.pending.length,0);
  assert.deepEqual(cleanup,[failed.id]);
  assert.deepEqual(recovery,[uncertain.id]);
