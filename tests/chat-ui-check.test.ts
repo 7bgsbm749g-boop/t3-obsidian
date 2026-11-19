@@ -128,6 +128,18 @@ test('reset uses the destination model and changing thread closes its picker',as
  h.pick().choose(continuation);await h.modal.choose();
  assert.equal(h.sent[0].options.modelSelection.model,'model');
 });
+test('a model override can be cleared when the destination model is unknown',async()=>{
+ const h=await fixture(),{models}=await h.host.getModels();
+ h.host.getModels=async()=>({models});
+ h.modal.modelLoadKey=undefined;h.modal.onOpen();
+ await h.modal.chooseModel(h.button('Choose model'));
+ const picker=h.document.querySelector('[aria-label="Model for this send"]')!;
+ picker.querySelector<HTMLButtonElement>('.t3-model-picker-model')!.click();await Promise.resolve();
+ assert.equal(h.modal.overrides.modelSelection.model,'model');
+ picker.querySelector<HTMLButtonElement>('[aria-label="Use destination default"]')!.click();await Promise.resolve();
+ assert.equal(h.modal.overrides.modelSelection,undefined);
+ assert.equal(h.sent.length,0);h.modal.close();
+});
 test('closing during existing-thread discovery aborts its route and ignores a late choice',async()=>{
  const h=await fixture();let signal:AbortSignal|undefined,release!:()=>void,choose:any;
  h.host.chooseExisting=async(_key:any,selected:any,_back:any,selectedSignal:any)=>{signal=selectedSignal;choose=selected;await new Promise<void>(resolve=>{release=resolve;});};

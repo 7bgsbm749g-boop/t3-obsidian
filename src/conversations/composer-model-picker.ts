@@ -122,7 +122,7 @@ export class ComposerModelPicker extends Component {
     if(option.id==='ultracode')button.setAttribute('aria-pressed',String(value===true));else{button.setAttribute('role','radio');button.setAttribute('aria-checked',String(value===choice.id));}}
   }
   if(this.noteSend){
-   if(this.noteSend.defaultSelection){
+   if(this.settings.modelSelection){
     const reset=()=>{void this.commit({});};
     this.button(this.footer,'Use destination default',reset,'t3-model-picker-segment').setText('Use destination default');
    }
