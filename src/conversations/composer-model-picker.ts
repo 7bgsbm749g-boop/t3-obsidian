@@ -1,6 +1,6 @@
 import {Component,Notice,Platform,setIcon} from 'obsidian';
 import type {ComposerModel,ComposerOption,ComposerSettings} from './composer-models';
-import type {RuntimeMode} from './model-defaults';
+import type {ModelSelection,RuntimeMode} from './model-defaults';
 import {renderProviderIcon} from './provider-icons';
 
 /** Obsidian DOM adaptation of T3 Code's docked ProviderModelPicker,
@@ -19,12 +19,12 @@ export class ComposerModelPicker extends Component {
  readonly el:HTMLElement;
  private settings:ComposerSettings;private tab:string;private query='';private expanded=new Set<string>();private pending=false;private closed=false;
  private list!:HTMLElement;private column!:HTMLElement;private footer!:HTMLElement;private rail!:HTMLElement;private search!:HTMLInputElement;private menu?:HTMLElement;private menuTrigger?:HTMLButtonElement;
- constructor(private anchor:HTMLButtonElement,private models:ComposerModel[],settings:ComposerSettings,private apply:(settings:ComposerSettings)=>Promise<void>,private dismissed:()=>void){
+ constructor(private anchor:HTMLButtonElement,private models:ComposerModel[],settings:ComposerSettings,private apply:(settings:ComposerSettings)=>Promise<void>,private dismissed:()=>void,private noteSend?:{defaultSelection?:ModelSelection}){
   super();this.settings=copy(settings);this.tab=models.some(model=>model.isFavorite)?'favorites':settings.modelSelection?.instanceId??models[0]?.selection.instanceId??'';
-  this.el=anchor.ownerDocument.win.createDiv();this.el.className='t3-model-picker';this.el.setAttribute('role','dialog');this.el.setAttribute('aria-label','Model and permissions');
+  this.el=anchor.ownerDocument.win.createDiv();this.el.className='t3-model-picker';this.el.setAttribute('role','dialog');this.el.setAttribute('aria-label',noteSend?'Model for this send':'Model and permissions');
  }
  open(){
-  this.load();this.anchor.ownerDocument.body.appendChild(this.el);this.anchor.setAttribute('aria-expanded','true');this.anchor.setAttribute('aria-haspopup','dialog');
+  this.load();(this.anchor.closest('.modal-container')??this.anchor.ownerDocument.body).appendChild(this.el);this.anchor.setAttribute('aria-expanded','true');this.anchor.setAttribute('aria-haspopup','dialog');
   const body=this.el.createDiv({cls:'t3-model-picker-body'});this.rail=body.createDiv({cls:'t3-model-picker-rail',attr:{role:'toolbar','aria-label':'Providers','aria-orientation':'vertical'}});
   const center=body.createDiv({cls:'t3-model-picker-models'}),searchRow=center.createDiv({cls:'t3-model-picker-search'});setIcon(searchRow.createSpan(),'search');
   this.search=searchRow.createEl('input',{attr:{type:'search',placeholder:'Search models…','aria-label':'Search models'}});this.search.addEventListener('input',()=>{this.query=this.search.value;this.renderModels();});
@@ -72,7 +72,7 @@ export class ComposerModelPicker extends Component {
   if(model.disabled)return;const next=copy(this.settings),same=next.modelSelection?.instanceId===model.selection.instanceId;
   next.modelSelection={...model.selection,...(same?{options:next.modelSelection?.options?.filter(saved=>model.options.some(option=>option.id===saved.id&&(option.type==='boolean'?typeof saved.value==='boolean':option.options.some(choice=>choice.id===saved.value))))}:{})};
   const mode=next.runtimeMode??'full-access';
-  if(!model.runtimeModes.includes(mode)){
+  if(!this.noteSend&&!model.runtimeModes.includes(mode)){
    new Notice(`${model.label} does not support ${permissions[mode]}. Choose permissions explicitly to switch models.`);
    if(model.runtimeModes.length){trigger.setAttribute('aria-haspopup','menu');this.showMenu(trigger,model.runtimeModes.map(value=>({label:permissions[value],selected:false,pick:()=>{void this.commit({...next,runtimeMode:value});}})),'right');}
    return;
@@ -93,7 +93,7 @@ export class ComposerModelPicker extends Component {
  }
  private async commit(next:ComposerSettings){
   if(this.pending||this.closed)return;const active=this.menuTrigger?.getAttribute('aria-label')??this.anchor.ownerDocument.activeElement?.getAttribute('aria-label');this.pending=true;this.render();
-  try{await this.apply(next);this.settings=copy(next);}catch(error){new Notice(error instanceof Error?error.message:String(error));}
+  try{await this.apply(next);this.settings=copy({...next,modelSelection:next.modelSelection??this.noteSend?.defaultSelection});}catch(error){new Notice(error instanceof Error?error.message:String(error));}
   finally{this.pending=false;if(!this.closed){this.render();this.position();if(active)Array.from(this.el.querySelectorAll<HTMLButtonElement>('button')).find(button=>button.getAttribute('aria-label')===active&&!button.disabled)?.focus();}}
  }
  private renderOptions(){
@@ -120,6 +120,13 @@ export class ComposerModelPicker extends Component {
    const choices=option.type==='boolean'?option.id==='ultracode'?[{id:value!==true,label:option.label}]:[{id:false,label:'Standard'},{id:true,label:'Fast'}]:option.options;
    for(const choice of choices){const button=this.button(group,choice.label,()=>{void this.changeOption(model!,option,choice.id);},'t3-model-picker-segment');this.optionReset(button,model!,option);if(choice.label==='Fast')this.icon(button,'zap');button.createSpan({text:choice.label});button.disabled=this.pending||model?.disabled===true;
     if(option.id==='ultracode')button.setAttribute('aria-pressed',String(value===true));else{button.setAttribute('role','radio');button.setAttribute('aria-checked',String(value===choice.id));}}
+  }
+  if(this.noteSend){
+   if(this.noteSend.defaultSelection){
+    const reset=()=>{void this.commit({});};
+    this.button(this.footer,'Use destination default',reset,'t3-model-picker-segment').setText('Use destination default');
+   }
+   return;
   }
   const mode=this.settings.runtimeMode??'full-access',modes=model?.runtimeModes??[];
   if(modes.length){const button=this.button(this.footer,`Permissions: ${permissions[mode]}`,()=>this.showMenu(button,modes.map(value=>({label:permissions[value],selected:value===mode,pick:()=>{void this.commit({...copy(this.settings),runtimeMode:value});}}))),'t3-model-picker-permissions');this.icon(button,'shield-off');button.createSpan({text:permissions[mode]});this.icon(button,'chevron-up');button.setAttribute('aria-haspopup','menu');}

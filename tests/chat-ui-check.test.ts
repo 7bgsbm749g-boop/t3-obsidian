@@ -13,10 +13,16 @@ async function fixture({automatic=false,remembered=false,steering=false,busy=fal
  proto.createEl=function(tag:string,o:any={}){const el=document.createElement(tag);el.textContent=o.text??'';el.className=o.cls??'';for(const [k,v] of Object.entries(o.attr??{}))el.setAttribute(k,String(v));this.appendChild(el);return el;};proto.createSvg=function(tag:string,o:any={}){const el=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [k,v] of Object.entries(o.attr??{}))el.setAttribute(k,String(v));this.appendChild(el);return el;};proto.createDiv=function(o:any){return this.createEl('div',o);};proto.createSpan=function(o:any){return this.createEl('span',o);};proto.empty=function(){this.replaceChildren();};proto.setText=function(t:string){this.textContent=t;};
  class Modal{titleEl=document.createElement('h2');contentEl=document.createElement('div');modalEl=document.createElement('div');constructor(public app:any){this.modalEl.className='modal';this.contentEl.className='modal-content';this.modalEl.append(this.titleEl,this.contentEl);}open(){modals.push(this);document.body.append(this.modalEl);(this as any).onOpen?.();}close(){this.modalEl.remove();(this as any).onClose?.();}setPlaceholder(){}}
  class Menu{items:any[]=[];constructor(){menus.push(this);}addItem(f:any){const item:any={setTitle(t:string){this.title=t;return this;},setIcon(){return this;},setChecked(){return this;},onClick(fn:any){this.click=fn;return this;}};f(item);this.items.push(item);return this;}showAtPosition(){}}
- class Setting{constructor(public el:any){}setName(){return this;}addDropdown(fn:any){const el=this.el.createEl('select');Object.defineProperty(el,'value',{value:'',writable:true});fn({addOption(value:string,label:string){const o=document.createElement('option');o.value=value;o.textContent=label;el.append(o);return this;},setValue(value:string){el.value=value;return this;},onChange(change:any){el.addEventListener('change',()=>change(el.value));return this;}});return this;}addButton(fn:any){const el=this.el.createEl('button'),b:any={setButtonText(t:string){el.textContent=t;return this;},setCta(){return this;},onClick(f:any){el.addEventListener('click',f);return this;}};fn(b);return this;}}
- const module={exports:{} as any};runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal,FuzzySuggestModal:Modal,Setting,Menu,setIcon:(el:any,icon:string)=>{el.setAttribute('data-icon',icon);},Notice:class{constructor(t:string){notices.push(t);}}}:require(id),document,window,HTMLElement:window.HTMLElement,Event:window.Event,setTimeout,clearTimeout,performance,AbortController,DOMException,URL,URLSearchParams,Buffer,structuredClone,crypto:globalThis.crypto});
+ class Component{
+  private listeners:Array<()=>void>=[];
+  load(){}
+  unload(){for(const dispose of this.listeners)dispose();}
+  registerDomEvent(target:EventTarget,event:string,listener:EventListener){target.addEventListener(event,listener);this.listeners.push(()=>target.removeEventListener(event,listener));}
+ }
+ proto.setCssProps=function(props:Record<string,string>){for(const [name,value] of Object.entries(props))this.style.setProperty(name,value);};
+ const module={exports:{} as any};runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?{Modal,FuzzySuggestModal:Modal,Component,Platform:{isMacOS:false},Menu,setIcon:(el:any,icon:string)=>{el.setAttribute('data-icon',icon);},Notice:class{constructor(t:string){notices.push(t);}}}:require(id),document,window,HTMLElement:window.HTMLElement,Event:window.Event,setTimeout,clearTimeout,performance,AbortController,DOMException,URL,URLSearchParams,Buffer,structuredClone,crypto:globalThis.crypto});
  const listeners=new Set<()=>void>();let pick:any,fail=false;
- const host:any={steering,get busy(){return busy;},onBusyChange:(f:any)=>{listeners.add(f);return ()=>listeners.delete(f);},getThreadChoiceRestriction:()=>restriction||undefined,hasConfirmedNoteSend:()=>confirmed,getNotePath:()=> 'Synthetic.md',getDefaultProjectKey:()=> 'project',getProjectName:(key:string)=>key??'Synthetic',getTargetDescription:()=> 'Synthetic',getProjectChoices:()=>[{key:'other',label:'Other'}],getDefaultThread:()=>remembered?'previous':undefined,getAlternativeProjectKey:()=> 'project',getDefaultDestination:(key:string,signal:AbortSignal)=>new Promise(resolve=>{checks.push({key,signal,resolve});}),beginPreparing:()=>{preparing.push('show');return ()=>preparing.push('clear');},beginSend:()=>{previews.push('show');return ()=>previews.push('clear');},getInlineDefaults:()=>({enabled:true}),draftChanged:(text:string)=>drafts.push(text),chooseExisting:async(_key:any,choose:any,back:any)=>{pick={choose,back};},getModels:async()=>({selection:{instanceId:'provider',model:'model'},models:[{selection:{instanceId:'provider',model:'model'},label:'Model',provider:'Provider',driver:'codex',options:[],commands:[{name:'compact',description:'Compact context'}],skills:[{name:'review',path:'/skills/review/SKILL.md',description:'Review the changes'}]}]}),sendChat:async(text:string,key:string,resolve:any,_back:any,destination:any)=>{sent.push({text,key,destination,options:resolve(),target:'existing'});if(fail)throw Error('Synthetic failure');},sendToNew:async(text:string,key:string,resolve:any)=>{sent.push({text,key,options:resolve(),target:'new'});if(fail)throw Error('Synthetic failure');}};
+ const host:any={steering,get busy(){return busy;},onBusyChange:(f:any)=>{listeners.add(f);return ()=>listeners.delete(f);},getThreadChoiceRestriction:()=>restriction||undefined,hasConfirmedNoteSend:()=>confirmed,getNotePath:()=> 'Synthetic.md',getDefaultProjectKey:()=> 'project',getProjectName:(key:string)=>key??'Synthetic',getTargetDescription:()=> 'Synthetic',getProjectChoices:()=>[{key:'other',label:'Other'}],getDefaultThread:()=>remembered?'previous':undefined,getAlternativeProjectKey:()=> 'project',getDefaultDestination:(key:string,signal:AbortSignal)=>new Promise(resolve=>{checks.push({key,signal,resolve});}),beginPreparing:()=>{preparing.push('show');return ()=>preparing.push('clear');},beginSend:()=>{previews.push('show');return ()=>previews.push('clear');},getInlineDefaults:()=>({enabled:true}),draftChanged:(text:string)=>drafts.push(text),chooseExisting:async(_key:any,choose:any,back:any)=>{pick={choose,back};},getModels:async()=>({selection:{instanceId:'provider',model:'model'},models:[{selection:{instanceId:'provider',model:'model'},label:'Model',provider:'Provider',driver:'codex',options:[{id:'reasoning',label:'Reasoning',type:'select',options:[{id:'low',label:'Low',isDefault:true},{id:'high',label:'High'}]}],commands:[{name:'compact',description:'Compact context'}],skills:[{name:'review',path:'/skills/review/SKILL.md',description:'Review the changes'}]}]}),sendChat:async(text:string,key:string,resolve:any,_back:any,destination:any)=>{sent.push({text,key,destination,options:resolve(),target:'existing'});if(fail)throw Error('Synthetic failure');},sendToNew:async(text:string,key:string,resolve:any)=>{sent.push({text,key,options:resolve(),target:'new'});if(fail)throw Error('Synthetic failure');}};
  window.SVGElement.prototype.createSvg=proto.createSvg;
  const app={workspace:{getLeavesOfType:()=>[],getActiveViewOfType:()=>undefined}};
  const opening=automatic?module.exports.openNoteSendFlow(app,host):Promise.resolve(new module.exports.SendComposer(app,host,prompt).open());await Promise.resolve();
@@ -98,8 +104,29 @@ test('project choice clears the old destination and model while retaining the qu
  assert.equal(h.modal.projectKey,'other');assert.equal(h.modal.target,'new');assert.equal(h.modal.overrides.modelSelection,undefined);assert.equal(h.modal.field.value,'Retain my question');assert.equal(h.sent.length,0);
 });
 test('model picker loads the selected machine catalog and applies a model without sending',async()=>{
- const h=await fixture();await h.modal.chooseModel();const picker=h.modals.at(-1),select=picker.contentEl.querySelector('select');select.value='0';select.dispatchEvent(new h.window.Event('change'));
- const apply=Array.from(picker.contentEl.querySelectorAll('button')).find((el:any)=>el.textContent==='Apply') as HTMLButtonElement;apply.click();assert.equal(h.modal.overrides.modelSelection.model,'model');assert.equal(h.sent.length,0);await h.modal.choose();assert.equal(h.sent[0].options.modelSelection.instanceId,'provider');
+ const h=await fixture();h.type('Keep this question');
+ const anchor=h.button('Choose model');await h.modal.chooseModel(anchor);
+ const picker=h.document.querySelector('[aria-label="Model for this send"]')!;
+ assert.ok(picker.querySelector('[aria-label="Search models"]'));
+ const high=picker.querySelector<HTMLButtonElement>('[aria-label="High"]')!;
+ high.click();await Promise.resolve();
+ assert.equal(h.modal.field.value,'Keep this question');assert.equal(h.sent.length,0);
+ assert.match(anchor.textContent!,/High/);
+ await h.modal.choose();
+ assert.equal(h.sent[0].options.modelSelection.instanceId,'provider');
+ assert.equal(h.sent[0].options.modelSelection.options[0].value,'high');
+ assert.equal(picker.isConnected,false);
+});
+test('reset uses the destination model and changing thread closes its picker',async()=>{
+ const h=await fixture();h.modal.overrides.modelSelection={instanceId:'other',model:'changed'};
+ await h.modal.chooseModel(h.button('Choose model'));
+ const picker=h.document.querySelector('[aria-label="Model for this send"]')!;
+ picker.querySelector<HTMLButtonElement>('[aria-label="Use destination default"]')!.click();await Promise.resolve();
+ assert.equal(h.modal.overrides.modelSelection,undefined);
+ assert.match(h.button('Choose model').textContent!,/^Model/);
+ await h.modal.pickExisting();assert.equal(picker.isConnected,false);
+ h.pick().choose(continuation);await h.modal.choose();
+ assert.equal(h.sent[0].options.modelSelection.model,'model');
 });
 test('closing during existing-thread discovery aborts its route and ignores a late choice',async()=>{
  const h=await fixture();let signal:AbortSignal|undefined,release!:()=>void,choose:any;
@@ -157,7 +184,7 @@ test('slash model opens the actual model picker and does not send the command',a
  const h=await fixture();await h.modal.modelReady;const input=h.modal.field;
  input.setRangeText=(text:string,start:number,end:number)=>{input.value=input.value.slice(0,start)+text+input.value.slice(end);};
  h.type('/model');await new Promise(done=>setImmediate(done));const event=new h.window.Event('keydown');Object.defineProperty(event,'key',{value:'Enter'});input.dispatchEvent(event);await new Promise(done=>setImmediate(done));
- assert.equal(h.sent.length,0);assert.equal(input.value,'');assert.match(h.modals.at(-1).titleEl.textContent!,/Model/);
+ assert.equal(h.sent.length,0);assert.equal(input.value,'');assert.ok(h.document.querySelector('[aria-label="Model for this send"]'));
 });
 test('a selected file context is removed when its token is deleted',async()=>{
  const h=await fixture();await h.modal.modelReady;h.host.searchFiles=async()=>['README.md'];const input=h.modal.field;
@@ -172,7 +199,7 @@ test('menus use T3 fuzzy matching and /skill: filters the list to skills',async(
 });
 test('an explicit model click retries a failed catalog read',async()=>{
  const h=await fixture();await h.modal.modelReady;h.host.getModels=async()=>{throw Error('Temporarily offline');};h.modal.modelLoadKey=undefined;h.modal.onOpen();await h.modal.modelReady;assert.match(h.button('Choose model').textContent!,/unavailable/);
- h.host.getModels=async()=>({selection:{instanceId:'p',model:'restored'},models:[{selection:{instanceId:'p',model:'restored'},label:'Restored',provider:'P',options:[],commands:[],skills:[]}]});await h.modal.chooseModel();assert.match(h.modals.at(-1).titleEl.textContent!,/Model/);assert.match(h.button('Choose model').textContent!,/Restored/);
+ h.host.getModels=async()=>({selection:{instanceId:'p',model:'restored'},models:[{selection:{instanceId:'p',model:'restored'},label:'Restored',provider:'P',options:[],commands:[],skills:[]}]});await h.modal.chooseModel(h.button('Choose model'));assert.ok(h.document.querySelector('[aria-label="Model for this send"]'));assert.match(h.button('Choose model').textContent!,/Restored/);
 });
 
 test('changing projects drops selected file and skill records before rebuilding suggestions',async()=>{
