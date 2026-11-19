@@ -26,8 +26,9 @@ test('related defaults and mutations use the same authenticated API socket',asyn
  assert.equal(tickets,1);assert.equal(opens,1);assert.equal(dispatches,1);api.disposeUnaryRpc!();
 });
 
-test('pool invalidation cannot cancel an explicit send waiting for its acknowledgement',async()=>{
+test('pool invalidation and credential expiry cannot cancel an explicit send waiting for its acknowledgement',async({mock})=>{
  const owner=new T3UnaryRpcOwner();
+ const deadline=Date.now()+30_000;
  let sent=0,complete!:(value:unknown)=>void,started!:()=>void,opens=0,closes=0;
  const transmitted=new Promise<void>(resolve=>started=resolve);
  const Socket=settingsSocket(undefined,undefined,tag=>{
@@ -35,17 +36,38 @@ test('pool invalidation cannot cancel an explicit send waiting for its acknowled
   return new Promise(resolve=>complete=resolve);
  });
  class Tracked extends Socket {close(){closes++;super.close();}}
- const api=t3Api(async()=>({ticket:'synthetic'}),'https://synthetic',url=>{opens++;return new Tracked(url) as any;},Infinity,owner);
+ const api=t3Api(async()=>({ticket:'synthetic'}),'https://synthetic',url=>{opens++;return new Tracked(url) as any;},deadline,owner);
  await readNewThreadDefaults(api,'https://synthetic',{id:'project'});
  const work=api('/api/orchestration/launch',{threadId:'thread',initialMessage:{messageId:'message',text:'Prompt',attachments:[]}},{sendTransmission:{onMessageSent:()=>{sent++;started();},onThreadCreateSent:()=>assert.fail('Launch also delivers the message')}});
  await transmitted;
  owner.dispose();
+ mock.method(Date,'now',()=>deadline);
  assert.equal(closes,1,'Only the read socket closes');
  complete({threadId:'thread'});
  assert.deepEqual(await work,{threadId:'thread'});
  assert.equal(sent,1);
  assert.equal(opens,2);
  assert.equal(closes,2,'The send closes its own socket');
+});
+
+test('an attachment upload that crosses the credential deadline cannot dispatch its message',async({mock})=>{
+ const deadline=Date.now()+30_000;
+ const tags:string[]=[];
+ const Socket=settingsSocket();
+ class Expiring extends Socket {
+  send(data:string){
+   const {tag}=JSON.parse(data);tags.push(tag);
+   assert.equal(tag,'assets.persistChatAttachments');
+   mock.method(Date,'now',()=>deadline);
+   super.send(data);
+  }
+ }
+ const api=t3Api(async()=>({ticket:'synthetic'}),'https://synthetic',url=>new Expiring(url) as any,deadline);
+ const attachments=[{type:'image',id:'photo',name:'photo.png',mimeType:'image/png',sizeBytes:1,dataUrl:'data:image/png;base64,eA=='}];
+ await assert.rejects(api('/api/orchestration/dispatch',{type:'message.dispatch',threadId:'thread',messageId:'message',text:'Prompt',attachments},{
+  sendTransmission:{onMessageSent:()=>assert.fail('No message transmitted'),onThreadCreateSent:()=>assert.fail('No thread create transmitted')},
+ }),/session expired before sending/);
+ assert.deepEqual(tags,['assets.persistChatAttachments']);
 });
 
 test('a socket lost before launch transmits neither the thread nor its message',async()=>{

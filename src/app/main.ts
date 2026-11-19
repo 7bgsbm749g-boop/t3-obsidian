@@ -251,6 +251,7 @@ export default class SendToT3 extends Plugin {
   private verifiedConnections=new RouteAuthorizationCache<Awaited<ReturnType<typeof environmentApi>>>();
   private unaryCredentialKey(paired:PairedConnection,session:PairedSession|undefined){return JSON.stringify([paired.url,paired.environmentId,session?.token,session?.expiresAt,session?.dpopKeyId,session?.accountId,session?.permissions]);}
   private unaryOwners=new Map<string,{key:string;pool:T3UnaryRpcOwner}>();
+  private pairingGenerations=new Map<string,object>();
   private disposeUnaryOwner(id:string){const owner=this.unaryOwners.get(id);if(owner){owner.pool.dispose();this.verifiedConnections.delete(owner.key);this.unaryOwners.delete(id);}}
   private disposeUnaryOwners(){for(const id of this.unaryOwners.keys())this.disposeUnaryOwner(id);}
   private importPreparation=new Set<AbortController>();
@@ -364,7 +365,7 @@ export default class SendToT3 extends Plugin {
       else this.inlineChat?.discardFollow(attached.jobId,attached.messageId,attached.previousMessageId);
     }catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'follow-cleanup',startedAt);}
     const job=this.inlineChat?.find(request.id);if(job)try{await this.inlineChat!.deliveryFailed(job);}catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt);}
-    if(!cleanupFailed&&!this.stopped)this.settings.pending=this.settings.pending.filter(item=>item.id!==request.id);
+    if(!cleanupFailed&&(!this.stopped||!needsCleanup))this.settings.pending=this.settings.pending.filter(item=>item.id!==request.id);
     // Save cleanup independently of the network. A cleanup failure never
     // recreates a request or schedules another prompt dispatch.
     try{await this.save();}catch(saveError){this.recordSendFailure(request,saveError,'failure-save',startedAt);}
@@ -2058,6 +2059,12 @@ export default class SendToT3 extends Plugin {
   private async pairedThreadAccess(paired:PairedConnection,forceRefresh=false,signal?:AbortSignal):Promise<ThreadAccess>{
     const environmentId=paired.environmentId;
     const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId,connectionId:paired.id};
+    const pairingGeneration=this.pairingGenerations.get(paired.id)??{};
+    this.pairingGenerations.set(paired.id,pairingGeneration);
+    const assertSendPairing=()=>{
+      const route=this.settings.paired.find(candidate=>candidate.id===paired.id);
+      if(this.pairingGenerations.get(paired.id)!==pairingGeneration||!this.pairedSessions[paired.id]||!route||route.url!==connection.url||route.environmentId!==environmentId)throw Error('The T3 pairing was removed or changed before sending.');
+    };
     let session=await abortableRead(this.sessionFor(paired.id,forceRefresh),signal);requestAborted(signal);
     // Verify authorization before exposing a candidate to sends or writes.
     // A failed open can try another endpoint for the same machine; the caller
@@ -2120,6 +2127,10 @@ export default class SendToT3 extends Plugin {
     const routed:ThreadAccess['api']=async(path,payload,options)=>this.routeStatus.request(paired.id,async()=>{
       let attemptedApi:T3Api|undefined;
       try{
+        if(options?.sendTransmission){
+          assertSendPairing();
+          options={...options,beforeSendTransmission:assertSendPairing};
+        }
         await current(options?.signal);attemptedApi=api;
         try{return await attemptedApi(path,payload,options);}catch(error){
           // The send adapter can return HTTP 401 only before handing off the
@@ -2127,6 +2138,7 @@ export default class SendToT3 extends Plugin {
           const sendSetup=!!options?.sendTransmission&&['/api/orchestration/dispatch','/api/orchestration/launch'].includes(path);
           const safe=payload===undefined||sendSetup||['/api/auth/websocket-ticket','/api/orchestration/turn-item','/api/assets/create-url'].includes(path);
           if(!(error instanceof T3HttpError)||error.status!==401||!paired.managed||!safe)throw error;
+          options?.beforeSendTransmission?.();
           await abortableRead(renew(attemptedApi),options?.signal);requestAborted(options?.signal);
           attemptedApi=api;return await attemptedApi(path,payload,options);
         }
@@ -3029,7 +3041,7 @@ export default class SendToT3 extends Plugin {
     this.signInEmail=this.nativeAccount?.identity??this.signInEmail;this.signInExpired=expired;
     this.noProjectProjects.clear();this.noProjectIdentities.clear();
     this.disposeUnaryOwners();this.cancelCloudLogin(reason);this.nativeAccount=null;this.nativeToken=undefined;this.nativeRefreshing=undefined;this.sessionRefreshing.clear();
-    for(const [id,s] of Object.entries(this.pairedSessions))if(s.accountId)delete this.pairedSessions[id];
+    for(const [id,s] of Object.entries(this.pairedSessions))if(s.accountId){delete this.pairedSessions[id];this.pairingGenerations.delete(id);}
     this.cloudAccount=null;this.cloudMachines=[];this.accountCandidates.clear();this.registryNextAttempt=0;this.cloudError='';this.machineErrors={};this.connectionSyncComplete=false;this.machineRefreshing=undefined;this.cloudRefreshing=undefined;
     // Clear only device credentials. Keep synced links, bindings and choices.
     // Cancelled setup readers can return before persistence finishes. Publish
@@ -3041,10 +3053,10 @@ export default class SendToT3 extends Plugin {
     const old=this.nativeAccount;await this.clearAccount(false);
     if(old)try{await revokeNativeAccount(old,nativeAccountFetch);}catch{new Notice('Signed out on this device. T3 could not be reached to revoke the account session; you can revoke it in your T3 account.');}
   }
-  async forgetPairing(id:string){this.disposeUnaryOwner(id);this.noProjectProjects.delete(id);this.noProjectIdentities.delete(id);delete this.pairedSessions[id];this.projectDiscovery?.invalidate();await this.save();this.refreshProjectsInBackground(true);}
+  async forgetPairing(id:string){this.pairingGenerations.delete(id);this.disposeUnaryOwner(id);this.noProjectProjects.delete(id);this.noProjectIdentities.delete(id);delete this.pairedSessions[id];this.projectDiscovery?.invalidate();await this.save();this.refreshProjectsInBackground(true);}
   async removeConnection(id:string){
     if(this.settings.pending.some(r=>!r.cleanupOnly&&r.connection.connectionId===id)||this.settings.completionJobs.some(j=>j.connection.connectionId===id&&j.status==='watching')||this.settings.settlementJobs.some(j=>j.connection.connectionId===id))throw Error('This connection has an unconfirmed request or completion check. Resolve or stop it before removing the connection.');
-    this.disposeUnaryOwner(id);this.projectDiscovery?.invalidate();for(const [key,c] of this.accountCandidates)if(c.id===id)this.accountCandidates.delete(key);
+    this.pairingGenerations.delete(id);this.disposeUnaryOwner(id);this.projectDiscovery?.invalidate();for(const [key,c] of this.accountCandidates)if(c.id===id)this.accountCandidates.delete(key);
     this.noProjectProjects.delete(id);this.noProjectIdentities.delete(id);
     this.settings.paired=this.settings.paired.filter(c=>c.id!==id);this.settings.directProjects=this.settings.directProjects.filter(p=>p.connectionId!==id);this.settings.directSelected=this.settings.directSelected.filter(k=>!k.startsWith(id+':'));delete this.pairedSessions[id];if(this.settings.directScanId===id)this.settings.directScanId=this.settings.paired[0]?.id??'';this.syncProjectSources();await this.save();
   }

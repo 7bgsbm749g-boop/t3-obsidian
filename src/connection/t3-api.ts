@@ -9,7 +9,7 @@ import {htmlRenderFromToolItem} from '../responses/html-results';
 interface Attachment {id:string;dataUrl?:string;type?:string;name?:string;mimeType?:string;sizeBytes?:number}
 
 export interface SendTransmission {onMessageSent:()=>void;onThreadCreateSent:()=>void}
-export interface T3RequestOptions {beforeThreadCreate?:()=>void|Promise<void>;sendTransmission?:SendTransmission;signal?:AbortSignal;compactImport?:boolean;deferHistoricalDetails?:{messageIds:string[];turnIds:string[]};continueHistory?:()=>boolean;onImportSnapshot?:(snapshot:import('./wire-types').ThreadSnapshot)=>void}
+export interface T3RequestOptions {beforeThreadCreate?:()=>void|Promise<void>;beforeSendTransmission?:()=>void;sendTransmission?:SendTransmission;signal?:AbortSignal;compactImport?:boolean;deferHistoricalDetails?:{messageIds:string[];turnIds:string[]};continueHistory?:()=>boolean;onImportSnapshot?:(snapshot:import('./wire-types').ThreadSnapshot)=>void}
 export type AbortableT3Api=(path:string,payload?:unknown,options?:T3RequestOptions)=>Promise<unknown>;
 
 export function cancelledRequest(message='Request cancelled.'):Error{return typeof DOMException==='function'?new DOMException(message,'AbortError'):Object.assign(Error(message),{name:'AbortError'});}
@@ -33,13 +33,22 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
   const outputSizes=new Map<string,number>();let outputCharacters=0;
   const senderTitles=new Map<string,string|undefined>();let senderRefresh=-Infinity;
   const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+  function checkTransmission(options?:T3RequestOptions){
+    requestAborted(options?.signal);
+    if(!options?.sendTransmission)return;
+    if(Date.now()>=validUntil)throw Error('The T3 pairing session expired before sending.');
+    options.beforeSendTransmission?.();
+  }
   async function mutate(options:T3RequestOptions|undefined,run:(rpc:T3RpcConnection)=>Promise<unknown>){
     // An explicit send owns its connection. Background verification or
     // credential renewal can retire the read pool while this call is active.
+    // Check the credential before transmission so its deadline cannot interrupt
+    // the acknowledgement of a command already handed to the socket.
+    checkTransmission(options);
     const isolated=options?.sendTransmission?new T3UnaryRpcPool(raw,origin,makeSocket):undefined;
     try{
       const rpc=await (isolated??unary).acquire(options?.signal);
-      try{return await run(rpc);}finally{rpc.close();}
+      try{checkTransmission(options);return await run(rpc);}finally{rpc.close();}
     }finally{isolated?.dispose();}
   }
   async function persistAttachments<T extends OutgoingMessage>(rpc:Awaited<ReturnType<typeof connectT3Rpc>>,threadId:string,message:T){
@@ -155,7 +164,7 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
         const initialMessage=await persistAttachments(rpc,payload.threadId,outgoingMessage(payload.initialMessage));
         // Reservation follows uploads but precedes the creation RPC: failed uploads
         // leave no orphan, while an uncertain creation retains its retry record.
-        await options?.beforeThreadCreate?.();requestAborted(options?.signal);
+        await options?.beforeThreadCreate?.();checkTransmission(options);
         return rpc.call('orchestration.launchThread',{...payload,initialMessage},options?.sendTransmission?.onMessageSent);
       });
     }
@@ -195,7 +204,8 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
       }
       return mutate(options,async rpc=>{
         if(command.type==='message.dispatch'){if(typeof command.threadId!=='string')throw Error('Invalid saved T3 thread identity.');command={...command,...await persistAttachments(rpc,command.threadId,outgoingMessage(command))};}
-        if(command.type==='thread.create'){await options?.beforeThreadCreate?.();requestAborted(options?.signal);}
+        if(command.type==='thread.create')await options?.beforeThreadCreate?.();
+        checkTransmission(options);
         const sent=command.type==='message.dispatch'?options?.sendTransmission?.onMessageSent:command.type==='thread.create'?options?.sendTransmission?.onThreadCreateSent:undefined;
         return rpc.call('orchestration.dispatchCommand',command,sent);
       });

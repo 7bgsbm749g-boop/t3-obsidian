@@ -7,6 +7,7 @@ import {runInNewContext} from './obsidian-context';
 import {webcrypto,createHash} from 'node:crypto';
 import {contentHash,initialMessageId} from '../src/responses/completion';
 import {settingsSocket} from './rpc-fixture';
+import type {DirectPlan} from '../src/connection/direct';
 
 test('mobile upgrade removes old credentials and ends uncertain sends without replay or note cleanup',async()=>{
  globalThis.indexedDB=indexedDB;
@@ -39,6 +40,7 @@ test('portable fingerprints stay compatible with existing desktop jobs',()=>{
 test('direct pairing works in mobile bundle, keeps sessions local, and never replays a failed send',async()=>{
  let local:any={mode:'direct',pairedSessions:{c:{url:'https://t3.example',environmentId:'env',token:'private-session',expiresAt:Date.now()+600000}}};
  const shared:any[]=[];let lose=true,failTicket=false;const commands:any[]=[];
+ let holdUpload:((resume:()=>void)=>void)|undefined;
  const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=';
  const markdown='# Mobile 🧪\nBefore\n![[photo.png]]\nAfter\n![same](photo.png)';
  const project={id:'p',title:'P',workspaceRoot:'/',connectionId:'c',connectionName:'Laptop'};
@@ -59,7 +61,14 @@ test('direct pairing works in mobile bundle, keeps sessions local, and never rep
   if(url.endsWith('/shell'))return new Response(JSON.stringify({projects:[{...project,defaultModelSelection:{instanceId:'codex',model:'default'}}],threads:[]}));
   const c=JSON.parse(o.body);commands.push(c);if(c.type==='message.dispatch'&&lose){lose=false;throw Error('lost reply');}return new Response('{}');
  };
- const module={exports:{} as any};runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,WebSocket:settingsSocket(undefined,undefined,async(tag,payload)=>{assert.equal(tag,'orchestration.dispatchCommand');return (await fetcher('rpc:dispatch',{credentials:'omit',redirect:'error',headers:{Authorization:'Bearer private-session'},body:JSON.stringify(payload)})).json();}),AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:{getRandomValues:webcrypto.getRandomValues.bind(webcrypto)},setTimeout,clearTimeout,console},{timeout:5000});
+ const Socket=settingsSocket(undefined,undefined,async(tag,payload)=>{assert.equal(tag,'orchestration.dispatchCommand');return (await fetcher('rpc:dispatch',{credentials:'omit',redirect:'error',headers:{Authorization:'Bearer private-session'},body:JSON.stringify(payload)})).json();});
+ class PausableSocket extends Socket {
+  send(data:string){
+   if(holdUpload&&JSON.parse(data).tag==='assets.persistChatAttachments')holdUpload(()=>super.send(data));
+   else super.send(data);
+  }
+ }
+ const module={exports:{} as any};runInNewContext(await readFile('dist/main.js','utf8'),{module,exports:module.exports,require:(name:string)=>{assert.equal(name,'obsidian');return api;},indexedDB,document:{createElement:()=>({innerHTML:'',get textContent(){return this.innerHTML;}})},fetch:fetcher,WebSocket:PausableSocket,AbortController,URLSearchParams,URL,TextEncoder,TextDecoder,crypto:{getRandomValues:webcrypto.getRandomValues.bind(webcrypto)},setTimeout,clearTimeout,console},{timeout:5000});
  const p=new module.exports.default();await p.onload();assert.equal(p.mode,'direct');assert.equal(p.projects()[0].connectionId,'c');await p.send(file,project);assert.equal(p.settings.pending.length,0);assert.equal(commands[0].title,file.basename);const sent=commands[1];assert.ok(sent.text.startsWith('# Mobile 🧪\nBefore\n'));assert.equal(sent.text.split('t3-context://').length-1,2);p.onunload();
  const q=new module.exports.default();await q.onload();assert.equal(commands.length,2);assert.equal(typeof q.retry,'undefined');assert.equal(q.settings.pending.length,0);
  const cleanup:string[]=[],recovery:string[]=[];
@@ -77,7 +86,7 @@ test('direct pairing works in mobile bundle, keeps sessions local, and never rep
  assert.deepEqual(recovery,[]);
  assert.equal(commands.length,2);
  assert.equal((localValues.get(`t3-send-failures-v1:${q.settings.vaultId}`) as any[]).at(-1).delivery,'not-started');
- const uncertain=makeRequest('e8bc0c09-26bd-4e36-aeff-778ad0944277');
+ const uncertain:ReturnType<typeof makeRequest>&{directPlan?:DirectPlan}=makeRequest('e8bc0c09-26bd-4e36-aeff-778ad0944277');
  q.settings.pending.push(uncertain);
  failTicket=false;lose=true;
  await assert.rejects(q.dispatch(uncertain,true),/T3 did not confirm delivery/);
@@ -100,9 +109,34 @@ test('direct pairing works in mobile bundle, keeps sessions local, and never rep
   await assert.rejects(q.dispatch(interrupted,true),/local reply cleanup is pending/);
  }
  assert.equal(commands.length,4);
- q.onunload();
  for(const s of shared){assert.ok(!JSON.stringify(s).includes('private-session'));assert.ok(!('pending' in s));}
  assert.ok(local.pairedSessions.c.token);assert.ok(!JSON.stringify(sent).includes('private-session'));
+ failTicket=false;
+ const {inlineHost:_,...plain}=makeRequest('5c7e2000-45f1-4a04-9df2-3847a4f533f5');
+ const uploading=new Promise<()=>void>(resolve=>holdUpload=resolve);
+ const access=await q.pairedThreadAccess(q.settings.paired[0]);
+ const dispatching=access.api('/api/orchestration/dispatch',{type:'message.dispatch',threadId:'thread',messageId:'message',text:'Prompt',attachments:[{type:'image',id:'photo',name:'photo.png',mimeType:'image/png',sizeBytes:1,dataUrl:'data:image/png;base64,eA=='}]},{
+  sendTransmission:{onMessageSent:()=>assert.fail('No message transmitted'),onThreadCreateSent:()=>assert.fail('No thread create transmitted')},
+ });
+ const pairingFailure=assert.rejects(dispatching,/pairing was removed or changed before sending/);
+ const resumeUpload=await uploading;
+ q.refreshProjectsInBackground=()=>{};
+ await q.forgetPairing('c');
+ resumeUpload();await pairingFailure;
+ assert.equal(commands.length,4);
+ assert.equal(local.pairedSessions.c,undefined);
+ await assert.rejects(access.api('/api/orchestration/dispatch',{type:'message.dispatch'},{sendTransmission:{
+  onMessageSent:()=>assert.fail('No message transmitted'),onThreadCreateSent:()=>assert.fail('No thread create transmitted'),
+ }}),/pairing was removed or changed before sending/);
+
+ const unsent={...plain,directPlan:uncertain.directPlan};
+ assert.ok(unsent.directPlan);
+ q.settings.pending.push(unsent);await q.save();
+ q.onunload();
+ await q.failRequest(unsent,Error('Request cancelled.'),'dispatch',Date.now());
+ const stored=await deviceState<{pending:Array<{id:string;cleanupOnly?:true}>}>(q.deviceId);
+ assert.equal(stored?.pending.some(item=>item.id===unsent.id),false);
+ assert.equal((localValues.get(`t3-send-failures-v1:${q.settings.vaultId}`) as any[]).at(-1).delivery,'not-started');
 });
 
 test('mobile OAuth sign-in discovers machines, persists credentials locally and ignores a cancelled response',async()=>{
