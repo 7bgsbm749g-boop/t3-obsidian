@@ -6,7 +6,7 @@ import {createRequire} from 'node:module';
 import {webcrypto,randomUUID} from 'node:crypto';
 import {captureCursorInsertion,resolveCursorInsertion} from '../src/notes/cursor-insertion';
 import {responseAnchor} from '../src/responses/native-response-projection';
-import {applyThreadItem} from '../src/conversations/inline-thread';
+import {applyThreadItem,initialRegion,regionBody} from '../src/conversations/inline-thread';
 import {installPaletteChat} from '../src/conversations/palette-chat';
 import {loadSmartSend} from '../src/notes/smart-send';
 import {sendDirect} from '../src/connection/direct';
@@ -15,7 +15,9 @@ const require=createRequire(import.meta.url);
 const compiled=build({stdin:{contents:"export {default} from './src/app/main'; export {RequestDeliveryError} from './src/app/bridge'; export {nativeResponses} from './src/responses/native-response-manager'; export {InlineChatManager} from './src/conversations/inline-chat';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',external:['obsidian'],write:false});
 async function fixture(document='First paragraph.\n\nLater paragraph.'){
   class Base{}
-  const api={Plugin:Base,MarkdownView:Base,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice:Base,Platform:{isMobile:false}};
+  const notices:string[]=[];
+  class Notice{constructor(text:string){notices.push(text);}}
+  const api={Plugin:Base,MarkdownView:Base,Modal:Base,FuzzySuggestModal:Base,EditorSuggest:Base,ItemView:Base,PluginSettingTab:Base,Notice,Platform:{isMobile:false}};
   const module={exports:{} as any};
   runInNewContext((await compiled).outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>id==='obsidian'?api:require(id),process,Buffer,Uint8Array,console,TextEncoder,TextDecoder,crypto:webcrypto,URL,setTimeout,clearTimeout,setInterval,clearInterval,performance,AbortController});
   let value=document,disk=document,cursor=document.indexOf('Later')-1,mode='source',active=true,selection: [number,number]|undefined;
@@ -24,7 +26,7 @@ async function fixture(document='First paragraph.\n\nLater paragraph.'){
   const view={file,editor,getViewData:()=>value,setViewData:(text:string)=>{value=text;},getMode:()=>mode,requestSave:()=>{},save:async()=>{disk=view.getViewData();}};
   const app={loadLocalStorage:()=>undefined,saveLocalStorage:()=>{},workspace:{getActiveFile:()=>file,getActiveViewOfType:()=>active?view:undefined,getLeavesOfType:()=>[{view}]},vault:{adapter:{getFullPath:(path:string)=>'/vault/'+path},getName:()=> 'Synthetic',getFileByPath:()=>file,read:async()=>disk}};
   const plugin=new module.exports.default();plugin.app=app;plugin.settings={inlineStreaming:{enabled:true},noteThreads:[]};plugin.save=async()=>{};
-  return {plugin,app,view,editor,file,exports:module.exports,value:()=>value,cursor:(offset:number)=>{cursor=offset;selection=undefined;},select:(from:number,to:number)=>{selection=[from,to];},active:(yes:boolean)=>{active=yes;},mode:(next:string)=>{mode=next;}};
+  return {plugin,app,view,editor,file,notices,exports:module.exports,value:()=>value,cursor:(offset:number)=>{cursor=offset;selection=undefined;},select:(from:number,to:number)=>{selection=[from,to];},active:(yes:boolean)=>{active=yes;},mode:(next:string)=>{mode=next;}};
 }
 
 test('whole-note Send shows Preparing before discovery, keeps Sending after selection, and clears failure',async()=>{
@@ -47,6 +49,21 @@ test('Inline Off does not create a preparation block',async()=>{
   h.plugin.chatTarget=async()=>{throw Error('Synthetic cancellation');};
   await assert.rejects(h.plugin.sendNote(h.file,undefined,undefined,true,undefined,{inline:{enabled:false,intermediateMode:'collapse',finalAnswerFormat:'formatted'}}),/Synthetic cancellation/);
   assert.equal(h.value(),original);
+});
+
+test('cleanup replay removes only the unchanged failed-send placeholder',async()=>{
+  const id=randomUUID(),placeholder=initialRegion(id);
+  const {body}=regionBody(placeholder.text,id)!;
+  for(const edited of [false,true]){
+    const reply=edited?placeholder.text.replace(body,'User edited this reply.'):placeholder.text;
+    const document='Before\n\n'+reply+'\n\nAfter',h=await fixture(document);
+    const request={id,cleanupOnly:true,connection:{},inlineHost:{id,notePath:h.file.path,initialHash:placeholder.bodyHash}};
+    h.plugin.settings.pending=[request];
+    await h.plugin.failRequest(request,Error('Replaying cleanup'),'startup-recovery',Date.now());
+    assert.equal(h.plugin.settings.pending.length,0);
+    if(edited)assert.equal(h.value(),document);
+    else assert.doesNotMatch(h.value(),/t3-inline:start:/);
+  }
 });
 
 test('Ask waits for its destination then shows the indicator and hands off to one real block',async()=>{
@@ -280,8 +297,7 @@ for(const race of ['unchanged','approval','stopped','draft-storage'])test(`a pre
   h.plugin.settings.pending=[];h.plugin.chatTarget=async()=>({project,link:{}});h.plugin.connection=()=>connection;
   h.plugin.projectReadinessError=()=>undefined;h.plugin.assertNoteMode=async()=>{};h.plugin.folderLinkIntent=()=>({});
   h.plugin.readChatThread=async()=>assert.fail('No second title-only read');
-  const diagnostics:string[]=[];
-  h.plugin.recordSendFailure=(_request:unknown,_error:unknown,stage:string)=>diagnostics.push(stage);
+  if(race!=='draft-storage')h.plugin.recordSendFailure=()=>{};
   h.plugin.failRequest=async()=>{if(race==='draft-storage')assert.fail('The message was already delivered');};
   let controls=0,mutations=0;const persisted:any[]=[];
   h.plugin.save=async()=>{persisted.push(structuredClone(h.plugin.settings.pending));};
@@ -298,7 +314,7 @@ for(const race of ['unchanged','approval','stopped','draft-storage'])test(`a pre
   h.plugin.prepareImages=async(markdown:string)=>{if(race==='stopped')h.plugin.stopped=true;return {markdown,attachments:[]};};
   const sending=h.plugin.sendChat('Question',undefined,{threadId:'t',preparation});
   if(race==='unchanged'||race==='draft-storage')await sending;else await assert.rejects(sending,race==='approval'?/approval/:/disabled/);
-  assert.equal(controls,race==='stopped'?0:1);assert.equal(mutations,race==='unchanged'||race==='draft-storage'?1:0);if(race==='draft-storage')assert.deepEqual(diagnostics,['draft-cleanup']);assert.equal(h.plugin.busy,false);
+  assert.equal(controls,race==='stopped'?0:1);assert.equal(mutations,race==='unchanged'||race==='draft-storage'?1:0);if(race==='draft-storage')assert.deepEqual(h.notices,['The device could not save the T3 send diagnostic log.']);assert.equal(h.plugin.busy,false);
 });
 
 for(const selected of [false,true])for(const ask of ['', 'Explain this.'])test(`unified composer routes ${selected?'selection':'note'} with ${ask?'an ask':'an empty ask'} and preserves its captured location`,async()=>{

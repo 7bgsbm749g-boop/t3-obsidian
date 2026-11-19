@@ -315,7 +315,7 @@ export default class SendToT3 extends Plugin {
     const derived=(part:string)=>{try{return request?commandId(request.id,part):undefined;}catch{return undefined;}};
     const failure:SendFailure={at:new Date().toISOString(),stage,elapsedMs:Math.max(0,Date.now()-startedAt),delivery:acceptedRequestThread(request)||request?.directPlan?.delivery||['delivery-evidence','local-confirmation'].includes(stage)?'accepted':uncertain?'unconfirmed':'not-started',...(request?{requestId:request.id,threadId:acceptedRequestThread(request)??request.threadId??derived('thread'),messageId:derived('message'),environmentId:request.connection.environmentId,bindingIds:(request.inlineBindings??(request.inlineHost?[request.inlineHost]:[])).map(binding=>binding.id)}:{}),error};
     logEvent('response.send.failure',failure as unknown as Record<string,unknown>,'error');
-    try{this.app.saveLocalStorage(this.failureKey(),appendSendFailure(this.app.loadLocalStorage(this.failureKey()),failure));}catch{new Notice('The send failed. The device could not save its failure log.',10000);}
+    try{this.app.saveLocalStorage(this.failureKey(),appendSendFailure(this.app.loadLocalStorage(this.failureKey()),failure));}catch{new Notice('The device could not save the T3 send diagnostic log.',10000);}
   }
   private async failRequest(request:Request,error:unknown,stage:string,startedAt:number,uncertain=false){
     if(this.failedRequests.has(request))return;this.failedRequests.add(request);
@@ -345,7 +345,7 @@ export default class SendToT3 extends Plugin {
     let cleanupFailed=false;
     for(const binding of bindings){
       if(binding.nativeProjection)try{await nativeResponses(this.app).stop(binding.id,binding.notePath,true);}catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
-      else try{await deviceNoteIO(this.app).updateNote(binding.notePath,document=>{const region=regionBody(document,binding.id);if(!region)return document;const change=finalizeRegion(document,binding.id,contentHash(region.body),'');return change?document.slice(0,change.from)+change.text+document.slice(change.to):document;},()=>!this.stopped);}catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
+      else try{await deviceNoteIO(this.app).updateNote(binding.notePath,document=>{const change=finalizeRegion(document,binding.id,binding.initialHash,'');return change?document.slice(0,change.from)+change.text+document.slice(change.to):document;},()=>!this.stopped);}catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
       try{
         if(this.deviceInline&&binding.localOnly)await this.deviceInline.failResponse(binding);
         else await this.stopHostedInline(binding.id,binding.host);

@@ -72,7 +72,12 @@ export async function connectT3Rpc(api:T3Api,origin:string,makeSocket:SocketFact
     const model=tag==='orchestration.launchThread'&&isRecord(payload)&&isRecord(payload.modelSelection)?payload.modelSelection:undefined;
     const disabledProviderFailure=model&&typeof model.instanceId==='string'&&isRecord(payload)&&typeof payload.projectId==='string'?`Provider instance "${model.instanceId}" is disabled for project ${payload.projectId}.`:undefined;
     pending.set(id,{resolve,reject,method:tag,started,disabledProviderFailure});
-    try{socket.send(JSON.stringify({_tag:'Request',id,tag,payload,headers:[]}));}catch{fail(Error('Cannot send the request to this machine.'));}
+    try{
+      const frame=JSON.stringify({_tag:'Request',id,tag,payload,headers:[]});
+      // Browsers silently drop sends after the socket starts closing.
+      if(typeof socket.readyState==='number'&&socket.readyState!==1){fail(Error('The connection to the selected machine closed. Try again.'));return;}
+      socket.send(frame);
+    }catch{fail(Error('Cannot send the request to this machine.'));}
     if(!closed)onSent?.();
     });
     return result;
