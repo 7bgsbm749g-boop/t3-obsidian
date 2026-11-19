@@ -1079,7 +1079,7 @@ test('a failed preparation neither stops the old stream nor confirms its added t
 test('mobile note send preserves YAML task IDs and adds the shared vault identity',async()=>{
  const h=await folderMenuHarness();
  try{
-  const {file}=h.fileMenu('Notes/Associated.md',false);Object.assign(file,{basename:'Associated',stat:{ctime:123}});
+  const {file}=h.fileMenu('Notes/Associated.md',true);Object.assign(file,{basename:'Associated',stat:{ctime:123}});
   const properties='---\ntaskflow-task-ids:\n  - 12345678-1234-4234-8234-123456789abc\naliases: [Example]\n---';
   let document=properties+'\n\nDo the assigned work.';const sent:any[]=[];
   h.plugin.app.vault.read=async()=>document;h.plugin.app.vault.getFileByPath=()=>file;
