@@ -563,6 +563,13 @@ export default class SendToT3 extends Plugin {
       },
       localBindings:()=>responseBindingRequests(this.settings.responseBindings??this.responseBindingReplica),
       saveLocalBinding:request=>this.saveResponseBinding(request),
+      rewriteLocalBinding:async(id,change)=>{
+        await this.save(true,bindings=>{
+          const request=bindings[id]?.request;
+          return request?.vaultId===this.settings.vaultId?updateResponseBindingData(bindings,change(request),this.deviceId):bindings;
+        });
+        return this.responseBindingReplica[id]?.request;
+      },
       retainLocalFinal:async update=>{await deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${update.request.id}`,retainedLocalFinal(update));},
       loadLocalFinal:async request=>restoredLocalFinal(await deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${request.id}`),request),
       localFinalDraft:async(document,request)=>{if(!request.localStage)return document;if(!request.localStage.transport)throw Error('Prepare this old staged edit again through T3 Connect.');return checkedStageDraft(document,request,await this.commandFiles(request.localStage.transport));},
@@ -3053,7 +3060,7 @@ export default class SendToT3 extends Plugin {
       inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},
       completion:{action:'keep',archiveFolder:''}};
   }
-  save(forceShared=false) {
+  save(forceShared=false,rewriteBindings?:(bindings:ResponseBindingData)=>ResponseBindingData) {
     this.smartPreparationSettingsRevision++;
     this.rememberProjectViews();
     this.refreshFolderIndicators();
@@ -3083,6 +3090,7 @@ export default class SendToT3 extends Plugin {
       snapshot.noteContexts=mergeNoteContexts(current?.noteContexts,intended.noteContexts,this.settings.noteContexts);
       snapshot.smartSend=mergeSmartSend(this.smartReplica,current?.smartSend,intended.smartSend);
       snapshot.responseBindings=mergeResponseBindingData(this.responseBindingReplica,current?.responseBindings,intended.responseBindings);
+      if(rewriteBindings)snapshot.responseBindings=rewriteBindings(snapshot.responseBindings);
       // Compatible replicas commit together before shared publication. The
       // pending/command checkpoint above remains its own awaited boundary.
       await writeDeviceStates([

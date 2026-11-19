@@ -21,6 +21,11 @@ function fixture(binding=request(),initial?:string,records:ResponseBindingData={
   let document=initial??`Before\n\n${responseAnchor(binding.id)}\n\nAfter`,open=true,ready=true,hold=false,now=0,writes=0;
   const callbacks=new Map<string,(update:DirectInlineUpdate)=>void>(),registered:any[]=[],errors:any[]=[],finished:string[]=[];
   const io:any={localBindings:()=>responseBindingRequests(records),saveLocalBinding:async(request:ResponseRequest)=>{records=updateResponseBindingData(records,request,'test');},openedNotes:()=>open?[{path:binding.notePath,document}]:[],readNote:async()=>document,updateNote:async(_path:string,change:(text:string)=>string)=>document=change(document),saveLocalNote:async()=>{},syncReady:()=>ready,isOpen:()=>open,access:async()=>{throw Error('No host or T3 access needed by this replay.');},receiveCoordinated:(record:any)=>registered.push(record),receiveDirect:()=>{},localCompleted:(id:string)=>finished.push(id),completionFailed:(error:any)=>errors.push(error)};
+  io.rewriteLocalBinding=async(id:string,change:(value:ResponseRequest)=>ResponseRequest)=>{
+    const before=records[id]?.request;
+    if(before)records=updateResponseBindingData(records,change(before),'test');
+    return records[id]?.request;
+  };
   io.loadStops=()=>stops;
   const notes={read:async(_path?:string):Promise<string|undefined>=>document,compareAndSet:async(_path:string,before:string,after:string,guard?:()=>boolean)=>{if(hold||document!==before||guard?.()===false)return false;document=after;writes++;return true;}};
   const manager=new LocalResponseManager(randomUUID(),'vault',io,notes,()=>now,(record,_access,receive)=>{callbacks.set(record.request.id,receive);return {tick:()=>{},update:()=>{},delivery:()=>{},reconnect:()=>{},suspend:()=>{},dispose:()=>{}} as any;});
@@ -50,6 +55,17 @@ test('failed follow-up restores the previous response only if it still owns the 
   await h.manager.discardFollow(h.binding.id,failed,h.binding.messageId);
   assert.equal(h.manager.request(h.binding.id)?.localMessageId,newer);
   assert.equal(h.writes(),0);
+  h.manager.dispose();
+});
+
+test('failed follow-up cleanup preserves a newer saved peer binding than the loaded reply',async()=>{
+  const h=fixture(),failed=randomUUID(),newer=randomUUID();
+  await h.manager.register(h.binding);
+  await h.manager.follow(h.binding.id,failed);
+  h.receiveRecords(updateResponseBindingData(h.records(),{...h.binding,localMessageId:newer},'peer'));
+  await h.manager.discardFollow(h.binding.id,failed,h.binding.messageId);
+  assert.equal(h.records()[h.binding.id].request.localMessageId,newer);
+  assert.equal(h.manager.request(h.binding.id)?.localMessageId,newer);
   h.manager.dispose();
 });
 

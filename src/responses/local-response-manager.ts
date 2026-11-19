@@ -452,16 +452,12 @@ export class LocalResponseManager {
   }
   private async discardInput(id:string,change:(request:ResponseRequest)=>ResponseRequest){
     if(this.closed)throw Error('Failed send cleanup is waiting for Obsidian to reopen.');
-    const runtime=this.jobs.get(id);
-    const before=runtime?.request??this.index(this.stored()).get(id);
-    if(!before)return;
-    const next=change(before);
-    if(next===before)return;
-    // This rolls back metadata for one known-unsent input. The note and its
-    // reply stay in place, including when no pane or reply runtime is open.
-    if(!this.io.saveLocalBinding)throw Error('Shared response storage is unavailable.');
-    await this.io.saveLocalBinding(next);
-    if(runtime&&!runtime.done&&!runtime.stopped&&runtime.request===before)this.adopt(next);
+    const runtime=this.jobs.get(id),before=runtime?.request;
+    // Check the latest shared binding at the save boundary. A stale runtime
+    // must never restore a predecessor over a newer follow-up from a peer.
+    if(!this.io.rewriteLocalBinding)throw Error('Shared response storage is unavailable.');
+    const next=await this.io.rewriteLocalBinding(id,change);
+    if(next&&runtime&&!runtime.done&&!runtime.stopped&&runtime.request===before)this.adopt(next);
   }
   discardSteering(id:string,messageId:string){
     return this.discardInput(id,request=>request.localSteering?.some(input=>input.messageId===messageId&&!input.confirmed)?
