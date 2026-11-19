@@ -53,6 +53,22 @@ test('failed follow-up restores the previous response only if it still owns the 
   h.manager.dispose();
 });
 
+test('startup can discard failed input from a saved binding without loading its note',async()=>{
+  const binding=request(),failed=randomUUID(),kept=randomUUID();
+  const stored={...binding,localMessageId:failed,localSteering:[{messageId:failed,text:'Failed',before:[]},{messageId:kept,text:'Accepted',before:[],confirmed:true}]};
+  const h=fixture(binding,undefined,updateResponseBindingData({},stored,'test'));
+  h.open(false);
+  h.io.readNote=()=>assert.fail('Cleanup should not open or read the note');
+  await h.manager.discardSteering(binding.id,failed);
+  await h.manager.discardFollow(binding.id,failed,binding.messageId);
+  const [clean]=responseBindingRequests(h.records());
+  assert.equal(clean.localMessageId,binding.messageId);
+  assert.deepEqual(clean.localSteering?.map(input=>input.messageId),[kept]);
+  assert.equal(h.manager.has(binding.id),false);
+  assert.equal(h.writes(),0);
+  h.manager.dispose();
+});
+
 test('reload restores Working and its watch before the saved note is opened',async()=>{
   const binding=request(),h=fixture(binding,undefined,updateResponseBindingData({},binding,'A'));h.open(false);
   let ticks=0;await recover(h);

@@ -450,14 +450,25 @@ export class LocalResponseManager {
     if(existing){if(existing.text!==input.text||JSON.stringify([existing.selection,existing.selections,existing.sourceResponseId])!==JSON.stringify([input.selection,input.selections,input.sourceResponseId]))throw Error('This steering ID already belongs to another message.');return Promise.resolve();}
     return this.changeBinding(id,request=>({...request,localSteering:[...request.localSteering??[],{...input,confirmed:false,before:this.jobs.get(id)?.preview.steeringProse?.()??[]}]}));
   }
+  private async discardInput(id:string,change:(request:ResponseRequest)=>ResponseRequest){
+    if(this.closed)throw Error('Failed send cleanup is waiting for Obsidian to reopen.');
+    const runtime=this.jobs.get(id);
+    const before=runtime?.request??this.index(this.stored()).get(id);
+    if(!before)return;
+    const next=change(before);
+    if(next===before)return;
+    // This rolls back metadata for one known-unsent input. The note and its
+    // reply stay in place, including when no pane or reply runtime is open.
+    if(!this.io.saveLocalBinding)throw Error('Shared response storage is unavailable.');
+    await this.io.saveLocalBinding(next);
+    if(runtime&&!runtime.done&&!runtime.stopped&&runtime.request===before)this.adopt(next);
+  }
   discardSteering(id:string,messageId:string){
-    const request=this.jobs.get(id)?.request;
-    if(!request?.localSteering?.some(input=>input.messageId===messageId&&!input.confirmed))return Promise.resolve();
-    return this.changeBinding(id,request=>({...request,localSteering:request.localSteering?.filter(input=>input.messageId!==messageId||input.confirmed)}));
+    return this.discardInput(id,request=>request.localSteering?.some(input=>input.messageId===messageId&&!input.confirmed)?
+      {...request,localSteering:request.localSteering.filter(input=>input.messageId!==messageId||input.confirmed)}:request);
   }
   discardFollow(id:string,messageId:string,previousMessageId:string){
-    if(this.jobs.get(id)?.request.localMessageId!==messageId)return Promise.resolve();
-    return this.follow(id,previousMessageId,undefined,messageId);
+    return this.discardInput(id,request=>request.localMessageId===messageId?{...request,localMessageId:previousMessageId}:request);
   }
   renamed(before:string,after:string){
     for(const request of [...this.stored(),...[...this.jobs.values()].map(runtime=>runtime.request)]){const path=this.destination(request);if(path===before||path.startsWith(before+'/')){const old=this.moves.get(request.id),from=old?.from??new Set<string>();from.add(request.notePath);from.add(path);this.moves.set(request.id,{from,to:after+path.slice(before.length)});}}for(const [path,note] of [...this.recoveryNotes])if(path===before||path.startsWith(before+'/')){note.version++;this.recoveryNotes.delete(path);this.recoveryNotes.set(after+path.slice(before.length),{...note,pending:true,retryAt:0});}for(const runtime of this.jobs.values())if(runtime.request.notePath===before||runtime.request.notePath.startsWith(before+'/')){runtime.request={...runtime.request,notePath:after+runtime.request.notePath.slice(before.length)};runtime.retryAt=0;}}
