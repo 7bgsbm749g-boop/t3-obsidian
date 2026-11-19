@@ -38,7 +38,7 @@ test('portable fingerprints stay compatible with existing desktop jobs',()=>{
 });
 
 test('direct pairing works in mobile bundle, keeps sessions local, and never replays a failed send',async()=>{
- let local:any={mode:'direct',pairedSessions:{c:{url:'https://t3.example',environmentId:'env',token:'private-session',expiresAt:Date.now()+600000}}};
+ let local:any={mode:'direct',pairedSessions:{c:{url:'https://t3.example',environmentId:'env',token:'private-session',expiresAt:Date.now()+600000,permissions:['orchestration:read','orchestration:operate']}}};
  const shared:any[]=[];let lose=true,failTicket=false;const commands:any[]=[];
  let holdUpload:((resume:()=>void)=>void)|undefined;
  const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=';
@@ -113,21 +113,31 @@ test('direct pairing works in mobile bundle, keeps sessions local, and never rep
  assert.ok(local.pairedSessions.c.token);assert.ok(!JSON.stringify(sent).includes('private-session'));
  failTicket=false;
  const {inlineHost:_,...plain}=makeRequest('5c7e2000-45f1-4a04-9df2-3847a4f533f5');
- const uploading=new Promise<()=>void>(resolve=>holdUpload=resolve);
  const access=await q.pairedThreadAccess(q.settings.paired[0]);
- const dispatching=access.api('/api/orchestration/dispatch',{type:'message.dispatch',threadId:'thread',messageId:'message',text:'Prompt',attachments:[{type:'image',id:'photo',name:'photo.png',mimeType:'image/png',sizeBytes:1,dataUrl:'data:image/png;base64,eA=='}]},{
+ const sendOptions={
   sendTransmission:{onMessageSent:()=>assert.fail('No message transmitted'),onThreadCreateSent:()=>assert.fail('No thread create transmitted')},
- });
- const pairingFailure=assert.rejects(dispatching,/pairing was removed or changed before sending/);
- const resumeUpload=await uploading;
+ };
+ const startUpload=(expected:RegExp)=>{
+  const uploading=new Promise<()=>void>(resolve=>holdUpload=resolve);
+  const dispatching=access.api('/api/orchestration/dispatch',{type:'message.dispatch',threadId:'thread',messageId:'message',text:'Prompt',attachments:[{type:'image',id:'photo',name:'photo.png',mimeType:'image/png',sizeBytes:1,dataUrl:'data:image/png;base64,eA=='}]},sendOptions);
+  return {uploading,failure:assert.rejects(dispatching,expected)};
+ };
+ const changed=startUpload(/pairing permissions changed before sending/);
+ const resumeChangedUpload=await changed.uploading;
+ q.replacePairedSession('c',{...q.pairedSessions.c,permissions:['orchestration:read']});
+ await changed.failure;resumeChangedUpload();
+ const stale=startUpload(/pairing permissions changed before sending/);
+ const resumeStaleUpload=await stale.uploading;
+ q.pairedSessions.c={...q.pairedSessions.c,permissions:[]};
+ resumeStaleUpload();await stale.failure;
+ const forgotten=startUpload(/pairing was removed or changed before sending/);
+ const resumeForgottenUpload=await forgotten.uploading;
  q.refreshProjectsInBackground=()=>{};
  await q.forgetPairing('c');
- resumeUpload();await pairingFailure;
+ await forgotten.failure;resumeForgottenUpload();
  assert.equal(commands.length,4);
  assert.equal(local.pairedSessions.c,undefined);
- await assert.rejects(access.api('/api/orchestration/dispatch',{type:'message.dispatch'},{sendTransmission:{
-  onMessageSent:()=>assert.fail('No message transmitted'),onThreadCreateSent:()=>assert.fail('No thread create transmitted'),
- }}),/pairing was removed or changed before sending/);
+ await assert.rejects(access.api('/api/orchestration/dispatch',{type:'message.dispatch'},sendOptions),/pairing was removed or changed before sending/);
 
  const unsent={...plain,directPlan:uncertain.directPlan};
  assert.ok(unsent.directPlan);

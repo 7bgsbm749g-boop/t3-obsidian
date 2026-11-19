@@ -248,10 +248,26 @@ export default class SendToT3 extends Plugin {
   private projectCreateModal?:ProjectCreateModal;
   private commandHosts=new Map<string,{host:ConnectCommandHost;rpc:Awaited<ReturnType<typeof connectT3Rpc>>;files:CommandFiles}>();
   private commandProjects=new Map<string,Project>();
-  private verifiedConnections=new RouteAuthorizationCache<Awaited<ReturnType<typeof environmentApi>>>();
+  private verifiedConnections=new RouteAuthorizationCache<{api:T3Api;authority:string}>();
   private unaryCredentialKey(paired:PairedConnection,session:PairedSession|undefined){return JSON.stringify([paired.url,paired.environmentId,session?.token,session?.expiresAt,session?.dpopKeyId,session?.accountId,session?.permissions]);}
   private unaryOwners=new Map<string,{key:string;pool:T3UnaryRpcOwner}>();
-  private pairingGenerations=new Map<string,object>();
+  private sendPairings=new Map<string,{preparing:AbortController}>();
+  private sendAuthority(session:PairedSession|undefined){return JSON.stringify([session?.accountId,[...new Set(session?.permissions)].sort()]);}
+  private replacePairedSession(id:string,session:PairedSession){
+    const pairing=this.sendPairings.get(id);
+    const previous=this.pairedSessions[id];
+    this.pairedSessions[id]=session;
+    if(pairing&&previous&&this.sendAuthority(previous)!==this.sendAuthority(session)){
+      const preparing=pairing.preparing;
+      pairing.preparing=new AbortController();
+      preparing.abort(Error('The T3 pairing permissions changed before sending.'));
+    }
+  }
+  private invalidateSendPairing(id:string){
+    const pairing=this.sendPairings.get(id);
+    this.sendPairings.delete(id);
+    pairing?.preparing.abort(Error('The T3 pairing was removed or changed before sending.'));
+  }
   private disposeUnaryOwner(id:string){const owner=this.unaryOwners.get(id);if(owner){owner.pool.dispose();this.verifiedConnections.delete(owner.key);this.unaryOwners.delete(id);}}
   private disposeUnaryOwners(){for(const id of this.unaryOwners.keys())this.disposeUnaryOwner(id);}
   private importPreparation=new Set<AbortController>();
@@ -2059,11 +2075,11 @@ export default class SendToT3 extends Plugin {
   private async pairedThreadAccess(paired:PairedConnection,forceRefresh=false,signal?:AbortSignal):Promise<ThreadAccess>{
     const environmentId=paired.environmentId;
     const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId,connectionId:paired.id};
-    const pairingGeneration=this.pairingGenerations.get(paired.id)??{};
-    this.pairingGenerations.set(paired.id,pairingGeneration);
+    const pairing=this.sendPairings.get(paired.id)??{preparing:new AbortController()};
+    this.sendPairings.set(paired.id,pairing);
     const assertSendPairing=()=>{
       const route=this.settings.paired.find(candidate=>candidate.id===paired.id);
-      if(this.pairingGenerations.get(paired.id)!==pairingGeneration||!this.pairedSessions[paired.id]||!route||route.url!==connection.url||route.environmentId!==environmentId)throw Error('The T3 pairing was removed or changed before sending.');
+      if(this.sendPairings.get(paired.id)!==pairing||!this.pairedSessions[paired.id]||!route||route.url!==connection.url||route.environmentId!==environmentId)throw Error('The T3 pairing was removed or changed before sending.');
     };
     let session=await abortableRead(this.sessionFor(paired.id,forceRefresh),signal);requestAborted(signal);
     // Verify authorization before exposing a candidate to sends or writes.
@@ -2076,11 +2092,13 @@ export default class SendToT3 extends Plugin {
     this.unaryOwners.set(paired.id,{key,pool});
     while(this.unaryOwners.size>16)this.disposeUnaryOwner(this.unaryOwners.keys().next().value!);
     const verified=(ownerKey:string,credential:PairedSession|undefined,owner:T3UnaryRpcOwner,force=false)=>this.verifiedConnections.open(ownerKey,async setupSignal=>{
+      const authority=this.sendAuthority(credential);
       const candidate=await environmentApi(connection,credential,undefined,undefined,setupSignal,owner);
-      await this.routeStatus.request(paired.id,()=>verifyOrchestrationRead((path,payload)=>candidate(path,payload,{signal:setupSignal})));return candidate;
+      await this.routeStatus.request(paired.id,()=>verifyOrchestrationRead((path,payload)=>candidate(path,payload,{signal:setupSignal})));
+      return {api:candidate,authority};
     },force,(credential?.expiresAt??0)-5000,this.connectionSetupOwner.signal);
     const opening=verified(key,session,pool,forceRefresh);
-    let api:T3Api=await abortableRead(opening,signal);requestAborted(signal);
+    let authorized=await abortableRead(opening,signal);requestAborted(signal);
     if(this.stopped||this.unaryOwners.get(paired.id)?.pool!==pool){pool.dispose();throw Error('The connection owner changed.');}
     if(!Platform.isMobile&&localRoute(paired))this.eventLocalEnvironmentId=environmentId;
     const current=async(signal?:AbortSignal)=>{
@@ -2101,22 +2119,22 @@ export default class SendToT3 extends Plugin {
       const freshApi=await abortableRead(opening,signal);requestAborted(signal);
       const live=this.settings.paired.find(candidate=>candidate.id===paired.id);
       if(this.stopped||this.unaryOwners.get(paired.id)?.pool!==freshPool||!live||live.url!==connection.url||live.environmentId!==environmentId){freshPool.dispose();throw Error('The connection owner changed.');}
-      session=credential;key=freshKey;pool=freshPool;api=freshApi;
+      session=credential;key=freshKey;pool=freshPool;authorized=freshApi;
     };
     let renewing:Promise<void>|undefined;
-    const renew=async(attemptedApi:typeof api)=>{
+    const renew=async(attempted:typeof authorized)=>{
       await current();
-      if(api!==attemptedApi)return;
+      if(authorized!==attempted)return;
       renewing??=(async()=>{
         const started=Date.now(),fields={environmentId,routeId:paired.id,cause:'http-401',status:401};logEvent('connection.auth.renewing',fields);
         try{
           session=await this.sessionFor(paired.id,true);
           const freshKey=this.unaryCredentialKey(paired,session),current=this.unaryOwners.get(paired.id);
           if(current&&(current.pool===pool||current.key!==freshKey))this.disposeUnaryOwner(paired.id);
-          attemptedApi.disposeUnaryRpc?.();
+          attempted.api.disposeUnaryRpc?.();
           const freshPool=this.unaryOwners.get(paired.id)?.pool??new T3UnaryRpcOwner();
           this.unaryOwners.set(paired.id,{key:freshKey,pool:freshPool});
-          api=await verified(freshKey,session,freshPool);
+          authorized=await verified(freshKey,session,freshPool);
           if(this.stopped||this.unaryOwners.get(paired.id)?.pool!==freshPool){freshPool.dispose();throw Error('The connection owner changed.');}
           key=freshKey;pool=freshPool;
           logEvent('connection.auth.recovered',{...fields,elapsedMs:Date.now()-started});
@@ -2125,42 +2143,47 @@ export default class SendToT3 extends Plugin {
       await renewing;
     };
     const routed:ThreadAccess['api']=async(path,payload,options)=>this.routeStatus.request(paired.id,async()=>{
-      let attemptedApi:T3Api|undefined;
-      try{
-        if(options?.sendTransmission){
+      let attempted:typeof authorized|undefined;
+      const call=(target:typeof authorized)=>{
+        if(!options?.sendTransmission)return target.api(path,payload,options);
+        assertSendPairing();
+        return target.api(path,payload,{...options,sendPreparationSignal:pairing.preparing.signal,beforeSendTransmission:()=>{
           assertSendPairing();
-          options={...options,beforeSendTransmission:assertSendPairing};
-        }
-        await current(options?.signal);attemptedApi=api;
-        try{return await attemptedApi(path,payload,options);}catch(error){
+          if(this.sendAuthority(this.pairedSessions[paired.id])!==target.authority)throw Error('The T3 pairing permissions changed before sending.');
+        }});
+      };
+      try{
+        if(options?.sendTransmission)assertSendPairing();
+        await current(options?.signal);attempted=authorized;
+        try{return await call(attempted);}catch(error){
           // The send adapter can return HTTP 401 only before handing off the
           // orchestration command. The command itself returns an RPC result.
           const sendSetup=!!options?.sendTransmission&&['/api/orchestration/dispatch','/api/orchestration/launch'].includes(path);
           const safe=payload===undefined||sendSetup||['/api/auth/websocket-ticket','/api/orchestration/turn-item','/api/assets/create-url'].includes(path);
           if(!(error instanceof T3HttpError)||error.status!==401||!paired.managed||!safe)throw error;
-          options?.beforeSendTransmission?.();
-          await abortableRead(renew(attemptedApi),options?.signal);requestAborted(options?.signal);
-          attemptedApi=api;return await attemptedApi(path,payload,options);
+          if(options?.sendTransmission)assertSendPairing();
+          await abortableRead(renew(attempted),options?.signal);requestAborted(options?.signal);
+          attempted=authorized;return await call(attempted);
         }
-      }catch(error){requestAborted(options?.signal);if(error instanceof T3HttpError&&(error.status===401||error.status===403)&&api===attemptedApi){this.verifiedConnections.delete(key);if(this.unaryOwners.get(paired.id)?.pool===pool)this.disposeUnaryOwner(paired.id);api.disposeUnaryRpc?.();}this.routeFailures.set(paired.id,message(error));throw error;}
+      }catch(error){requestAborted(options?.signal);if(error instanceof T3HttpError&&(error.status===401||error.status===403)&&authorized===attempted){this.verifiedConnections.delete(key);if(this.unaryOwners.get(paired.id)?.pool===pool)this.disposeUnaryOwner(paired.id);authorized.api.disposeUnaryRpc?.();}this.routeFailures.set(paired.id,message(error));throw error;}
     });
     routed.acquireUnaryRpc=signal=>this.routeStatus.request(paired.id,async()=>{
       await current(signal);
-      const attemptedApi=api;
+      const attempted=authorized;
       let rpc:Awaited<ReturnType<typeof connectT3Rpc>>;
-      try{rpc=await attemptedApi.acquireUnaryRpc!(signal);}catch(error){
+      try{rpc=await attempted.api.acquireUnaryRpc!(signal);}catch(error){
         // Acquisition has sent no unary operation, so only ticket issuance can
         // be repeated. Calls on the returned lease are never replayed.
         if(!(error instanceof T3HttpError)||error.status!==401||!paired.managed)throw error;
-        await abortableRead(renew(attemptedApi),signal);requestAborted(signal);rpc=await api.acquireUnaryRpc!(signal);
+        await abortableRead(renew(attempted),signal);requestAborted(signal);rpc=await authorized.api.acquireUnaryRpc!(signal);
       }
       this.routeStatus.track(paired.id,rpc);return rpc;
     });
     routed.trackConnection=connection=>this.routeStatus.track(paired.id,connection);
-    routed.cachedImportThreads=projectId=>api.cachedImportThreads?.(projectId);
-    Object.defineProperty(routed,'importCacheIdentity',{get:()=>api.importCacheIdentity});
-    routed.prepareImportCatalog=async signal=>{await current(signal);await api.prepareImportCatalog?.(signal);};
-    routed.watchImportThreads=(projectId,changed)=>api.watchImportThreads?.(projectId,changed)??(()=>{});
+    routed.cachedImportThreads=projectId=>authorized.api.cachedImportThreads?.(projectId);
+    Object.defineProperty(routed,'importCacheIdentity',{get:()=>authorized.api.importCacheIdentity});
+    routed.prepareImportCatalog=async signal=>{await current(signal);await authorized.api.prepareImportCatalog?.(signal);};
+    routed.watchImportThreads=(projectId,changed)=>authorized.api.watchImportThreads?.(projectId,changed)??(()=>{});
     return {origin:endpoint(paired.url),diagnosticRoute:{routeId:paired.id,environmentId,routeKind:localRoute(paired)?'local':'remote'},get expiresAt(){return session?.expiresAt;},api:routed};
   }
   private async localInlineEnvironment():Promise<string>{
@@ -2670,7 +2693,8 @@ export default class SendToT3 extends Plugin {
     if(!existing)this.settings.paired.push(c);
     if(method&&method!=='connect')c.routeKind=method;
     this.noProjectProjects.delete(c.id);this.noProjectIdentities.delete(c.id);
-    this.pairedSessions[c.id]=result.session;this.settings.directScanId=c.id;this.mode='direct';await this.save();
+    if(existing)this.invalidateSendPairing(c.id);
+    this.replacePairedSession(c.id,result.session);this.settings.directScanId=c.id;this.mode='direct';await this.save();
     this.syncProjectSources();this.deviceInline?.reconnect();await this.htmlResults?.recover(c.environmentId);
     await this.projectDiscovery?.refresh(true);
   }
@@ -2778,7 +2802,7 @@ export default class SendToT3 extends Plugin {
       requestAborted(signal);
       if(this.stopped||this.nativeAccount!==account||generation!==this.cloudGeneration||!this.settings.paired.includes(c)||c.url!==url||c.environmentId!==environmentId||this.pairedSessions[id]!==session)throw Error('Connection cancelled.');
       stage='save-session';
-      next.accountId=account.userId;this.pairedSessions[id]=next;await this.save();return next;
+      next.accountId=account.userId;this.replacePairedSession(id,next);await this.save();return next;
     },this.connectionSetupOwner.signal,()=>stage);
     const renewal={work,stage:()=>stage};
     this.sessionRefreshing.set(id,renewal);
@@ -2802,7 +2826,7 @@ export default class SendToT3 extends Plugin {
     if(!active())throw Error('Connection cancelled.');
     const changed=!existing||!c.managed||c.name!==m.name;
     if(!this.settings.paired.includes(c))this.settings.paired.push(c);
-    c.managed=true;c.name=m.name;session.accountId=account.userId;this.pairedSessions[c.id]=session;
+    c.managed=true;c.name=m.name;session.accountId=account.userId;this.replacePairedSession(c.id,session);
     if(changed)await this.save();else await this.saveDeviceState();
     return c;
   }
@@ -3041,7 +3065,7 @@ export default class SendToT3 extends Plugin {
     this.signInEmail=this.nativeAccount?.identity??this.signInEmail;this.signInExpired=expired;
     this.noProjectProjects.clear();this.noProjectIdentities.clear();
     this.disposeUnaryOwners();this.cancelCloudLogin(reason);this.nativeAccount=null;this.nativeToken=undefined;this.nativeRefreshing=undefined;this.sessionRefreshing.clear();
-    for(const [id,s] of Object.entries(this.pairedSessions))if(s.accountId){delete this.pairedSessions[id];this.pairingGenerations.delete(id);}
+    for(const [id,s] of Object.entries(this.pairedSessions))if(s.accountId){delete this.pairedSessions[id];this.invalidateSendPairing(id);}
     this.cloudAccount=null;this.cloudMachines=[];this.accountCandidates.clear();this.registryNextAttempt=0;this.cloudError='';this.machineErrors={};this.connectionSyncComplete=false;this.machineRefreshing=undefined;this.cloudRefreshing=undefined;
     // Clear only device credentials. Keep synced links, bindings and choices.
     // Cancelled setup readers can return before persistence finishes. Publish
@@ -3053,10 +3077,10 @@ export default class SendToT3 extends Plugin {
     const old=this.nativeAccount;await this.clearAccount(false);
     if(old)try{await revokeNativeAccount(old,nativeAccountFetch);}catch{new Notice('Signed out on this device. T3 could not be reached to revoke the account session; you can revoke it in your T3 account.');}
   }
-  async forgetPairing(id:string){this.pairingGenerations.delete(id);this.disposeUnaryOwner(id);this.noProjectProjects.delete(id);this.noProjectIdentities.delete(id);delete this.pairedSessions[id];this.projectDiscovery?.invalidate();await this.save();this.refreshProjectsInBackground(true);}
+  async forgetPairing(id:string){this.invalidateSendPairing(id);this.disposeUnaryOwner(id);this.noProjectProjects.delete(id);this.noProjectIdentities.delete(id);delete this.pairedSessions[id];this.projectDiscovery?.invalidate();await this.save();this.refreshProjectsInBackground(true);}
   async removeConnection(id:string){
     if(this.settings.pending.some(r=>!r.cleanupOnly&&r.connection.connectionId===id)||this.settings.completionJobs.some(j=>j.connection.connectionId===id&&j.status==='watching')||this.settings.settlementJobs.some(j=>j.connection.connectionId===id))throw Error('This connection has an unconfirmed request or completion check. Resolve or stop it before removing the connection.');
-    this.pairingGenerations.delete(id);this.disposeUnaryOwner(id);this.projectDiscovery?.invalidate();for(const [key,c] of this.accountCandidates)if(c.id===id)this.accountCandidates.delete(key);
+    this.invalidateSendPairing(id);this.disposeUnaryOwner(id);this.projectDiscovery?.invalidate();for(const [key,c] of this.accountCandidates)if(c.id===id)this.accountCandidates.delete(key);
     this.noProjectProjects.delete(id);this.noProjectIdentities.delete(id);
     this.settings.paired=this.settings.paired.filter(c=>c.id!==id);this.settings.directProjects=this.settings.directProjects.filter(p=>p.connectionId!==id);this.settings.directSelected=this.settings.directSelected.filter(k=>!k.startsWith(id+':'));delete this.pairedSessions[id];if(this.settings.directScanId===id)this.settings.directScanId=this.settings.paired[0]?.id??'';this.syncProjectSources();await this.save();
   }
