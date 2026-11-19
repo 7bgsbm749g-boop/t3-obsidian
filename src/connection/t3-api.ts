@@ -2,13 +2,16 @@ import {outgoingMessage,type OutgoingMessage} from './send-contracts';
 import {readRawSnapshot,readHistory,readThreadList} from './wire-readers';
 import type {WireSnapshot,WireMessage,WireTurnItem} from './wire-types';
 import {toError,isRecord} from '../shared/values';
-import {T3UnaryRpcPool,type T3UnaryRpcOwner,connectT3Rpc,type T3Api,type SocketFactory} from './t3-rpc';
+import {T3UnaryRpcPool,type T3UnaryRpcOwner,connectT3Rpc,type T3Api,type T3RpcConnection,type SocketFactory} from './t3-rpc';
 import {normalizeV2Snapshot,restoreCompactSnapshot,v2Command} from './orchestration-v2';
 import {htmlRenderFromToolItem} from '../responses/html-results';
+import {scheduleTimeout,cancelTimeout,type TimerHandle} from '../shared/clock';
 
 interface Attachment {id:string;dataUrl?:string;type?:string;name?:string;mimeType?:string;sizeBytes?:number}
 
-export interface T3RequestOptions {beforeThreadCreate?:()=>void|Promise<void>;signal?:AbortSignal;compactImport?:boolean;deferHistoricalDetails?:{messageIds:string[];turnIds:string[]};continueHistory?:()=>boolean;onImportSnapshot?:(snapshot:import('./wire-types').ThreadSnapshot)=>void}
+export const SEND_ACKNOWLEDGEMENT_MS=120_000;
+export interface SendTransmission {onMessageSent:()=>void;onThreadCreateSent:()=>void}
+export interface T3RequestOptions {beforeThreadCreate?:()=>void|Promise<void>;beforeSendTransmission?:()=>void;sendPreparationSignal?:AbortSignal;sendTransmission?:SendTransmission;signal?:AbortSignal;compactImport?:boolean;deferHistoricalDetails?:{messageIds:string[];turnIds:string[]};continueHistory?:()=>boolean;onImportSnapshot?:(snapshot:import('./wire-types').ThreadSnapshot)=>void}
 export type AbortableT3Api=(path:string,payload?:unknown,options?:T3RequestOptions)=>Promise<unknown>;
 
 export function cancelledRequest(message='Request cancelled.'):Error{return typeof DOMException==='function'?new DOMException(message,'AbortError'):Object.assign(Error(message),{name:'AbortError'});}
@@ -32,6 +35,57 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
   const outputSizes=new Map<string,number>();let outputCharacters=0;
   const senderTitles=new Map<string,string|undefined>();let senderRefresh=-Infinity;
   const uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+  async function mutate(options:T3RequestOptions|undefined,run:(rpc:T3RpcConnection,submit:T3RpcConnection['call'])=>Promise<unknown>){
+    const signal=options?.signal;
+    if(!options?.sendTransmission){
+      const rpc=await unary.acquire(signal);
+      try{return await run(rpc,(tag,payload)=>{requestAborted(signal);return rpc.call(tag,payload);});}finally{rpc.close();}
+    }
+    // An explicit send owns its connection. Background verification or
+    // credential renewal can retire the read pool while this call is active.
+    const isolated=new T3UnaryRpcPool(raw,origin,makeSocket);
+    const controller=new AbortController(),authority=options.sendPreparationSignal;
+    const cancelRequest=()=>controller.abort(signal?.reason);
+    const cancelPreparation=()=>controller.abort(authority?.reason);
+    const expired=()=>Error('The T3 pairing session expired before sending.');
+    let expiry:TimerHandle|undefined,acknowledgement:TimerHandle|undefined;
+    const expire=()=>{
+      const remaining=validUntil-Date.now();
+      if(remaining<=0)controller.abort(expired());
+      else expiry=scheduleTimeout(expire,Math.min(remaining,2_147_483_647));
+    };
+    const finishPreparation=()=>{cancelTimeout(expiry);expiry=undefined;authority?.removeEventListener('abort',cancelPreparation);};
+    const checkTransmission=()=>{
+      requestAborted(controller.signal);
+      if(Date.now()>=validUntil)throw expired();
+      options.beforeSendTransmission?.();
+    };
+    try{
+      if(signal?.aborted)cancelRequest();else signal?.addEventListener('abort',cancelRequest,{once:true});
+      if(authority?.aborted)cancelPreparation();else authority?.addEventListener('abort',cancelPreparation,{once:true});
+      if(Number.isFinite(validUntil))expire();
+      checkTransmission();
+      const rpc=await isolated.acquire(controller.signal);
+      try{
+        checkTransmission();
+        return await abortableRead(run(rpc,(tag,payload,onSent)=>{
+          checkTransmission();
+          // Bound the confirmation wait separately from credential lifetime.
+          // The caller can recover a transmitted command without replaying it.
+          return rpc.call(tag,payload,()=>{
+            finishPreparation();
+            acknowledgement=scheduleTimeout(()=>controller.abort(Error('Timed out waiting for the T3 acknowledgement.')),SEND_ACKNOWLEDGEMENT_MS);
+            onSent?.();
+          });
+        }),controller.signal);
+      }finally{rpc.close();}
+    }finally{
+      finishPreparation();
+      cancelTimeout(acknowledgement);
+      signal?.removeEventListener('abort',cancelRequest);
+      isolated.dispose();
+    }
+  }
   async function persistAttachments<T extends OutgoingMessage>(rpc:Awaited<ReturnType<typeof connectT3Rpc>>,threadId:string,message:T){
     const uploads=message.attachments.filter(a=>typeof a.dataUrl==='string');
     if(!uploads.length)return message;
@@ -140,15 +194,14 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
     }
     // Internal route for a new auto-titled thread and its immutable first send.
     if(path==='/api/orchestration/launch'){
-      const rpc=await unary.acquire(options?.signal);
-      try{
+      return mutate(options,async (rpc,submit)=>{
         if(!isRecord(payload)||typeof payload.threadId!=='string')throw Error('Invalid T3 launch identity.');
         const initialMessage=await persistAttachments(rpc,payload.threadId,outgoingMessage(payload.initialMessage));
         // Reservation follows uploads but precedes the creation RPC: failed uploads
         // leave no orphan, while an uncertain creation retains its retry record.
-        await options?.beforeThreadCreate?.();requestAborted(options?.signal);
-        return await rpc.call('orchestration.launchThread',{...payload,initialMessage});
-      }finally{rpc.close();}
+        await options?.beforeThreadCreate?.();
+        return submit('orchestration.launchThread',{...payload,initialMessage},options?.sendTransmission?.onMessageSent);
+      });
     }
     if(path==='/api/orchestration/dispatch'){
       if(!isRecord(payload))throw Error('Invalid saved T3 dispatch.');
@@ -184,12 +237,12 @@ export function t3Api(raw:AbortableT3Api,origin:string,makeSocket?:SocketFactory
           }
         }
       }
-      const rpc=await unary.acquire(options?.signal);
-      try{
+      return mutate(options,async (rpc,submit)=>{
         if(command.type==='message.dispatch'){if(typeof command.threadId!=='string')throw Error('Invalid saved T3 thread identity.');command={...command,...await persistAttachments(rpc,command.threadId,outgoingMessage(command))};}
-        if(command.type==='thread.create'){await options?.beforeThreadCreate?.();requestAborted(options?.signal);}
-        return await rpc.call('orchestration.dispatchCommand',command);
-      }finally{rpc.close();}
+        if(command.type==='thread.create')await options?.beforeThreadCreate?.();
+        const sent=command.type==='message.dispatch'?options?.sendTransmission?.onMessageSent:command.type==='thread.create'?options?.sendTransmission?.onThreadCreateSent:undefined;
+        return submit('orchestration.dispatchCommand',command,sent);
+      });
     }
     // turnLimit/reasoningMessages were v1 query options. V2 full reads are
     // authoritative; bounded/history endpoints use opaque v2 paging cursors.

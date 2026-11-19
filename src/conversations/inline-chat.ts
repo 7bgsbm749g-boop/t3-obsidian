@@ -84,6 +84,14 @@ export class InlineChatManager {
     if(job.phase!=='error'||job.finalized)throw Error('This response is no longer waiting for a continuation.');
     job.messageId=messageId;delete job.turnId;job.phase='reconnecting';this.persist();this.start(job);
   }
+  discardFollow(id:string,messageId:string,previousMessageId:string){
+    const job=this.find(id);
+    if(!job||job.hosted||job.finalized||job.messageId!==messageId||job.phase!=='reconnecting')return;
+    const runtime=this.runtime(job);
+    runtime.monitor?.stop();runtime.monitor=undefined;
+    if(runtime.timer)clearTimeout(runtime.timer);runtime.timer=undefined;
+    job.messageId=previousMessageId;job.phase='error';this.persist();
+  }
   steer(job:InlineJob,input:SteeringInput){
     if(!validSteeringInput(input))throw Error('Invalid steering message.');
     const existing=job.steering?.find(item=>item.messageId===input.messageId);
@@ -146,7 +154,7 @@ export class InlineChatManager {
     }
   }
   async deliveryFailed(job:InlineJob,_uncertain=false){
-    const runtime=this.runtime(job),native=nativeResponses(this.app);
+    const native=nativeResponses(this.app);
     if(job.hosted&&this.nativeViewFor(job))await native.stop(job.id,job.path,true);
     else {
       const editor=this.editorFor(job),document=editor?.getValue(),found=document&&regionBody(document,job.id);
@@ -156,7 +164,11 @@ export class InlineChatManager {
         if(change)replaceChangedText(editor,document,document.slice(0,change.from)+change.text+document.slice(change.to));
       }
     }
-    runtime.monitor?.stop();if(runtime.timer)clearTimeout(runtime.timer);
+    this.retireFailedJob(job);
+  }
+  retireFailedJob(job:InlineJob){
+    const runtime=this.runtimes.get(job.id);
+    runtime?.monitor?.stop();if(runtime?.timer)clearTimeout(runtime.timer);
     this.jobs=this.jobs.filter(j=>j!==job);this.runtimes.delete(job.id);this.persist();
   }
   start(job:InlineJob){

@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {T3UnaryRpcPool,T3UnaryRpcOwner,type RpcClock} from '../src/connection/t3-rpc';
-import {t3Api} from '../src/connection/t3-api';
+import {t3Api,SEND_ACKNOWLEDGEMENT_MS} from '../src/connection/t3-api';
 import {readNewThreadDefaults} from '../src/conversations/model-defaults';
 import {settingsSocket} from './rpc-fixture';
 
@@ -24,6 +24,108 @@ test('related defaults and mutations use the same authenticated API socket',asyn
  await readNewThreadDefaults(api,'https://synthetic',{id:'project'});
  await api('/api/orchestration/no-project');await readNewThreadDefaults(api,'https://synthetic',{id:'project'});
  assert.equal(tickets,1);assert.equal(opens,1);assert.equal(dispatches,1);api.disposeUnaryRpc!();
+});
+
+test('pool invalidation, pairing removal and expiry cannot cancel an acknowledgement',async({mock})=>{
+ mock.timers.enable({apis:['Date','setTimeout']});
+ const owner=new T3UnaryRpcOwner();
+ const pairing=new AbortController();
+ const deadline=Date.now()+30_000;
+ let sent=0,complete!:(value:unknown)=>void,started!:()=>void,opens=0,closes=0;
+ const transmitted=new Promise<void>(resolve=>started=resolve);
+ const Socket=settingsSocket(undefined,undefined,tag=>{
+  assert.equal(tag,'orchestration.launchThread');
+  return new Promise(resolve=>complete=resolve);
+ });
+ class Tracked extends Socket {close(){closes++;super.close();}}
+ const api=t3Api(async()=>({ticket:'synthetic'}),'https://synthetic',url=>{opens++;return new Tracked(url) as any;},deadline,owner);
+ await readNewThreadDefaults(api,'https://synthetic',{id:'project'});
+ const work=api('/api/orchestration/launch',{threadId:'thread',initialMessage:{messageId:'message',text:'Prompt',attachments:[]}},{sendPreparationSignal:pairing.signal,sendTransmission:{onMessageSent:()=>{sent++;started();},onThreadCreateSent:()=>assert.fail('Launch also delivers the message')}});
+ await transmitted;
+ owner.dispose();
+ pairing.abort(Error('Pairing removed'));
+ mock.timers.tick(SEND_ACKNOWLEDGEMENT_MS-1);
+ assert.equal(closes,1,'Only the read socket closes');
+ complete({threadId:'thread'});
+ assert.deepEqual(await work,{threadId:'thread'});
+ assert.equal(sent,1);
+ assert.equal(opens,2);
+ assert.equal(closes,2,'The send closes its own socket');
+});
+
+test('a silent socket closes at the send acknowledgement deadline without a second frame',async({mock})=>{
+ mock.timers.enable({apis:['Date','setTimeout']});
+ let began!:()=>void,frames=0,closed=false;
+ const transmitted=new Promise<void>(resolve=>began=resolve);
+ const Socket=settingsSocket();
+ class Silent extends Socket {
+  send(data:string){assert.equal(JSON.parse(data).tag,'orchestration.launchThread');frames++;}
+  close(){closed=true;super.close();}
+ }
+ const api=t3Api(async()=>({ticket:'synthetic'}),'https://synthetic',url=>new Silent(url) as any);
+ const work=api('/api/orchestration/launch',{threadId:'thread',initialMessage:{messageId:'message',text:'Prompt',attachments:[]}},{
+  sendTransmission:{onMessageSent:began,onThreadCreateSent:()=>assert.fail('Launch also delivers the message')},
+ });
+ const failure=assert.rejects(work,/Timed out waiting for the T3 acknowledgement/);
+ await transmitted;
+ mock.timers.tick(SEND_ACKNOWLEDGEMENT_MS-1);
+ assert.equal(closed,false);
+ mock.timers.tick(1);
+ await failure;
+ assert.equal(closed,true);
+ assert.equal(frames,1);
+});
+
+test('credential expiry cancels an upload that never gets a reply',async({mock})=>{
+ mock.timers.enable({apis:['Date','setTimeout']});
+ const deadline=Date.now()+30_000;
+ let began!:()=>void,closed=false;
+ const uploading=new Promise<void>(resolve=>began=resolve);
+ const Socket=settingsSocket();
+ class Stalled extends Socket {
+  send(data:string){assert.equal(JSON.parse(data).tag,'assets.persistChatAttachments');began();}
+  close(){closed=true;super.close();}
+ }
+ const api=t3Api(async()=>({ticket:'synthetic'}),'https://synthetic',url=>new Stalled(url) as any,deadline);
+ const attachments=[{type:'image',id:'photo',name:'photo.png',mimeType:'image/png',sizeBytes:1,dataUrl:'data:image/png;base64,eA=='}];
+ const work=api('/api/orchestration/dispatch',{type:'message.dispatch',threadId:'thread',messageId:'message',text:'Prompt',attachments},{
+  sendTransmission:{onMessageSent:()=>assert.fail('No message transmitted'),onThreadCreateSent:()=>assert.fail('No thread create transmitted')},
+ });
+ const failure=assert.rejects(work,/session expired before sending/);
+ await uploading;
+ mock.timers.tick(30_000);
+ await failure;
+ assert.equal(closed,true);
+});
+
+test('an attachment upload that crosses the credential deadline cannot dispatch its message',async({mock})=>{
+ const deadline=Date.now()+30_000;
+ const tags:string[]=[];
+ const Socket=settingsSocket();
+ class Expiring extends Socket {
+  send(data:string){
+   const {tag}=JSON.parse(data);tags.push(tag);
+   assert.equal(tag,'assets.persistChatAttachments');
+   mock.method(Date,'now',()=>deadline);
+   super.send(data);
+  }
+ }
+ const api=t3Api(async()=>({ticket:'synthetic'}),'https://synthetic',url=>new Expiring(url) as any,deadline);
+ const attachments=[{type:'image',id:'photo',name:'photo.png',mimeType:'image/png',sizeBytes:1,dataUrl:'data:image/png;base64,eA=='}];
+ await assert.rejects(api('/api/orchestration/dispatch',{type:'message.dispatch',threadId:'thread',messageId:'message',text:'Prompt',attachments},{
+  sendTransmission:{onMessageSent:()=>assert.fail('No message transmitted'),onThreadCreateSent:()=>assert.fail('No thread create transmitted')},
+ }),/session expired before sending/);
+ assert.deepEqual(tags,['assets.persistChatAttachments']);
+});
+
+test('a socket lost before launch transmits neither the thread nor its message',async()=>{
+ let socket!:InstanceType<ReturnType<typeof settingsSocket>>;
+ const Socket=settingsSocket(undefined,undefined,()=>assert.fail('No RPC should reach T3'));
+ const api=t3Api(async()=>({ticket:'synthetic'}),'https://synthetic',url=>(socket=new Socket(url)) as any);
+ await assert.rejects(api('/api/orchestration/launch',{threadId:'thread',initialMessage:{messageId:'message',text:'Prompt',attachments:[]}},{
+  beforeThreadCreate:()=>socket.close(),
+  sendTransmission:{onMessageSent:()=>assert.fail('No message transmitted'),onThreadCreateSent:()=>assert.fail('No thread create transmitted')},
+ }),/closed/);
 });
 
 test('concurrent leases share opening, reader cancellation is isolated, and late replies are harmless',async()=>{

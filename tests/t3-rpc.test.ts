@@ -7,14 +7,14 @@ function fixture(){
   let now=0,serial=0,closes=0,pongs=true;const timers=new Map<number,{at:number;fn:()=>void}>(),requests:any[]=[];
   const time:RpcClock={now:()=>now,timer:(fn,ms)=>{const id=++serial;timers.set(id,{at:now+ms,fn});return id as any;},clear:id=>{timers.delete(id as any);}};
   const emit=(frame:any)=>ws.onmessage?.({data:JSON.stringify(frame)});
-  const ws:any={send:(raw:string)=>{const frame=JSON.parse(raw);requests.push(frame);if(frame._tag==='Ping'&&pongs)emit({_tag:'Pong'});},close:()=>{closes++;ws.onclose?.();}};
+  const ws:any={readyState:1,send:(raw:string)=>{const frame=JSON.parse(raw);requests.push(frame);if(frame._tag==='Ping'&&pongs)emit({_tag:'Pong'});},close:()=>{closes++;ws.onclose?.();}};
   const open=(observe?:T3Api['trackConnection'])=>connectT3Rpc(Object.assign(async()=>({ticket:'synthetic-only'}),{trackConnection:observe}),'https://synthetic.example',()=>{queueMicrotask(()=>ws.onopen?.());return ws;},time);
   const advance=async(ms:number)=>{
     const until=now+ms;
     for(;;){const next=[...timers].filter(([,t])=>t.at<=until).sort((a,b)=>a[1].at-b[1].at)[0];if(!next)break;now=next[1].at;timers.delete(next[0]);next[1].fn();await flush();}
     now=until;await flush();
   };
-  return {open,advance,requests,emit,reply:(id:string,value:any)=>emit({_tag:'Exit',requestId:id,exit:{_tag:'Success',value}}),silent:()=>{pongs=false;},closes:()=>closes,timers};
+  return {open,advance,requests,emit,setReadyState:(state:number)=>{ws.readyState=state;},reply:(id:string,value:any)=>emit({_tag:'Exit',requestId:id,exit:{_tag:'Success',value}}),silent:()=>{pongs=false;},closes:()=>closes,timers};
 }
 
 test('elapsed time does not fail a silent open socket or its pending requests',async()=>{
@@ -42,4 +42,23 @@ test('MCP provider permission failures remain actionable without closing the con
  const rejected=assert.rejects(pending,(error:any)=>error.requiredPermission==='providers:manage'&&error.message.includes('MCP setup'));
  h.emit({_tag:'Exit',requestId:'1',exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:'EnvironmentAuthorizationError',requiredPermission:'providers:manage'}}]}});
  await rejected;assert.equal(rpc.closed,false);rpc.close();
+});
+
+test('only the matching disabled-provider launch response proves pre-creation rejection',async()=>{
+ const h=fixture(),rpc=await h.open();
+ for(const [index,message] of ['Provider instance "codex" is disabled for project project.','Failed to launch thread'].entries()){
+   const pending=rpc.call('orchestration.launchThread',{projectId:'project',modelSelection:{instanceId:'codex'}});
+   const rejected=assert.rejects(pending,(error:any)=>error.launchRefused===(index===0));
+   h.emit({_tag:'Exit',requestId:String(index+1),exit:{_tag:'Failure',cause:[{_tag:'Fail',error:{_tag:'OrchestrationV2ThreadLaunchError',message}}]}});
+   await rejected;
+ }
+ rpc.close();
+});
+
+test('a socket closing before its close event cannot mark an RPC as transmitted',async()=>{
+ const h=fixture(),rpc=await h.open();
+ h.setReadyState(2);
+ await assert.rejects(rpc.call('orchestration.launchThread',{},()=>assert.fail('The frame was not transmitted')),/closed/);
+ assert.equal(h.requests.length,0);
+ assert.equal(rpc.closed,true);
 });

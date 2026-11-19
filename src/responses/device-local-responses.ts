@@ -15,7 +15,9 @@ export interface DeviceResponseIO {
   threadSources?:import('../conversations/shared-thread-stream').SharedThreadStreams;
   localFinalNotes?:LocalFinalNoteIO;
   localBindings?():readonly ResponseRequest[];
+  latestLocalBinding?(id:string):Promise<ResponseRequest|undefined>;
   saveLocalBinding?(request:ResponseRequest):Promise<void>;
+  rewriteLocalBinding?(id:string,change:(request:ResponseRequest)=>ResponseRequest):Promise<ResponseRequest|undefined>;
   openedNotes?():Array<{path:string;document:string}>;
   saveLocalNote?(path:string):Promise<void>;
   /** Legacy adapter hint, ignored: native note IO owns local write safety. */
@@ -68,7 +70,10 @@ export class DeviceResponseManager {
   accepted(_host:ResponseStorageTarget,id:string,messageId:string){this.local?.accepted(id,messageId);}
   delivered(_host:ResponseStorageTarget,id:string,delivery:InlineStartRequest){this.local?.delivered(id,delivery);return Promise.resolve();}
   stopLocally(id:string){this.stops.add(id);this.io.saveStops?.([...this.stops]);this.local?.stopLocally(id);}
-  failResponse(_host:ResponseStorageTarget,id:string){return this.local?.cancel(id)??Promise.resolve();}
+  failResponse(request:ResponseRequest){
+    if(this.stopped)throw Error('Failed send cleanup is waiting for Obsidian to reopen.');
+    return this.manager().cancel(request);
+  }
   stopResponse(_host:ResponseStorageTarget,id:string,body?:string,_operationId?:string):Promise<ResponseStopReceipt>{return this.manager().stop(id,body);}
   responseStatus(id:string){return this.local?.status(id);}
   health(){return this.local?.health();}
@@ -80,7 +85,8 @@ export class DeviceResponseManager {
   async relocateResponse(_host:ResponseStorageTarget,record:ResponseRecord,path:string){await this.manager().register({...record.request,notePath:path},true);return this.local!.record(record.request.id)!;}
   follow(_host:ResponseStorageTarget,id:string,previous:string,messageId:string,path?:string){return this.manager().follow(id,messageId,path,previous);}
   steer(_host:ResponseStorageTarget,id:string,input:SteeringInput){return this.manager().steer(id,input);}
-  discardSteering(id:string,messageId:string){return this.local?.discardSteering(id,messageId)??Promise.resolve();}
+  discardSteering(id:string,messageId:string){return this.manager().discardSteering(id,messageId);}
+  discardFollow(id:string,messageId:string,previousMessageId:string){return this.manager().discardFollow(id,messageId,previousMessageId);}
   resume(){if(!this.stopped)this.manager().resume();}
   foreground(){if(!this.stopped)this.manager().foreground();}
   reconnect(){if(!this.stopped)this.manager().reconnect();}

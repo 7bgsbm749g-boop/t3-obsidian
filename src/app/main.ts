@@ -19,7 +19,7 @@ import {AgentToolsSettings} from '../agents/settings';
 import {ConnectCommandHost,commandBase,type CommandFiles,type CommandRoute} from '../notes/connect-command-host';
 import {connectAgentFiles,connectCommandFiles,connectDiagnosticFiles} from '../notes/connect-command-files';
 import {CheckedNoteEdits,isNoteEditCommand,checkedStageDraft,type EditSnapshot} from '../notes/checked-note-edits';
-import {acquireT3UnaryRpc,connectT3Rpc,T3UnaryRpcOwner,type T3Api} from '../connection/t3-rpc';
+import {acquireT3UnaryRpc,connectT3Rpc,T3RpcError,T3UnaryRpcOwner,type T3Api} from '../connection/t3-rpc';
 import {ThreadDisplays,isThreadCommand,type ThreadDisplayResult} from '../conversations/thread-displays';
 import type {ThreadTarget as EventTarget} from '../conversations/thread-display';
 import {readPrivateStorageRoute} from '../storage/private-storage';
@@ -248,9 +248,26 @@ export default class SendToT3 extends Plugin {
   private projectCreateModal?:ProjectCreateModal;
   private commandHosts=new Map<string,{host:ConnectCommandHost;rpc:Awaited<ReturnType<typeof connectT3Rpc>>;files:CommandFiles}>();
   private commandProjects=new Map<string,Project>();
-  private verifiedConnections=new RouteAuthorizationCache<Awaited<ReturnType<typeof environmentApi>>>();
+  private verifiedConnections=new RouteAuthorizationCache<{api:T3Api;authority:string}>();
   private unaryCredentialKey(paired:PairedConnection,session:PairedSession|undefined){return JSON.stringify([paired.url,paired.environmentId,session?.token,session?.expiresAt,session?.dpopKeyId,session?.accountId,session?.permissions]);}
   private unaryOwners=new Map<string,{key:string;pool:T3UnaryRpcOwner}>();
+  private sendPairings=new Map<string,{preparing:AbortController}>();
+  private sendAuthority(session:PairedSession|undefined){return JSON.stringify([session?.accountId,[...new Set(session?.permissions)].sort()]);}
+  private replacePairedSession(id:string,session:PairedSession){
+    const pairing=this.sendPairings.get(id);
+    const previous=this.pairedSessions[id];
+    this.pairedSessions[id]=session;
+    if(pairing&&previous&&this.sendAuthority(previous)!==this.sendAuthority(session)){
+      const preparing=pairing.preparing;
+      pairing.preparing=new AbortController();
+      preparing.abort(Error('The T3 pairing permissions changed before sending.'));
+    }
+  }
+  private invalidateSendPairing(id:string){
+    const pairing=this.sendPairings.get(id);
+    this.sendPairings.delete(id);
+    pairing?.preparing.abort(Error('The T3 pairing was removed or changed before sending.'));
+  }
   private disposeUnaryOwner(id:string){const owner=this.unaryOwners.get(id);if(owner){owner.pool.dispose();this.verifiedConnections.delete(owner.key);this.unaryOwners.delete(id);}}
   private disposeUnaryOwners(){for(const id of this.unaryOwners.keys())this.disposeUnaryOwner(id);}
   private importPreparation=new Set<AbortController>();
@@ -311,18 +328,18 @@ export default class SendToT3 extends Plugin {
   private diagnosticLog(since?:string){this.memoryCheckpoint('manual');const diagnostics=this.diagnostics?.snapshot(since);return {...sendFailureLog(this.app.loadLocalStorage(this.failureKey()),pluginManifest.version,this.deviceId,since),...(diagnostics?{diagnostics:{...diagnostics,enabled:{...this.diagnosticLogging},responseHealth:this.deviceInline?.health(),syncEvidence:localSyncEvidence(this.app)}}:{})};}
   private failedRequests=new WeakSet<Request>();
   private failureKey(){return `t3-send-failures-v1:${this.settings.vaultId}`;}
-  private recordSendFailure(request:Request|undefined,error:unknown,stage:string,startedAt:number){
+  private recordSendFailure(request:Request|undefined,error:unknown,stage:string,startedAt:number,uncertain=false){
     const derived=(part:string)=>{try{return request?commandId(request.id,part):undefined;}catch{return undefined;}};
-    const failure:SendFailure={at:new Date().toISOString(),stage,elapsedMs:Math.max(0,Date.now()-startedAt),delivery:acceptedRequestThread(request)||request?.directPlan?.delivery||['delivery-evidence','local-confirmation'].includes(stage)?'accepted':['dispatch','startup-recovery'].includes(stage)?'unconfirmed':'not-started',...(request?{requestId:request.id,threadId:acceptedRequestThread(request)??request.threadId??derived('thread'),messageId:derived('message'),environmentId:request.connection.environmentId,bindingIds:(request.inlineBindings??(request.inlineHost?[request.inlineHost]:[])).map(binding=>binding.id)}:{}),error};
+    const failure:SendFailure={at:new Date().toISOString(),stage,elapsedMs:Math.max(0,Date.now()-startedAt),delivery:acceptedRequestThread(request)||request?.directPlan?.delivery||['delivery-evidence','local-confirmation'].includes(stage)?'accepted':uncertain?'unconfirmed':'not-started',...(request?{requestId:request.id,threadId:acceptedRequestThread(request)??request.threadId??derived('thread'),messageId:derived('message'),environmentId:request.connection.environmentId,bindingIds:(request.inlineBindings??(request.inlineHost?[request.inlineHost]:[])).map(binding=>binding.id)}:{}),error};
     logEvent('response.send.failure',failure as unknown as Record<string,unknown>,'error');
-    try{this.app.saveLocalStorage(this.failureKey(),appendSendFailure(this.app.loadLocalStorage(this.failureKey()),failure));}catch{new Notice('The send failed. The device could not save its failure log.',10000);}
+    try{this.app.saveLocalStorage(this.failureKey(),appendSendFailure(this.app.loadLocalStorage(this.failureKey()),failure));}catch{new Notice('The device could not save the T3 send diagnostic log.',10000);}
   }
-  private async failRequest(request:Request,error:unknown,stage:string,startedAt:number){
+  private async failRequest(request:Request,error:unknown,stage:string,startedAt:number,uncertain=false){
     if(this.failedRequests.has(request))return;this.failedRequests.add(request);
-    this.recordSendFailure(request,error,stage,startedAt);
-    this.settings.pending=this.settings.pending.filter(item=>item.id!==request.id);
+    this.recordSendFailure(request,error,stage,startedAt,uncertain);
     const accepted=acceptedRequestThread(request);
     if(accepted){
+      this.settings.pending=this.settings.pending.filter(item=>item.id!==request.id);
       // Local rendering cannot revoke an acknowledged T3 message. Retain its
       // registered response and note/thread link; recovery never sends again.
       this.rememberStarted(request,accepted);
@@ -330,29 +347,62 @@ export default class SendToT3 extends Plugin {
       try{await this.save();}catch(saveError){this.recordSendFailure(request,saveError,'accepted-local-save',startedAt);}
       return;
     }
-    if(request.agentCommand)this.app.saveLocalStorage(`${this.localKey}-note-command-${request.agentCommand.id}`,{command:request.agentCommand,discarded:true});
-    const bindings=request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]);
-    for(const binding of bindings)try{await this.responseGuard(binding,'failed',stage==='dispatch'||stage==='startup-recovery');}catch(cleanupError){this.recordSendFailure(request,cleanupError,'durable-response-cleanup',startedAt);}
+    if(request.agentCommand)try{this.app.saveLocalStorage(`${this.localKey}-note-command-${request.agentCommand.id}`,{command:request.agentCommand,discarded:true});}catch(saveError){this.recordSendFailure(request,saveError,'command-failure-save',startedAt,uncertain);}
     // Lost delivery acknowledgements need an exact server check. The durable
-    // background guard makes that check without dispatching another prompt.
-    if(bindings.length&&(stage==='dispatch'||stage==='startup-recovery')){try{await this.save();}catch(saveError){this.recordSendFailure(request,saveError,'failure-save',startedAt);}return;}
+    // bindings can recover the exact reply without dispatching another prompt.
+    if(uncertain){this.settings.pending=this.settings.pending.filter(item=>item.id!==request.id);try{await this.save();}catch(saveError){this.recordSendFailure(request,saveError,'failure-save',startedAt,true);}return;}
+    const bindings=request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]);
+    const needsCleanup=bindings.length||request.inlineFollow||request.inlineSteering;
+    if(needsCleanup){
+      request.cleanupOnly=true;
+      if(!this.settings.pending.some(item=>item.id===request.id))this.settings.pending.push(request);
+      try{await this.save();}catch(saveError){this.recordSendFailure(request,saveError,'failure-save',startedAt);}
+      if(this.stopped)return;
+    }
+    let cleanupFailed=false;
+    const cleanedBindings=new Set<string>();
     for(const binding of bindings){
-      if(binding.nativeProjection)try{await nativeResponses(this.app).stop(binding.id,binding.notePath,true);}catch(cleanupError){this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
-      else try{await deviceNoteIO(this.app).updateNote(binding.notePath,document=>{const region=regionBody(document,binding.id);if(!region)return document;const change=finalizeRegion(document,binding.id,contentHash(region.body),'');return change?document.slice(0,change.from)+change.text+document.slice(change.to):document;},()=>!this.stopped);}catch(cleanupError){this.recordSendFailure(request,cleanupError,'local-response-cleanup',startedAt);}
-      this.deviceInline?.stopLocally(binding.id);
-      if(this.deviceInline&&[2,3,4].includes(binding.version))void this.deviceInline.failResponse(binding.host,binding.id).catch(cleanupError=>this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt));
-      else void this.stopHostedInline(binding.id,binding.host).catch(cleanupError=>this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt));
+      try{
+        if(this.deviceInline&&binding.localOnly&&binding.nativeProjection){
+          if(await this.deviceInline.failResponse(binding)!==false)cleanedBindings.add(binding.id);
+          continue;
+        }
+        const owns=(latest?:ResponseRequest)=>!latest||localFinalIdentity(latest)===localFinalIdentity(binding);
+        const latest=await this.latestResponseBinding(binding.id);
+        if(!owns(latest))continue;
+        const path=latest?.notePath??binding.notePath;
+        if(this.stopped)throw Error('Failed send cleanup is waiting for Obsidian to reopen.');
+        if(binding.nativeProjection)await nativeResponses(this.app).stop(binding.id,path,true);
+        else {
+          const io=deviceNoteIO(this.app);
+          const saved=await io.updateNote(path,document=>{const change=finalizeRegion(document,binding.id,binding.initialHash,'');return change?document.slice(0,change.from)+change.text+document.slice(change.to):document;},()=>!this.stopped&&owns(this.responseBindingReplica[binding.id]?.request));
+          if(saved===undefined&&!await io.missing(path))throw Error('The response note is temporarily unavailable.');
+        }
+        if(!owns(await this.latestResponseBinding(binding.id)))continue;
+        if(this.deviceInline&&binding.localOnly){if(await this.deviceInline.failResponse(binding)===false)continue;}
+        else await this.stopHostedInline(binding.id,binding.host);
+        cleanedBindings.add(binding.id);
+      }catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt);}
     }
     // Refusing a new input must not stop the existing response or its T3 turn.
-    if(request.inlineSteering&&!['dispatch','startup-recovery'].includes(stage)){
+    if(request.inlineSteering){
       for(const target of request.inlineSteering.targets??[request.inlineSteering])try{
         if(target.host)await this.deviceInline?.discardSteering(target.jobId,request.inlineSteering.input.messageId);
         else {const job=this.inlineChat?.find(target.jobId);if(job)this.inlineChat!.discardSteering(job,request.inlineSteering.input.messageId);}
-      }catch(cleanupError){this.recordSendFailure(request,cleanupError,'steering-input-cleanup',startedAt);}
+      }catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'steering-input-cleanup',startedAt);}
     }
     const attached=request.inlineFollow;
-    if(attached){const existing=this.inlineChat?.find(attached.jobId);if(existing)await this.inlineChat!.stop(existing);else{await nativeResponses(this.app).stop(attached.jobId,request.inlineFollow?.notePath??request.noteThread?.notePath);this.deviceInline?.stopLocally(attached.jobId);if(attached.host)void this.stopHostedInline(attached.jobId,attached.host).catch(cleanupError=>this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt));}}
-    const job=this.inlineChat?.find(request.id);if(job)await this.inlineChat!.deliveryFailed(job);
+    if(attached)try{
+      if(attached.host)await this.deviceInline?.discardFollow(attached.jobId,attached.messageId,attached.previousMessageId);
+      else this.inlineChat?.discardFollow(attached.jobId,attached.messageId,attached.previousMessageId);
+    }catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'follow-cleanup',startedAt);}
+    const job=this.inlineChat?.find(request.id);
+    if(job)try{
+      const binding=bindings.find(value=>value.id===job.id);
+      if(!binding)await this.inlineChat!.deliveryFailed(job);
+      else if(cleanedBindings.has(job.id)&&job.messageId===(binding.localMessageId??binding.messageId))this.inlineChat!.retireFailedJob(job);
+    }catch(cleanupError){cleanupFailed=true;this.recordSendFailure(request,cleanupError,'failure-cleanup',startedAt);}
+    if(!cleanupFailed&&(!this.stopped||!needsCleanup))this.settings.pending=this.settings.pending.filter(item=>item.id!==request.id);
     // Save cleanup independently of the network. A cleanup failure never
     // recreates a request or schedules another prompt dispatch.
     try{await this.save();}catch(saveError){this.recordSendFailure(request,saveError,'failure-save',startedAt);}
@@ -491,6 +541,7 @@ export default class SendToT3 extends Plugin {
       migratedNoteThreads=true;
     }
     this.settings.pending=this.settings.pending.filter(request=>{
+      if(request.cleanupOnly)return true;
       if(request.inlineHost&&!request.inlineHost.localOnly||request.inlineBindings?.some(binding=>!binding.localOnly))return false;
       const continuation=request.inlineSteering??request.inlineFollow;
       return !continuation?.host||responseBindingRequests(this.settings.responseBindings??{}).some(binding=>binding.id===continuation.jobId);
@@ -552,7 +603,15 @@ export default class SendToT3 extends Plugin {
         if(saved&&(update?.turnId||this.smartHistoryRevision>this.smartHistoryPublished))await this.save(true);
       },
       localBindings:()=>responseBindingRequests(this.settings.responseBindings??this.responseBindingReplica),
+      latestLocalBinding:id=>this.latestResponseBinding(id),
       saveLocalBinding:request=>this.saveResponseBinding(request),
+      rewriteLocalBinding:async(id,change)=>{
+        await this.save(true,bindings=>{
+          const request=bindings[id]?.request;
+          return request?.vaultId===this.settings.vaultId?updateResponseBindingData(bindings,change(request),this.deviceId):bindings;
+        });
+        return this.responseBindingReplica[id]?.request;
+      },
       retainLocalFinal:async update=>{await deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${update.request.id}`,retainedLocalFinal(update));},
       loadLocalFinal:async request=>restoredLocalFinal(await deviceState(`local-final:${this.deviceId}:${this.settings.vaultId}:${request.id}`),request),
       localFinalDraft:async(document,request)=>{if(!request.localStage)return document;if(!request.localStage.transport)throw Error('Prepare this old staged edit again through T3 Connect.');return checkedStageDraft(document,request,await this.commandFiles(request.localStage.transport));},
@@ -665,7 +724,7 @@ export default class SendToT3 extends Plugin {
       },1500));
     });
     this.sharedBaseline=JSON.stringify(this.sharedSnapshot());
-    for(const request of [...this.settings.pending])await this.failRequest(request,Error('The previous send ended without a local confirmation.'),'startup-recovery',Date.now());
+    for(const request of [...this.settings.pending])await this.failRequest(request,Error('The previous send ended without a local confirmation.'),'startup-recovery',Date.now(),!request.cleanupOnly&&(Boolean(request.directPlan)||retiredConnection(request.connection)));
     const migrateConnection=(c:Connection):Connection=>{if(c.transport==='direct')return c;const paired=this.settings.paired.find(value=>value.environmentId===c.environmentId);return paired?{executable:'',host:'direct',transport:'direct',url:paired.url,connectionId:paired.id,environmentId:paired.environmentId}:c;};
     for(const request of this.settings.pending)request.connection=migrateConnection(request.connection);
     for(const job of this.settings.completionJobs){job.connection=migrateConnection(job.connection);if(retiredConnection(job.connection)&&job.status==='watching'){job.status='kept';job.detail='Kept note: the companion mode was removed. Check the original thread in T3.';}}
@@ -1917,7 +1976,7 @@ export default class SendToT3 extends Plugin {
     if(activeId&&!options?.newThread&&!options?.threadId)return this.sendInlineSteering(activeId,prompt,note,context,options);
     const jobOptions=options?.jobOptions??resolveJobOptions(this.settings.inlineStreaming);
     const requestId=randomId(),initialInput=context.initialQuestion?{messageId:commandId(requestId,'message'),text:context.initialQuestion}:undefined;
-    let job:InlineJob|undefined,delivered=false;
+    let job:InlineJob|undefined;
     let finishPreview:(()=>void)|undefined;
     try{
       await this.sendChat(prompt,note,{...options,jobOptions,requestId,sourceContext:context,onTargetResolved:()=>{
@@ -1929,8 +1988,12 @@ export default class SendToT3 extends Plugin {
         job=context.anchor&&!context.referenceSelection&&!activeId?manager.reserve(context.editor,context.view,context.anchor,requestId,note.path,initialInput,request.title,jobOptions):context.insertion?manager.reserveAtCursor(context.editor,context.view,context.insertion,requestId,note.path,initialInput,request.title,jobOptions):manager.reserveAtEnd(context.editor,context.view,requestId,note.path,initialInput,request.title,jobOptions);
         this.sendPreviews.hide(context.view as MarkdownView);
         await manager.prepare(job,request);
-      }});delivered=true;if(job)manager.start(job);
-    }catch(error){if(job)await manager.deliveryFailed(job,delivered||(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)));throw error;}finally{finishPreview?.();}
+      }});
+      if(job)try{manager.start(job);}catch(error){
+        logFailure('response.reader.start',error,{bindingId:job.id});
+        new Notice('T3 received your message. The local reply needs recovery.',12000);
+      }
+    }catch(error){if(job&&!(error instanceof RequestDeliveryError&&(error.terminal||error.deliveryUnconfirmed)))await manager.deliveryFailed(job);throw error;}finally{finishPreview?.();}
   }
   private async steeringRecord(id:string):Promise<{record:ResponseRecord;host:ResponseStorageTarget}|undefined>{return this.deviceInline?.cachedResponse(id);}
   private async steeringDestination(id:string,signal?:AbortSignal){
@@ -2034,6 +2097,12 @@ export default class SendToT3 extends Plugin {
   private async pairedThreadAccess(paired:PairedConnection,forceRefresh=false,signal?:AbortSignal):Promise<ThreadAccess>{
     const environmentId=paired.environmentId;
     const connection:Connection={transport:'direct',host:'direct',executable:'',url:paired.url,environmentId,connectionId:paired.id};
+    const pairing=this.sendPairings.get(paired.id)??{preparing:new AbortController()};
+    this.sendPairings.set(paired.id,pairing);
+    const assertSendPairing=()=>{
+      const route=this.settings.paired.find(candidate=>candidate.id===paired.id);
+      if(this.sendPairings.get(paired.id)!==pairing||!this.pairedSessions[paired.id]||!route||route.url!==connection.url||route.environmentId!==environmentId)throw Error('The T3 pairing was removed or changed before sending.');
+    };
     let session=await abortableRead(this.sessionFor(paired.id,forceRefresh),signal);requestAborted(signal);
     // Verify authorization before exposing a candidate to sends or writes.
     // A failed open can try another endpoint for the same machine; the caller
@@ -2045,11 +2114,13 @@ export default class SendToT3 extends Plugin {
     this.unaryOwners.set(paired.id,{key,pool});
     while(this.unaryOwners.size>16)this.disposeUnaryOwner(this.unaryOwners.keys().next().value!);
     const verified=(ownerKey:string,credential:PairedSession|undefined,owner:T3UnaryRpcOwner,force=false)=>this.verifiedConnections.open(ownerKey,async setupSignal=>{
+      const authority=this.sendAuthority(credential);
       const candidate=await environmentApi(connection,credential,undefined,undefined,setupSignal,owner);
-      await this.routeStatus.request(paired.id,()=>verifyOrchestrationRead((path,payload)=>candidate(path,payload,{signal:setupSignal})));return candidate;
+      await this.routeStatus.request(paired.id,()=>verifyOrchestrationRead((path,payload)=>candidate(path,payload,{signal:setupSignal})));
+      return {api:candidate,authority};
     },force,(credential?.expiresAt??0)-5000,this.connectionSetupOwner.signal);
-    const opening=verified(key,session,pool,forceRefresh).catch(error=>{if(this.unaryOwners.get(paired.id)?.pool===pool)this.disposeUnaryOwner(paired.id);throw error;});
-    let api:T3Api=await abortableRead(opening,signal);requestAborted(signal);
+    const opening=verified(key,session,pool,forceRefresh);
+    let authorized=await abortableRead(opening,signal);requestAborted(signal);
     if(this.stopped||this.unaryOwners.get(paired.id)?.pool!==pool){pool.dispose();throw Error('The connection owner changed.');}
     if(!Platform.isMobile&&localRoute(paired))this.eventLocalEnvironmentId=environmentId;
     const current=async(signal?:AbortSignal)=>{
@@ -2066,26 +2137,26 @@ export default class SendToT3 extends Plugin {
       const freshPool=this.unaryOwners.get(paired.id)?.pool??new T3UnaryRpcOwner();
       this.unaryOwners.set(paired.id,{key:freshKey,pool:freshPool});
       while(this.unaryOwners.size>16)this.disposeUnaryOwner(this.unaryOwners.keys().next().value!);
-      const opening=verified(freshKey,credential,freshPool).catch(error=>{if(this.unaryOwners.get(paired.id)?.pool===freshPool)this.disposeUnaryOwner(paired.id);throw error;});
+      const opening=verified(freshKey,credential,freshPool);
       const freshApi=await abortableRead(opening,signal);requestAborted(signal);
       const live=this.settings.paired.find(candidate=>candidate.id===paired.id);
       if(this.stopped||this.unaryOwners.get(paired.id)?.pool!==freshPool||!live||live.url!==connection.url||live.environmentId!==environmentId){freshPool.dispose();throw Error('The connection owner changed.');}
-      session=credential;key=freshKey;pool=freshPool;api=freshApi;
+      session=credential;key=freshKey;pool=freshPool;authorized=freshApi;
     };
     let renewing:Promise<void>|undefined;
-    const renew=async(attemptedApi:typeof api)=>{
+    const renew=async(attempted:typeof authorized)=>{
       await current();
-      if(api!==attemptedApi)return;
+      if(authorized!==attempted)return;
       renewing??=(async()=>{
         const started=Date.now(),fields={environmentId,routeId:paired.id,cause:'http-401',status:401};logEvent('connection.auth.renewing',fields);
         try{
           session=await this.sessionFor(paired.id,true);
           const freshKey=this.unaryCredentialKey(paired,session),current=this.unaryOwners.get(paired.id);
           if(current&&(current.pool===pool||current.key!==freshKey))this.disposeUnaryOwner(paired.id);
-          attemptedApi.disposeUnaryRpc?.();
+          attempted.api.disposeUnaryRpc?.();
           const freshPool=this.unaryOwners.get(paired.id)?.pool??new T3UnaryRpcOwner();
           this.unaryOwners.set(paired.id,{key:freshKey,pool:freshPool});
-          api=await verified(freshKey,session,freshPool);
+          authorized=await verified(freshKey,session,freshPool);
           if(this.stopped||this.unaryOwners.get(paired.id)?.pool!==freshPool){freshPool.dispose();throw Error('The connection owner changed.');}
           key=freshKey;pool=freshPool;
           logEvent('connection.auth.recovered',{...fields,elapsedMs:Date.now()-started});
@@ -2094,36 +2165,47 @@ export default class SendToT3 extends Plugin {
       await renewing;
     };
     const routed:ThreadAccess['api']=async(path,payload,options)=>this.routeStatus.request(paired.id,async()=>{
-      let attemptedApi:T3Api|undefined;
+      let attempted:typeof authorized|undefined;
+      const call=(target:typeof authorized)=>{
+        if(!options?.sendTransmission)return target.api(path,payload,options);
+        assertSendPairing();
+        return target.api(path,payload,{...options,sendPreparationSignal:pairing.preparing.signal,beforeSendTransmission:()=>{
+          assertSendPairing();
+          if(this.sendAuthority(this.pairedSessions[paired.id])!==target.authority)throw Error('The T3 pairing permissions changed before sending.');
+        }});
+      };
       try{
-        await current(options?.signal);attemptedApi=api;
-        try{return await attemptedApi(path,payload,options);}catch(error){
-          // Retrying reads can recover a revoked environment token. Dispatch is
-          // never replayed; account expiry is handled by nativeCredential.
-          const safe=payload===undefined||['/api/auth/websocket-ticket','/api/orchestration/turn-item','/api/assets/create-url'].includes(path);
+        if(options?.sendTransmission)assertSendPairing();
+        await current(options?.signal);attempted=authorized;
+        try{return await call(attempted);}catch(error){
+          // The send adapter can return HTTP 401 only before handing off the
+          // orchestration command. The command itself returns an RPC result.
+          const sendSetup=!!options?.sendTransmission&&['/api/orchestration/dispatch','/api/orchestration/launch'].includes(path);
+          const safe=payload===undefined||sendSetup||['/api/auth/websocket-ticket','/api/orchestration/turn-item','/api/assets/create-url'].includes(path);
           if(!(error instanceof T3HttpError)||error.status!==401||!paired.managed||!safe)throw error;
-          await abortableRead(renew(attemptedApi),options?.signal);requestAborted(options?.signal);
-          attemptedApi=api;return await attemptedApi(path,payload,options);
+          if(options?.sendTransmission)assertSendPairing();
+          await abortableRead(renew(attempted),options?.signal);requestAborted(options?.signal);
+          attempted=authorized;return await call(attempted);
         }
-      }catch(error){requestAborted(options?.signal);if(error instanceof T3HttpError&&(error.status===401||error.status===403)&&api===attemptedApi){this.verifiedConnections.delete(key);if(this.unaryOwners.get(paired.id)?.pool===pool)this.disposeUnaryOwner(paired.id);api.disposeUnaryRpc?.();}this.routeFailures.set(paired.id,message(error));throw error;}
+      }catch(error){requestAborted(options?.signal);if(error instanceof T3HttpError&&(error.status===401||error.status===403)&&authorized===attempted){this.verifiedConnections.delete(key);if(this.unaryOwners.get(paired.id)?.pool===pool)this.disposeUnaryOwner(paired.id);authorized.api.disposeUnaryRpc?.();}this.routeFailures.set(paired.id,message(error));throw error;}
     });
     routed.acquireUnaryRpc=signal=>this.routeStatus.request(paired.id,async()=>{
       await current(signal);
-      const attemptedApi=api;
+      const attempted=authorized;
       let rpc:Awaited<ReturnType<typeof connectT3Rpc>>;
-      try{rpc=await attemptedApi.acquireUnaryRpc!(signal);}catch(error){
+      try{rpc=await attempted.api.acquireUnaryRpc!(signal);}catch(error){
         // Acquisition has sent no unary operation, so only ticket issuance can
         // be repeated. Calls on the returned lease are never replayed.
         if(!(error instanceof T3HttpError)||error.status!==401||!paired.managed)throw error;
-        await abortableRead(renew(attemptedApi),signal);requestAborted(signal);rpc=await api.acquireUnaryRpc!(signal);
+        await abortableRead(renew(attempted),signal);requestAborted(signal);rpc=await authorized.api.acquireUnaryRpc!(signal);
       }
       this.routeStatus.track(paired.id,rpc);return rpc;
     });
     routed.trackConnection=connection=>this.routeStatus.track(paired.id,connection);
-    routed.cachedImportThreads=projectId=>api.cachedImportThreads?.(projectId);
-    Object.defineProperty(routed,'importCacheIdentity',{get:()=>api.importCacheIdentity});
-    routed.prepareImportCatalog=async signal=>{await current(signal);await api.prepareImportCatalog?.(signal);};
-    routed.watchImportThreads=(projectId,changed)=>api.watchImportThreads?.(projectId,changed)??(()=>{});
+    routed.cachedImportThreads=projectId=>authorized.api.cachedImportThreads?.(projectId);
+    Object.defineProperty(routed,'importCacheIdentity',{get:()=>authorized.api.importCacheIdentity});
+    routed.prepareImportCatalog=async signal=>{await current(signal);await authorized.api.prepareImportCatalog?.(signal);};
+    routed.watchImportThreads=(projectId,changed)=>authorized.api.watchImportThreads?.(projectId,changed)??(()=>{});
     return {origin:endpoint(paired.url),diagnosticRoute:{routeId:paired.id,environmentId,routeKind:localRoute(paired)?'local':'remote'},get expiresAt(){return session?.expiresAt;},api:routed};
   }
   private async localInlineEnvironment():Promise<string>{
@@ -2582,10 +2664,12 @@ export default class SendToT3 extends Plugin {
       this.settings.pending.push(request);
       try{await this.save();logEvent('request.saved',{requestId:request.id});}catch(e){this.settings.pending=this.settings.pending.filter(r=>r!==request);throw e;}
       await this.dispatch(request,false,false,preparing);
-      if(options?.sourceContext?.smartQuestion)this.app.saveLocalStorage(this.chatDraftKey,'');
-      const draft:unknown=this.app.loadLocalStorage(this.chatDraftKey);
-      if(typeof draft==='string'&&draft&&(draft===prompt||prompt.endsWith(`\n\n**USER ASKS:**\n${draft}`)))this.app.saveLocalStorage(this.chatDraftKey,'');
-    }catch(e){if(request)await this.failRequest(request,e,'preparation',startedAt);else if(!(e instanceof ProjectCreationCancelled))this.recordSendFailure(undefined,e,'preparation',startedAt);if(e instanceof ProjectCreationCancelled)throw e;throw new RequestDeliveryError(`${unsavedMessage(e)} ${request?'The send failed. Its response was removed. See the send failure log.':'No message was sent or queued.'}`,false,Boolean(request));}
+      try{
+        if(options?.sourceContext?.smartQuestion)this.app.saveLocalStorage(this.chatDraftKey,'');
+        const draft:unknown=this.app.loadLocalStorage(this.chatDraftKey);
+        if(typeof draft==='string'&&draft&&(draft===prompt||prompt.endsWith(`\n\n**USER ASKS:**\n${draft}`)))this.app.saveLocalStorage(this.chatDraftKey,'');
+      }catch(error){this.recordSendFailure(request,error,'draft-cleanup',startedAt);}
+    }catch(e){if(request)await this.failRequest(request,e,'preparation',startedAt);else if(!(e instanceof ProjectCreationCancelled))this.recordSendFailure(undefined,e,'preparation',startedAt);if(e instanceof ProjectCreationCancelled||e instanceof RequestDeliveryError)throw e;throw new RequestDeliveryError(`${unsavedMessage(e)} No message was sent or queued.`,false,Boolean(request));}
     finally{clearSmartSendPreparation(this.smartData());this.busy=false;}
   }
   async exportDiagnostics(){
@@ -2631,7 +2715,8 @@ export default class SendToT3 extends Plugin {
     if(!existing)this.settings.paired.push(c);
     if(method&&method!=='connect')c.routeKind=method;
     this.noProjectProjects.delete(c.id);this.noProjectIdentities.delete(c.id);
-    this.pairedSessions[c.id]=result.session;this.settings.directScanId=c.id;this.mode='direct';await this.save();
+    if(existing)this.invalidateSendPairing(c.id);
+    this.replacePairedSession(c.id,result.session);this.settings.directScanId=c.id;this.mode='direct';await this.save();
     this.syncProjectSources();this.deviceInline?.reconnect();await this.htmlResults?.recover(c.environmentId);
     await this.projectDiscovery?.refresh(true);
   }
@@ -2739,7 +2824,7 @@ export default class SendToT3 extends Plugin {
       requestAborted(signal);
       if(this.stopped||this.nativeAccount!==account||generation!==this.cloudGeneration||!this.settings.paired.includes(c)||c.url!==url||c.environmentId!==environmentId||this.pairedSessions[id]!==session)throw Error('Connection cancelled.');
       stage='save-session';
-      next.accountId=account.userId;this.pairedSessions[id]=next;await this.save();return next;
+      next.accountId=account.userId;this.replacePairedSession(id,next);await this.save();return next;
     },this.connectionSetupOwner.signal,()=>stage);
     const renewal={work,stage:()=>stage};
     this.sessionRefreshing.set(id,renewal);
@@ -2763,7 +2848,7 @@ export default class SendToT3 extends Plugin {
     if(!active())throw Error('Connection cancelled.');
     const changed=!existing||!c.managed||c.name!==m.name;
     if(!this.settings.paired.includes(c))this.settings.paired.push(c);
-    c.managed=true;c.name=m.name;session.accountId=account.userId;this.pairedSessions[c.id]=session;
+    c.managed=true;c.name=m.name;session.accountId=account.userId;this.replacePairedSession(c.id,session);
     if(changed)await this.save();else await this.saveDeviceState();
     return c;
   }
@@ -3002,7 +3087,7 @@ export default class SendToT3 extends Plugin {
     this.signInEmail=this.nativeAccount?.identity??this.signInEmail;this.signInExpired=expired;
     this.noProjectProjects.clear();this.noProjectIdentities.clear();
     this.disposeUnaryOwners();this.cancelCloudLogin(reason);this.nativeAccount=null;this.nativeToken=undefined;this.nativeRefreshing=undefined;this.sessionRefreshing.clear();
-    for(const [id,s] of Object.entries(this.pairedSessions))if(s.accountId)delete this.pairedSessions[id];
+    for(const [id,s] of Object.entries(this.pairedSessions))if(s.accountId){delete this.pairedSessions[id];this.invalidateSendPairing(id);}
     this.cloudAccount=null;this.cloudMachines=[];this.accountCandidates.clear();this.registryNextAttempt=0;this.cloudError='';this.machineErrors={};this.connectionSyncComplete=false;this.machineRefreshing=undefined;this.cloudRefreshing=undefined;
     // Clear only device credentials. Keep synced links, bindings and choices.
     // Cancelled setup readers can return before persistence finishes. Publish
@@ -3014,10 +3099,10 @@ export default class SendToT3 extends Plugin {
     const old=this.nativeAccount;await this.clearAccount(false);
     if(old)try{await revokeNativeAccount(old,nativeAccountFetch);}catch{new Notice('Signed out on this device. T3 could not be reached to revoke the account session; you can revoke it in your T3 account.');}
   }
-  async forgetPairing(id:string){this.disposeUnaryOwner(id);this.noProjectProjects.delete(id);this.noProjectIdentities.delete(id);delete this.pairedSessions[id];this.projectDiscovery?.invalidate();await this.save();this.refreshProjectsInBackground(true);}
+  async forgetPairing(id:string){this.invalidateSendPairing(id);this.disposeUnaryOwner(id);this.noProjectProjects.delete(id);this.noProjectIdentities.delete(id);delete this.pairedSessions[id];this.projectDiscovery?.invalidate();await this.save();this.refreshProjectsInBackground(true);}
   async removeConnection(id:string){
-    if(this.settings.pending.some(r=>r.connection.connectionId===id)||this.settings.completionJobs.some(j=>j.connection.connectionId===id&&j.status==='watching')||this.settings.settlementJobs.some(j=>j.connection.connectionId===id))throw Error('This connection has an unconfirmed request or completion check. Resolve or stop it before removing the connection.');
-    this.disposeUnaryOwner(id);this.projectDiscovery?.invalidate();for(const [key,c] of this.accountCandidates)if(c.id===id)this.accountCandidates.delete(key);
+    if(this.settings.pending.some(r=>!r.cleanupOnly&&r.connection.connectionId===id)||this.settings.completionJobs.some(j=>j.connection.connectionId===id&&j.status==='watching')||this.settings.settlementJobs.some(j=>j.connection.connectionId===id))throw Error('This connection has an unconfirmed request or completion check. Resolve or stop it before removing the connection.');
+    this.invalidateSendPairing(id);this.disposeUnaryOwner(id);this.projectDiscovery?.invalidate();for(const [key,c] of this.accountCandidates)if(c.id===id)this.accountCandidates.delete(key);
     this.noProjectProjects.delete(id);this.noProjectIdentities.delete(id);
     this.settings.paired=this.settings.paired.filter(c=>c.id!==id);this.settings.directProjects=this.settings.directProjects.filter(p=>p.connectionId!==id);this.settings.directSelected=this.settings.directSelected.filter(k=>!k.startsWith(id+':'));delete this.pairedSessions[id];if(this.settings.directScanId===id)this.settings.directScanId=this.settings.paired[0]?.id??'';this.syncProjectSources();await this.save();
   }
@@ -3034,6 +3119,10 @@ export default class SendToT3 extends Plugin {
     this.responseBindingReplica=next;this.settings.responseBindings=next;
     await this.save(true);
   }
+  private async latestResponseBinding(id:string){
+    const disk=await this.loadSettings();
+    return mergeResponseBindingData({[id]:this.responseBindingReplica[id]},{[id]:disk?.responseBindings?.[id]})[id]?.request;
+  }
   private sharedSnapshot():SharedSettings{const {pending,completionJobs,settlementJobs,connection,projects,directProjects,selected,directSelected,directScanId,smartSend,...shared}=this.settings;return {...jsonClone(shared),...(smartSend?{smartSend:snapshotSmartSend(smartSend)}:{})};}
   private sharedData(input:unknown):SharedSettings{
     const data=storedSettings(input);
@@ -3042,7 +3131,7 @@ export default class SendToT3 extends Plugin {
       inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},
       completion:{action:'keep',archiveFolder:''}};
   }
-  save(forceShared=false) {
+  save(forceShared=false,rewriteBindings?:(bindings:ResponseBindingData)=>ResponseBindingData) {
     this.smartPreparationSettingsRevision++;
     this.rememberProjectViews();
     this.refreshFolderIndicators();
@@ -3072,6 +3161,7 @@ export default class SendToT3 extends Plugin {
       snapshot.noteContexts=mergeNoteContexts(current?.noteContexts,intended.noteContexts,this.settings.noteContexts);
       snapshot.smartSend=mergeSmartSend(this.smartReplica,current?.smartSend,intended.smartSend);
       snapshot.responseBindings=mergeResponseBindingData(this.responseBindingReplica,current?.responseBindings,intended.responseBindings);
+      if(rewriteBindings)snapshot.responseBindings=rewriteBindings(snapshot.responseBindings);
       // Compatible replicas commit together before shared publication. The
       // pending/command checkpoint above remains its own awaited boundary.
       await writeDeviceStates([
@@ -3138,7 +3228,7 @@ export default class SendToT3 extends Plugin {
       this.settings.pending.push(request); await this.save();
       const sentThreadId=await this.dispatch(request,options?.quiet,true,preparing);
       return {threadId:sentThreadId,request};
-    } catch(e) {if(request)await this.failRequest(request,e,'preparation',startedAt);else this.recordSendFailure(undefined,e,'preparation',startedAt);const detail=`${unsavedMessage(e)} The send failed. See the send failure log.`;if(options?.throwOnError)throw new RequestDeliveryError(detail,false,Boolean(request));new Notice(`T3 Code: ${detail}`,12000);}
+    } catch(e) {if(request)await this.failRequest(request,e,'preparation',startedAt);else this.recordSendFailure(undefined,e,'preparation',startedAt);const failure=e instanceof RequestDeliveryError?e:new RequestDeliveryError(`${unsavedMessage(e)} No message was sent or queued.`,false,Boolean(request));if(options?.throwOnError)throw failure;new Notice(`T3 Code: ${failure.message}`,12000);}
     finally {clearSmartSendPreparation(this.smartData());finishPreview();this.busy = false;}
   }
   /** Resolve against the final thread and its provider turn, never the cursor.
@@ -3213,7 +3303,6 @@ export default class SendToT3 extends Plugin {
     for(const leaf of this.app.workspace.getLeavesOfType('markdown'))if(destinations.includes((leaf.view as MarkdownView).file?.path??''))this.sendPreviews.hide(leaf.view as MarkdownView);
     request.inlineHost=request.inlineBindings[0];
   }
-  private async responseGuard(binding:ResponseRequest,_status:'prepared'|'accepted'|'failed',_uncertain=false){if(!binding.localOnly)throw Error('Legacy reply creation was retired.');}
   private requestBindingIds(request:Request){
     return contextBindingIds(request);
   }
@@ -3338,10 +3427,14 @@ export default class SendToT3 extends Plugin {
   }
   async dispatch(request:Request,quiet=false,freshIdentity=false,preparing?:ReturnType<typeof prepareSend>) {
     const startedAt=Date.now();let stage='response-registration';
+    if(request.cleanupOnly)throw new RequestDeliveryError('This send ended. Its local reply cleanup is pending.',false,true);
+    const hadSavedPlan=Boolean(request.directPlan);
+    let messageSent=false,creationSent=false;
+    const bindings=request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]);
+    try{
     await this.assertRequestMode(request);
     await this.captureNoteContext(request);
     logEvent('request.dispatch.started',{requestId:request.id,threadId:request.threadId,projectId:request.project.id,jobId:request.inlineSteering?.jobId,kind:request.inlineSteering?'steering':request.inlineFollow?'continuation':'send'});
-    try{
     if(request.inlineSteering){
       const steering=request.inlineSteering;
       if(steering.input.messageId!==commandId(request.id,'message')||!request.threadId)throw Error('Invalid saved steering request.');
@@ -3367,20 +3460,18 @@ export default class SendToT3 extends Plugin {
     // The watcher must acknowledge these exact identities before T3 can expose
     // the new message. Synced settings can arrive after the canonical run.
     stage='stream-reservation';await this.reserveResponseStreams(request);
-    stage='dispatch';let result:Awaited<ReturnType<typeof sendRequest>>;
-    try{result=await sendRequest(request,preparing);}finally{
-      // Acceptance can be lost or lack a start receipt. Never keep the unsent
-      // hint after an attempt settles: exact background recovery must resume.
-      for(const binding of request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]))this.deviceInline?.attempted(binding.id);
-    }
-    for(const binding of request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]))await this.responseGuard(binding,'accepted');
+    stage='dispatch';
+    const result=await sendRequest(request,preparing,{
+      onMessageSent:()=>{messageSent=true;if(!request.threadId&&request.directPlan?.launch)creationSent=true;},
+      onThreadCreateSent:()=>{creationSent=true;},
+    },this.connectionSetupOwner.signal);
+    for(const binding of bindings)this.deviceInline?.attempted(binding.id);
     stage='delivery-evidence';
     // Keep the acknowledged exact start even when the renderer/event feed
     // missed it. This is orchestration delivery, not a guessed provider turn.
     const delivery=request.directPlan?.delivery;
     if(this.deviceInline){
       const accepted=(host:ResponseStorageTarget,id:string)=>{if(delivery)return this.deviceInline!.delivered(host,id,delivery);this.deviceInline!.accepted(host,id,commandId(request.id,'message'));};
-      const bindings=request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]);
       for(const binding of bindings)if([2,3,4].includes(binding.version))await accepted(binding.host,binding.id);
       if(request.inlineSteering)for(const target of request.inlineSteering.targets??[request.inlineSteering])if(target.host)await accepted(target.host,target.jobId);
       if(request.inlineFollow?.host)await accepted(request.inlineFollow.host,request.inlineFollow.jobId);
@@ -3393,10 +3484,16 @@ export default class SendToT3 extends Plugin {
     try{await this.save();}catch(e){this.settings.pending=before.pending;this.settings.completionJobs=before.jobs;this.settings.settlementJobs=before.settlementJobs;this.settings.noteThreads=before.noteThreads;this.settings.folderLinks=before.folderLinks;throw e;}
     if(!quiet)new Notice('Sent successfully.');return result.threadId;
     }catch(error){
-      logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId});await this.failRequest(request,error,stage,startedAt);
+      // A refusal of this attempt cannot rule out delivery by an earlier plan.
+      const refused=error instanceof T3RpcError&&(error.kind==='EnvironmentAuthorizationError'||error.launchRefused);
+      const uncertain=hadSavedPlan||messageSent&&!refused;
+      if(uncertain)for(const binding of bindings)this.deviceInline?.attempted(binding.id);
+      const creationUnconfirmed=creationSent&&!(refused&&request.directPlan?.phase==='prepared');
+      if(request.hideObsidianThread&&!hadSavedPlan&&!creationUnconfirmed)try{this.threadVisibility?.discard(commandId(request.id,'thread-tag'));}catch(cleanupError){this.recordSendFailure(request,cleanupError,'tag-cleanup',startedAt);}
+      logFailure('request.dispatch.failed',error,{requestId:request.id,threadId:request.threadId,jobId:request.inlineSteering?.jobId,messageSent,creationSent});await this.failRequest(request,error,stage,startedAt,uncertain);
       const accepted=acceptedRequestThread(request);
       if(accepted){new Notice(`T3 received your message in thread ${accepted.slice(0,8)}. The local response needs recovery. See the send failure log.`,12000);return accepted;}
-      throw error;
+      throw new RequestDeliveryError(`${unsavedMessage(error)} ${uncertain?'T3 did not confirm delivery. Check the thread before sending again.':'No message was sent or queued.'}`,false,true,uncertain);
     }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
   onunload(){this.connectionSetupOwner.abort();this.disposeUnaryOwners();if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.conversationSources.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.noteInboxView?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void Promise.allSettled([this.saving,this.diagnostics?.close()]).then(()=>closeSharedStateDatabase());void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
@@ -3513,7 +3610,7 @@ export default class SendToT3 extends Plugin {
     const current=()=>!this.stopped&&!this.busy&&this.settings.autoSettleThreads&&this.settings.settlementJobs.includes(job);
     if(!current())return;
     try{
-      if(this.settings.pending.some(request=>request.threadId===job.threadId&&request.connection.environmentId===job.connection.environmentId))return;
+      if(this.settings.pending.some(request=>!request.cleanupOnly&&request.threadId===job.threadId&&request.connection.environmentId===job.connection.environmentId))return;
       const shell=await runBridge(job.connection,['threads','--project',job.projectId]);
       const summary=readThreadList(shell).find(thread=>thread.id===job.threadId);
       const full=readThreadSnapshot({thread:await runBridge(job.connection,['read',job.threadId])}).thread;

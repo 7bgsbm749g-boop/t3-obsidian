@@ -21,13 +21,108 @@ function fixture(binding=request(),initial?:string,records:ResponseBindingData={
   let document=initial??`Before\n\n${responseAnchor(binding.id)}\n\nAfter`,open=true,ready=true,hold=false,now=0,writes=0;
   const callbacks=new Map<string,(update:DirectInlineUpdate)=>void>(),registered:any[]=[],errors:any[]=[],finished:string[]=[];
   const io:any={localBindings:()=>responseBindingRequests(records),saveLocalBinding:async(request:ResponseRequest)=>{records=updateResponseBindingData(records,request,'test');},openedNotes:()=>open?[{path:binding.notePath,document}]:[],readNote:async()=>document,updateNote:async(_path:string,change:(text:string)=>string)=>document=change(document),saveLocalNote:async()=>{},syncReady:()=>ready,isOpen:()=>open,access:async()=>{throw Error('No host or T3 access needed by this replay.');},receiveCoordinated:(record:any)=>registered.push(record),receiveDirect:()=>{},localCompleted:(id:string)=>finished.push(id),completionFailed:(error:any)=>errors.push(error)};
+  io.rewriteLocalBinding=async(id:string,change:(value:ResponseRequest)=>ResponseRequest)=>{
+    const before=records[id]?.request;
+    if(before)records=updateResponseBindingData(records,change(before),'test');
+    return records[id]?.request;
+  };
   io.loadStops=()=>stops;
-  const notes={read:async(_path?:string):Promise<string|undefined>=>document,compareAndSet:async(_path:string,before:string,after:string,guard?:()=>boolean)=>{if(hold||document!==before||guard?.()===false)return false;document=after;writes++;return true;}};
+  const notes={read:async(_path?:string):Promise<string|undefined>=>document,missing:async(_path:string)=>false,compareAndSet:async(_path:string,before:string,after:string,guard?:()=>boolean,checkBinding?:()=>Promise<boolean>)=>{if(checkBinding&&!await checkBinding()||hold||document!==before||guard?.()===false)return false;document=after;writes++;return true;}};
   const manager=new LocalResponseManager(randomUUID(),'vault',io,notes,()=>now,(record,_access,receive)=>{callbacks.set(record.request.id,receive);return {tick:()=>{},update:()=>{},delivery:()=>{},reconnect:()=>{},suspend:()=>{},dispose:()=>{}} as any;});
   return {binding,manager,io,notes,records:()=>records,receiveRecords:(value:ResponseBindingData)=>records=value,callbacks,registered,errors,finished,read:()=>document,write:(text:string)=>document=text,open:(value:boolean)=>open=value,ready:(value:boolean)=>ready=value,hold:(value:boolean)=>{hold=value;if(!value)manager.changed(binding.notePath);},advance:()=>now+=1100,writes:()=>writes,emit:(body='Final answer',verified=true,messageId=binding.messageId)=>callbacks.get(binding.id)!({request:binding,messageId,sequence:5,body,turnId:'exact-turn',phase:'complete',completionVerified:verified})};
 }
 const drain=async()=>{for(let n=0;n<8;n++)await new Promise(resolve=>setImmediate(resolve));};
 const recover=async(h:ReturnType<typeof fixture>)=>{h.manager.resume();await (h.manager as any).recoveryWork;await drain();};
+
+test('failure before response registration removes only its prepared anchor',async()=>{
+  const h=fixture();
+  assert.equal(h.manager.has(h.binding.id),false);
+  h.write(h.read()+'\nUser edit');
+  await h.manager.cancel(h.binding);
+  assert.doesNotMatch(h.read(),new RegExp(h.binding.id));
+  assert.match(h.read(),/After\nUser edit/);
+  assert.deepEqual(h.manager.health().pending,[]);
+  h.manager.dispose();
+});
+
+test('failed-send cleanup preserves the anchor if a newer peer message wins before the note write',async()=>{
+  const h=fixture();
+  await h.manager.register(h.binding);
+  const peer={...h.binding,localMessageId:randomUUID()};
+  let latest=h.binding;
+  h.io.latestLocalBinding=async()=>latest;
+  const compareAndSet=h.notes.compareAndSet;
+  h.notes.compareAndSet=(...args)=>{latest=peer;return compareAndSet(...args);};
+  h.io.retainLocalCompletion=()=>assert.fail('The peer reply must not receive a removal receipt');
+  const before=h.read();
+  assert.equal(await h.manager.cancel(h.binding),false);
+  assert.equal(h.read(),before);
+  assert.equal(h.writes(),0);
+  assert.deepEqual(h.finished,[]);
+  assert.equal(h.manager.responses()[0].active,true);
+  h.receiveRecords(updateResponseBindingData(h.records(),peer,'peer'));
+  await recover(h);
+  assert.equal(h.manager.request(h.binding.id)?.localMessageId,peer.localMessageId);
+  assert.equal(h.manager.responses()[0].active,true);
+  h.manager.dispose();
+});
+
+test('a confirmed missing note retires failed-send cleanup after an unavailable read leaves it pending',async()=>{
+  const h=fixture(),receipts:Array<{messageId:string;saved:boolean}>=[];
+  h.notes.read=async()=>undefined;
+  h.io.retainLocalCompletion=async(binding:ResponseRequest,saved:boolean)=>{receipts.push({messageId:binding.messageId,saved});};
+  await assert.rejects(h.manager.cancel(h.binding),/temporarily unavailable/);
+  assert.deepEqual(h.finished,[]);
+  assert.deepEqual(receipts,[]);
+  h.notes.missing=async()=>true;
+  h.notes.read=async()=>assert.fail('A stale pane is not read after the file is confirmed absent');
+  assert.equal(await h.manager.cancel(h.binding),true);
+  assert.deepEqual(h.finished,[h.binding.id]);
+  assert.deepEqual(receipts,[{messageId:h.binding.messageId,saved:false}]);
+  assert.equal(h.writes(),0);
+  assert.deepEqual(h.manager.health().pending,[]);
+  h.manager.dispose();
+});
+
+test('failed follow-up restores the previous response only if it still owns the binding',async()=>{
+  const h=fixture(),failed=randomUUID(),newer=randomUUID();
+  await h.manager.register(h.binding);
+  await h.manager.follow(h.binding.id,failed);
+  await h.manager.discardFollow(h.binding.id,failed,h.binding.messageId);
+  assert.equal(h.manager.request(h.binding.id)?.localMessageId,h.binding.messageId);
+  await h.manager.follow(h.binding.id,newer);
+  await h.manager.discardFollow(h.binding.id,failed,h.binding.messageId);
+  assert.equal(h.manager.request(h.binding.id)?.localMessageId,newer);
+  assert.equal(h.writes(),0);
+  h.manager.dispose();
+});
+
+test('failed follow-up cleanup preserves a newer saved peer binding than the loaded reply',async()=>{
+  const h=fixture(),failed=randomUUID(),newer=randomUUID();
+  await h.manager.register(h.binding);
+  await h.manager.follow(h.binding.id,failed);
+  h.receiveRecords(updateResponseBindingData(h.records(),{...h.binding,localMessageId:newer},'peer'));
+  await h.manager.discardFollow(h.binding.id,failed,h.binding.messageId);
+  assert.equal(h.records()[h.binding.id].request.localMessageId,newer);
+  assert.equal(h.manager.request(h.binding.id)?.localMessageId,newer);
+  h.manager.dispose();
+});
+
+test('startup can discard failed input from a saved binding without loading its note',async()=>{
+  const binding=request(),failed=randomUUID(),kept=randomUUID();
+  const stored={...binding,localMessageId:failed,localSteering:[{messageId:failed,text:'Failed',before:[]},{messageId:kept,text:'Accepted',before:[],confirmed:true}]};
+  const h=fixture(binding,undefined,updateResponseBindingData({},stored,'test'));
+  h.open(false);
+  h.io.readNote=()=>assert.fail('Cleanup should not open or read the note');
+  await h.manager.discardSteering(binding.id,failed);
+  await h.manager.discardFollow(binding.id,failed,binding.messageId);
+  const [clean]=responseBindingRequests(h.records());
+  assert.equal(clean.localMessageId,binding.messageId);
+  assert.deepEqual(clean.localSteering?.map(input=>input.messageId),[kept]);
+  assert.equal(h.manager.has(binding.id),false);
+  assert.equal(h.writes(),0);
+  h.manager.dispose();
+});
 
 test('reload restores Working and its watch before the saved note is opened',async()=>{
   const binding=request(),h=fixture(binding,undefined,updateResponseBindingData({},binding,'A'));h.open(false);
