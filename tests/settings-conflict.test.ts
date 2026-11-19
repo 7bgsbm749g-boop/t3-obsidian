@@ -501,3 +501,27 @@ test('inbox settlement updates every attached T3 thread before saving local stat
  note.section='settled';actions.length=0;await p.changeInboxNote(note,{kind:'regular'});assert.deepEqual(actions.map(action=>action.type??'local'),['thread.unsettle','thread.unsettle','local']);assert.equal(actions[0].reason,'user');
  note.section='regular';const before=JSON.stringify(p.settings.noteInbox);fail=true;await assert.rejects(p.changeInboxNote(note,{kind:'settled'}),/offline/);assert.equal(JSON.stringify(p.settings.noteInbox),before);
 });
+
+test('question discovery reads only changed notes and keeps polling known targets',async()=>{
+  const {plugin}=await harness({vaultId:'vault'});
+  const path='Note.md',file={path};
+  const target={environmentId:'test',threadId:'test-thread',requestId:'test-question'};
+  const link='> [Answer](t3-question:'+encodeURIComponent(JSON.stringify(target))+')';
+  let disk='Plain text.',reads=0,polled:string[]=[];
+  plugin.app.vault={getFileByPath:(name:string)=>name===path?file:null,read:async()=>{reads++;return disk;}};
+  plugin.questions.refresh=async(targets:Array<{requestId:string}>)=>{polled=Array.from(targets,value=>value.requestId);};
+  plugin.changedPromptNotes.add(path);
+  await plugin.refreshQuestions();
+  await plugin.refreshQuestions();
+  assert.equal(reads,1);
+  assert.deepEqual(polled,[]);
+  disk=link;plugin.changedPromptNotes.add(path);
+  await plugin.refreshQuestions();
+  await plugin.refreshQuestions();
+  assert.equal(reads,2);
+  assert.deepEqual(polled,[target.requestId]);
+  disk='Question removed.';plugin.changedPromptNotes.add(path);
+  await plugin.refreshQuestions();
+  assert.equal(reads,3);
+  assert.deepEqual(polled,[]);
+});

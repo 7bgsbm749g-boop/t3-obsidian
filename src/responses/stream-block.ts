@@ -5,6 +5,7 @@ import {responseBoundaries} from './response-container';
 
 export interface StreamBlock {key:string;from:number;to:number;text:string;/** Terminal history, including an interrupted run. */complete:boolean;tracked:boolean}
 const cache=new Map<string,StreamBlock[]>();
+const blockIndexes=new WeakMap<StreamBlock[],ReadonlyMap<string,StreamBlock|undefined>>();
 let cachedCharacters=0;
 const maxCachedCharacters=8_000_000;
 let sourceParses=0,cacheHits=0;
@@ -49,8 +50,17 @@ export function streamBlocks(document:string):StreamBlock[] {
   }
   return blocks;
 }
+export function streamBlockIndex(document:string):ReadonlyMap<string,StreamBlock|undefined> {
+  const blocks=streamBlocks(document),cached=blockIndexes.get(blocks);
+  if(cached)return cached;
+  const index=new Map<string,StreamBlock|undefined>();
+  // A duplicate fold key is ambiguous, even if only one block is terminal.
+  for(const block of blocks)index.set(block.key,index.has(block.key)?undefined:block);
+  blockIndexes.set(blocks,index);
+  return index;
+}
 export function streamBlock(document:string,key:string):StreamBlock|undefined {
-  const matches=streamBlocks(document).filter(block=>block.key===key);return matches.length===1?matches[0]:undefined;
+  return streamBlockIndex(document).get(key);
 }
 export function removeStreamBlock(document:string,key:string,hash?:string):{text:string;from:number;to:number} {
   const block=streamBlock(document,key);

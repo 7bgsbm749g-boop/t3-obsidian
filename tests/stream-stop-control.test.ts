@@ -184,3 +184,16 @@ test('a stop failure is reported and can be retried; disposal removes controls a
   assert.equal(h.errors.length,1);assert.equal(button.disabled,false);h.fire('click',button);await h.flush();assert.equal(h.errors.length,2);
   h.dispose();assert.equal(button.parentElement,null);assert.equal(h.folds[0].classes.size,0);h.fire('click',h.folds[0]);assert.equal(h.calls.length,2);
 });
+
+test('Stop updates when response eligibility changes without a DOM mutation',async()=>{
+  const h=fixture();
+  try{
+    h.fire('click',h.folds[0]);
+    assert.equal(h.button().hidden,false);
+    h.targets.delete(h.folds[0]);
+    const {responseControlsChanged}=await import('../src/responses/response-controls-event');
+    h.root.dispatchEvent(new Event(responseControlsChanged));
+    await Promise.resolve();
+    assert.equal(h.button(),undefined);
+  }finally{h.dispose();}
+});

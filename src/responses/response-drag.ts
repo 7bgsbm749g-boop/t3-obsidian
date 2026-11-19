@@ -1,3 +1,4 @@
+import {responseControlsChanged} from './response-controls-event';
 import {editorCM} from '../shared/native-editor';
 import type {App,MarkdownView} from 'obsidian';
 import {nativeResponses} from './native-response-manager';
@@ -86,6 +87,7 @@ export function installResponseDrag(app:App,root:Document,icon:(element:HTMLElem
   const schedule=()=>{if(!queued&&!disposed){queued=true;queueMicrotask(refresh);}};
   root.addEventListener('pointerdown',down,true);root.addEventListener('pointermove',move,{capture:true,passive:false});root.addEventListener('pointerup',up,true);root.addEventListener('pointercancel',cancel,true);root.addEventListener('keydown',keydown,true);root.addEventListener('click',click,true);win.addEventListener('blur',clear);
   const observer=new win.MutationObserver(schedule);observer.observe(root.body,{childList:true,subtree:true});
-  const timer=win.setInterval(refresh,1000);refresh();
-  return ()=>{disposed=true;clear();observer.disconnect();win.clearInterval(timer);for(const [grip] of grips)grip.remove();grips.clear();root.removeEventListener('pointerdown',down,true);root.removeEventListener('pointermove',move,true);root.removeEventListener('pointerup',up,true);root.removeEventListener('pointercancel',cancel,true);root.removeEventListener('keydown',keydown,true);root.removeEventListener('click',click,true);win.removeEventListener('blur',clear);};
+  root.addEventListener(responseControlsChanged,schedule);
+  refresh();
+  return ()=>{disposed=true;root.removeEventListener(responseControlsChanged,schedule);clear();observer.disconnect();for(const [grip] of grips)grip.remove();grips.clear();root.removeEventListener('pointerdown',down,true);root.removeEventListener('pointermove',move,true);root.removeEventListener('pointerup',up,true);root.removeEventListener('pointercancel',cancel,true);root.removeEventListener('keydown',keydown,true);root.removeEventListener('click',click,true);win.removeEventListener('blur',clear);};
 }
