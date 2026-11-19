@@ -11,7 +11,7 @@ export const THREAD_REPLY_INSTRUCTION='Answer in the T3 thread.';
 export function visibleInlineInput(text:string,options:{stripFooterInsideCode?:boolean}={}):string {
   // Older saved sends appended task IDs here. Read that format for display;
   // current sends carry note properties without adding a task-specific suffix.
-  const candidate=/\n\nSent from Obsidian\.\nVault: ([^\r\n]+)\nNote: ([^\r\n]+)(?:\nTaskflow task ID: [\w-]{1,256})*\n?$/.exec(text);
+  const candidate=/\n\nSent from Obsidian\.\nVault: ([^\r\n]+)\nNote: ([^\r\n]+)(?:\nTaskflow task ID: [\w-]{1,256})*(?:\nShared vault ID: [a-zA-Z0-9_-]{1,128})?\n?$/.exec(text);
   const clean=candidate&&!candidate.slice(1).some(value=>hasControlCharacters(value,true))?candidate:null;
   const footer=clean??/\n\nSent from Obsidian\.\nObsidian vault: ("(?:[^"\\\r\n]|\\.)*")\nDestination note path: ("(?:[^"\\\r\n]|\\.)*")\s*$/.exec(text);
   if(!footer||!text.slice(0,footer.index).trim()||!options.stripFooterInsideCode&&markdownCodeRanges(text).some(([from,to])=>footer.index+2>=from&&footer.index+2<to))return text;

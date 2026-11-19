@@ -69,3 +69,11 @@ test('saved task-ID footers remain hidden when old messages are reopened',()=>{
   assert.equal(visibleInlineInput(example),example);
   assert.match(saved,/Taskflow task ID: task-two$/,'presentation preserves the saved message');
 });
+
+test('shared vault context remains in the saved prompt and stays out of the projected reply',()=>{
+  const footer=obsidianFooter('Phone copy','Task.md','shared-id');
+  assert.ok(footer.endsWith('\nShared vault ID: shared-id'));
+  assert.equal(visibleInlineInput('Do the work.'+footer),'Do the work.');
+  assert.equal(obsidianFooter('Phone copy','Task.md','bad\nidentity'),obsidianFooter('Phone copy','Task.md'));
+  assert.equal(obsidianFooter('Phone copy',undefined,'shared-id'),obsidianFooter('Phone copy'));
+});
