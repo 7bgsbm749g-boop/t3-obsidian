@@ -1076,7 +1076,7 @@ test('a failed preparation neither stops the old stream nor confirms its added t
 });
 
 
-test('ordinary note send preserves YAML task IDs without a Taskflow integration',async()=>{
+test('mobile note send preserves YAML task IDs and adds the shared vault identity',async()=>{
  const h=await folderMenuHarness();
  try{
   const {file}=h.fileMenu('Notes/Associated.md',false);Object.assign(file,{basename:'Associated',stat:{ctime:123}});
@@ -1084,6 +1084,8 @@ test('ordinary note send preserves YAML task IDs without a Taskflow integration'
   let document=properties+'\n\nDo the assigned work.';const sent:any[]=[];
   h.plugin.app.vault.read=async()=>document;h.plugin.app.vault.getFileByPath=()=>file;
   h.plugin.app.vault.process=async(_file:any,change:(text:string)=>string)=>document=change(document);
+  h.plugin.app.vault.getName=()=> 'Synthetic Phone Copy';
+  h.plugin.settings.vaultId='shared-copy-id';
   h.plugin.settings.autoSettleThreads=false;h.plugin.settings.inlineStreaming.enabled=false;
   h.plugin.requestTitle=async()=> 'Associated';
   h.plugin.dispatch=async(request:any)=>{sent.push(request);return 'associated-thread';};
@@ -1092,6 +1094,7 @@ test('ordinary note send preserves YAML task IDs without a Taskflow integration'
   assert.match(sent[0].prompt,/Do the assigned work\./);
   assert.equal(sent[0].prompt.split('12345678-1234-4234-8234-123456789abc').length-1,1);
   assert.doesNotMatch(sent[0].prompt,/Taskflow task ID:/);
+  assert.ok(sent[0].prompt.endsWith('\nVault: Synthetic Phone Copy\nNote: Notes/Associated.md\nShared vault ID: shared-copy-id'));
  }finally{h.plugin.onunload();}
 });
 

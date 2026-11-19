@@ -52,7 +52,7 @@ if(args[0]==='auth'){
   await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
   await writeFile(join(dir,'userdata','server-runtime.json'),JSON.stringify({origin:`http://127.0.0.1:${(server.address() as any).port}`}));
   const url=`http://127.0.0.1:${(server.address() as any).port}`,connection={executable:'',host:'direct',transport:'direct',url,connectionId:'loopback',environmentId:'test-environment'};
-  shared.push({paired:[{id:'loopback',name:'This computer',url,environmentId:'test-environment'}],directProjects:(existing?[project]:[]).map(item=>({...item,connectionId:'loopback'}))});
+  shared.push({vaultId:'shared-desktop-vault',paired:[{id:'loopback',name:'This computer',url,environmentId:'test-environment'}],directProjects:(existing?[project]:[]).map(item=>({...item,connectionId:'loopback'}))});
   let local:any={deviceId:randomUUID(),mode,connection,pairedSessions:{loopback:{url,environmentId:'test-environment',token:'test-only',expiresAt:Date.now()+600_000}}},activeFile:any;
   class Base{}
   class FileAdapter {getBasePath(){return vaultRoot;}getFullPath(path:string){return join(vaultRoot,path);}}
@@ -108,7 +108,7 @@ for(const existing of [false,true])test(`desktop chat uses No project with ${exi
     assert.equal(h.commands[0].projectId,h.noProject.id);
     assert.equal(h.commands[0].title,'draft');
     assert.match(h.commands[1].text,/draft.md/);
-    assert.equal(h.commands[1].text,'Edit this note\n\nSent from Obsidian.\nVault: Vault café with spaces\nNote: draft.md');
+    assert.equal(h.commands[1].text,'Edit this note\n\nSent from Obsidian.\nVault: Vault café with spaces\nNote: draft.md\nShared vault ID: shared-desktop-vault');
     assert.equal(h.commands[1].attachments.length,0);
     assert.equal(h.shared.at(-1).folderLinks.length,0);
     const additions=(await h.cliCalls()).filter(args=>args[0]==='project');
@@ -174,7 +174,7 @@ test('send context remains available after removal of the wait feature',{timeout
   try{
     h.setNote('draft.md');await h.plugin.sendChat('Use the requested plan',{path:'draft.md'});
     const sent=h.commands[1];
-    assert.equal(sent.text,'Use the requested plan\n\nSent from Obsidian.\nVault: Vault café with spaces\nNote: draft.md');
+    assert.equal(sent.text,'Use the requested plan\n\nSent from Obsidian.\nVault: Vault café with spaces\nNote: draft.md\nShared vault ID: shared-desktop-vault');
     const record=h.shared.at(-1).noteContexts[0];
     assert.equal(record.waitForOtherThreads,undefined);assert.equal(record.notePath,'draft.md');
     const saves=h.shared.length;

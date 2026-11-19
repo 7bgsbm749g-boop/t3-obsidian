@@ -2466,7 +2466,7 @@ export default class SendToT3 extends Plugin {
     return root.replace(/[\\/]+$/,'')+separator+path.replace(/[\\/]+/g,separator);
   }
   private messageFooter(destination?:string):string {
-    return obsidianFooter(this.app.vault.getName(),destination);
+    return obsidianFooter(this.app.vault.getName(),destination,this.settings.vaultId);
   }
   private async prepareImages(markdown:string,sourcePath:string,resolveReferences=false,snapshot?:string){
     let definitions='';
