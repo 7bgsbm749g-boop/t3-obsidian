@@ -418,8 +418,11 @@ export class LocalResponseManager {
     await runtime()?.work;
     return this.writeNote(path,async()=>{
       if(!await checkBinding())return false;
-      const document=await this.notes.read(path);
-      if(document===undefined&&!await this.notes.missing?.(path))throw Error('The response note is temporarily unavailable.');
+      const deleted=await this.notes.missing?.(path);
+      const document=deleted?undefined:await this.notes.read(path).catch(async error=>{
+        if(!await this.notes.missing?.(path))throw error;
+      });
+      if(document===undefined&&!deleted&&!await this.notes.missing?.(path))throw Error('The response note is temporarily unavailable.');
       const range=document===undefined?undefined:localResponseRange(document,id,[target]);
       if(range&&document!==undefined){
         const after=document.slice(0,range.from)+document.slice(range.to);

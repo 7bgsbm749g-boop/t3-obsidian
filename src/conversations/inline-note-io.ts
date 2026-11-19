@@ -42,8 +42,8 @@ export function deviceNoteIO(app:App){
   const locations=locator;
   const missing=async(path:string)=>{
     if(!app.vault?.getFileByPath||!app.vault.adapter?.exists)return false;
-    const present=()=>!!app.vault.getFileByPath(path)||views(path).length>0;
-    return !present()&&!await app.vault.adapter.exists(path)&&!present();
+    // A pane can still point at a TFile Obsidian has already deleted.
+    return !app.vault.getFileByPath(path)&&!await app.vault.adapter.exists(path)&&!app.vault.getFileByPath(path);
   };
   return {
     missing,

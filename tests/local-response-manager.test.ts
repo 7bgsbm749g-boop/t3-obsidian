@@ -75,6 +75,7 @@ test('a confirmed missing note retires failed-send cleanup after an unavailable 
   assert.deepEqual(h.finished,[]);
   assert.deepEqual(receipts,[]);
   h.notes.missing=async()=>true;
+  h.notes.read=async()=>assert.fail('A stale pane is not read after the file is confirmed absent');
   assert.equal(await h.manager.cancel(h.binding),true);
   assert.deepEqual(h.finished,[h.binding.id]);
   assert.deepEqual(receipts,[{messageId:h.binding.messageId,saved:false}]);

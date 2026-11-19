@@ -46,10 +46,10 @@ test('a changed saved binding refuses the checked write before any note mutation
  h.manager.dispose();
 });
 
-test('note absence requires both the vault and its storage adapter to confirm it',async()=>{
+test('note absence requires confirmation from the vault and storage even when a pane retains the old file',async()=>{
  let hasFile=false,exists=true;
  const file={path:'Note.md'};
- const io=deviceNoteIO({workspace:{getLeavesOfType:()=>[]},vault:{getFileByPath:()=>hasFile?file:undefined,adapter:{exists:async()=>exists}}} as any);
+ const io=deviceNoteIO({workspace:{getLeavesOfType:()=>[{view:{file}}]},vault:{getFileByPath:()=>hasFile?file:undefined,adapter:{exists:async()=>exists}}} as any);
  assert.equal(await io.missing('Note.md'),false);
  exists=false;
  assert.equal(await io.missing('Note.md'),true);
