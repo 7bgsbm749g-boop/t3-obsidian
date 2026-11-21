@@ -1,3 +1,4 @@
+import {responseControlsChanged} from './response-controls-event';
 import * as cmState from '@codemirror/state';
 import * as cmCommands from '@codemirror/commands';
 import {nativeMarkdownView,editorCM} from '../shared/native-editor';
@@ -356,7 +357,12 @@ export class NativeResponseView {
     this.render(projection.display,false);
     if(saved!==before)this.view.requestSave();
   }
+  private notifyControls(){
+    const element=this.view.contentEl,win=element?.ownerDocument.defaultView;
+    if(win)element.dispatchEvent(new win.Event(responseControlsChanged,{bubbles:true}));
+  }
   private render(display:string,clear:boolean){
+    this.notifyControls();
     const current=this.displayed(),change=changedInterval(current,display);
     if(!change){this.correctCaret();this.scroll.updated();return;}
     const cm=editorCM(this.view.editor);
@@ -535,8 +541,9 @@ export class NativeResponseView {
     this.lazyTools.clear();this.lazyToolCharacters=0;
     this.lazyToolParents.clear();
     this.disposed=true;
+    this.notifyControls();
   }
-  private block(record:NativeViewConflict){this.scroll.suspend();this.blockedDisplay=this.displayed();this.blocked=record;this.conflict(record);}
+  private block(record:NativeViewConflict){this.scroll.suspend();this.blockedDisplay=this.displayed();this.blocked=record;this.notifyControls();this.conflict(record);}
   /** Install only AFTER the coordinator's immutable write intent is durable,
    * before vault.process can synchronously notify native views. The incoming
    * exact bytes may be displayed, but coordinator delivery remains pending

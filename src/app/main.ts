@@ -302,6 +302,9 @@ export default class SendToT3 extends Plugin {
   private approvals?:ApprovalController;
   private questionModal?:QuestionModal;
   private questionPaths=new Set<string>();
+  private changedPromptNotes=new Set<string>();
+  private notePrompts=new Map<string,{questions:QuestionTarget[];approvals:ApprovalTarget[]}>();
+  private promptViews=new Map<MarkdownView,TFile>();
   private toolRenderings=new Map<HTMLDetailsElement,{ref:string;child:MarkdownRenderChild;dispose:()=>void}>();
   private htmlResults?:HtmlResultViews;
   private refreshingQuestions=false;
@@ -689,7 +692,7 @@ export default class SendToT3 extends Plugin {
     }));
     const approvalStorage=`${this.localKey}-approvals-${this.settings.vaultId}`;
     this.approvals=new ApprovalController(environmentId=>this.inlineThreadAccess(environmentId),{load:()=>{const saved:unknown=this.app.loadLocalStorage(approvalStorage);return loadApprovalRecords(saved);},save:records=>this.app.saveLocalStorage(approvalStorage,records)},randomId);
-    const questionPaths:unknown=this.app.loadLocalStorage(`${questionStorage}-paths`);if(Array.isArray(questionPaths))for(const path of questionPaths)if(typeof path==='string')this.questionPaths.add(path);
+    const questionPaths:unknown=this.app.loadLocalStorage(`${questionStorage}-paths`);if(Array.isArray(questionPaths))for(const path of questionPaths)if(typeof path==='string'){this.questionPaths.add(path);this.changedPromptNotes.add(path);}
     let dismissalRevision=this.questions.dismissalRevision;
     this.questions.subscribe(()=>{if(dismissalRevision===this.questions!.dismissalRevision)return;dismissalRevision=this.questions!.dismissalRevision;void this.cleanDismissedQuestions();});
     if(typeof MutationObserver!=='undefined')this.register(watchWorkspaceDocuments(this.app,root=>installQuestionLinks(root,this.questions!,(target,button)=>{const view=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.containerEl.contains(button));this.openQuestion(target,view?.file?.path);})));
@@ -702,20 +705,26 @@ export default class SendToT3 extends Plugin {
         const control=questionButton(this.questions!,target,value=>this.openQuestion(value,ctx.sourcePath));link.replaceWith(control.button);
         const row=control.button.closest<HTMLElement>('[data-t3-question], blockquote');if(row)row.hidden=this.questions!.isHidden(target);
         const child=new MarkdownRenderChild(control.button);child.register(control.unsubscribe);ctx.addChild(child);
-        this.questionPaths.add(ctx.sourcePath);
+        if(!this.questionPaths.has(ctx.sourcePath))this.changedPromptNotes.add(ctx.sourcePath);
       }
       for(const link of Array.from(element.querySelectorAll<HTMLAnchorElement>('a[href^="t3-approval:"]'))){
         const parsed=parseApprovalUrl(link.getAttribute('href')??'');if(!parsed||link.closest('pre,code'))continue;
         const control=approvalButton(this.approvals!,parsed.target,parsed.decision);link.replaceWith(control.button);
         const child=new MarkdownRenderChild(control.button);child.register(control.unsubscribe);ctx.addChild(child);
-        this.questionPaths.add(ctx.sourcePath);
+        if(!this.questionPaths.has(ctx.sourcePath))this.changedPromptNotes.add(ctx.sourcePath);
       }
     });
     this.addCommand({id:'answer-t3-question',name:'Answer T3 question…',checkCallback:checking=>{
       const view=this.app.workspace.getActiveViewOfType(MarkdownView);const targets=view?questionTargets(view.editor?.getValue()??'').filter(target=>!this.questions!.isDismissed(target)&&this.questions!.view(target).status!=='resolved'):[];
       if(!targets.length)return false;if(!checking)this.openQuestion(targets[0]);return true;
     }});
+    this.registerEvent(this.app.workspace.on('layout-change',()=>this.trackPromptViews()));
+    this.registerEvent(this.app.workspace.on('file-open',file=>{if(file)this.changedPromptNotes.add(file.path);}));
+    this.registerEvent(this.app.workspace.on('editor-change',(_editor,view)=>{
+      if(view.file)this.changedPromptNotes.add(view.file.path);
+    }));
     this.app.workspace.onLayoutReady(()=>{
+      this.trackPromptViews();
       void this.refreshQuestions();
       this.registerInterval(window.setInterval(()=>{
         // Control polling must not wait for a note's filesystem save queue.
@@ -859,9 +868,27 @@ export default class SendToT3 extends Plugin {
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.inlineChat?.renamed(oldPath,file.path)));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{if(file instanceof TFolder)void this.renameLinkedFolder(oldPath,file.path).catch(error=>new Notice(`T3 folder links: ${message(error)}`,10000));}));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{this.completionGlow?.relocate(oldPath,file.path);nativeResponses(this.app).renamed(oldPath,file.path);this.deviceInline?.renamed(oldPath,file.path);}));
-      this.registerEvent(this.app.vault.on('delete',file=>{this.inlineChat?.deleted(file.path);this.questionPaths.delete(file.path);}));
-      this.registerEvent(this.app.vault.on('modify',file=>{if(file instanceof TFile&&file.extension==='md')void this.app.vault.read(file).then(text=>{if(questionTargets(text).length||approvalTargets(text).length)this.questionPaths.add(file.path);}).catch(()=>{});}));
-      this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{for(const path of [...this.questionPaths])if(path===oldPath||path.startsWith(oldPath+'/')){this.questionPaths.delete(path);this.questionPaths.add(file.path+path.slice(oldPath.length));}}));
+      this.registerEvent(this.app.vault.on('delete',file=>{
+        this.inlineChat?.deleted(file.path);
+        this.questionPaths.delete(file.path);
+        this.changedPromptNotes.delete(file.path);
+        this.notePrompts.delete(file.path);
+      }));
+      const discoverPrompts=(file:TAbstractFile)=>{
+        if(file instanceof TFile&&file.extension==='md')this.changedPromptNotes.add(file.path);
+      };
+      this.registerEvent(this.app.vault.on('create',discoverPrompts));
+      this.registerEvent(this.app.vault.on('modify',discoverPrompts));
+      this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{
+        for(const path of new Set([...this.questionPaths,...this.changedPromptNotes])){
+          if(path!==oldPath&&!path.startsWith(oldPath+'/'))continue;
+          this.questionPaths.delete(path);
+          this.changedPromptNotes.delete(path);
+          this.notePrompts.delete(path);
+          this.changedPromptNotes.add(file.path+path.slice(oldPath.length));
+        }
+        discoverPrompts(file);
+      }));
       this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>{void this.relocateNoteThreads(oldPath,file.path,file instanceof TFolder).catch(error=>new Notice(`T3 thread history: ${message(error)}`,10000));}));
       this.registerEvent(this.app.vault.on('delete',file=>{void this.relocateNoteThreads(file.path,undefined,file instanceof TFolder).catch(error=>new Notice(`T3 thread history: ${message(error)}`,10000));}));
     }
@@ -948,11 +975,15 @@ export default class SendToT3 extends Plugin {
   }
   private cleaningDismissedQuestions=false;
   private dismissedCleanup=new Map<string,{hash:string;revision:number}>();
-  private async cleanDismissedQuestions(){
-    if(this.stopped||!this.questions?.hasDismissals()||this.cleaningDismissedQuestions)return;
+  private async cleanDismissedQuestions(changedPaths?:ReadonlySet<string>){
+    if(this.stopped||!this.questions?.hasDismissals())return;
+    if(this.cleaningDismissedQuestions){
+      for(const path of changedPaths??[])this.changedPromptNotes.add(path);
+      return;
+    }
     this.cleaningDismissedQuestions=true;
     try{
-      const paths=new Set([...this.questionPaths,...this.app.workspace.getLeavesOfType('markdown').map(leaf=>(leaf.view as MarkdownView).file?.path).filter((path):path is string=>!!path)]);
+      const paths=changedPaths??new Set([...this.questionPaths,...this.app.workspace.getLeavesOfType('markdown').map(leaf=>(leaf.view as MarkdownView).file?.path).filter((path):path is string=>!!path)]);
       const io=deviceNoteIO(this.app);
       for(const path of paths)try{await io.updateNote(path,current=>{
         const previous=this.dismissedCleanup.get(path),revision=this.questions!.dismissalRevision;
@@ -961,29 +992,56 @@ export default class SendToT3 extends Plugin {
         this.dismissedCleanup.set(path,{hash:contentHash(next),revision});
         if(this.dismissedCleanup.size>32)this.dismissedCleanup.delete(this.dismissedCleanup.keys().next().value!);
         return next;
-      },()=>!this.stopped);}catch{/* Saved cleanup retries; editor decorations already hide the question. */}
+      },()=>!this.stopped);}catch{this.changedPromptNotes.add(path);}
     }finally{this.cleaningDismissedQuestions=false;}
+  }
+  private trackPromptViews(){
+    const next=new Map<MarkdownView,TFile>();
+    for(const leaf of this.app.workspace.getLeavesOfType('markdown')){
+      const view=leaf.view as MarkdownView;
+      if(!view.file)continue;
+      next.set(view,view.file);
+      if(this.promptViews.get(view)!==view.file)this.changedPromptNotes.add(view.file.path);
+    }
+    for(const [view,file] of this.promptViews)if(next.get(view)!==file)this.changedPromptNotes.add(file.path);
+    this.promptViews=next;
   }
   private async refreshQuestions(){
     if(this.stopped||this.refreshingQuestions||!this.questions||!this.approvals)return;this.refreshingQuestions=true;
     try{
-      await this.cleanDismissedQuestions();
-      for(const leaf of this.app.workspace.getLeavesOfType('markdown')){const view=leaf.view as MarkdownView;if(view.file)this.questionPaths.add(view.file.path);}
-      const io=deviceNoteIO(this.app),notes=new Map<string,QuestionTarget[]>(),approvalNotes=new Map<string,ApprovalTarget[]>();
-      const openViews=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView);
-      for(const path of this.questionPaths){
-        const text=await io.readNote(path),displayed=openViews.filter(view=>view.file?.path===path).map(view=>view.editor?.getValue()??'').join('\n');
-        const targets=questionTargets((text??'')+'\n'+displayed),approvals=approvalTargets((text??'')+'\n'+displayed);
-        if(targets.length)notes.set(path,targets);if(approvals.length)approvalNotes.set(path,approvals);if(!targets.length&&!approvals.length)this.questionPaths.delete(path);
+      const io=deviceNoteIO(this.app);
+      const changed=new Set(this.changedPromptNotes),dismissedCandidates=new Set<string>();
+      for(const path of changed){
+        this.changedPromptNotes.delete(path);
+        try{
+          const file=this.app.vault.getFileByPath(path);
+          const text=file?await io.readNote(path):undefined;
+          if(file&&this.app.vault.getFileByPath(path)!==file)continue;
+          // The saved/editor comparison can temporarily fail during a save.
+          // Keep the previous targets and retry that revision.
+          if(file&&text===undefined){this.changedPromptNotes.add(path);continue;}
+          const views=[...this.promptViews].filter(([view])=>view.file?.path===path);
+          const documents=[text??'',...views.map(([view])=>view.editor?.getValue()??'')];
+          const questions=documents.flatMap(questionTargets),approvals=documents.flatMap(approvalTargets);
+          if(text?.includes('<!-- t3-question:start:'))dismissedCandidates.add(path);
+          if(questions.length||approvals.length){
+            this.notePrompts.set(path,{questions,approvals});this.questionPaths.add(path);
+          }else {this.notePrompts.delete(path);this.questionPaths.delete(path);}
+        }catch{this.changedPromptNotes.add(path);}
       }
-      await Promise.all([this.questions.refresh([...notes.values()].flat(),1000),this.approvals.refresh([...approvalNotes.values()].flat().concat(this.approvals.watchedTargets()))]);
+      if(dismissedCandidates.size)await this.cleanDismissedQuestions(dismissedCandidates);
+      const notes=new Map(this.notePrompts);
+      await Promise.all([
+        this.questions.refresh([...notes.values()].flatMap(note=>note.questions),1000),
+        this.approvals.refresh([...notes.values()].flatMap(note=>note.approvals).concat(this.approvals.watchedTargets())),
+      ]);
       this.questions.retryDismissals();
       await this.questions.recoverAnswerStreams();
-      for(const [path,targets] of notes){
+      for(const [path,{questions:targets}] of notes){
         const resolved=targets.filter(target=>this.questions!.view(target).status==='resolved'&&!this.questions!.isDismissed(target)&&!this.questions!.record(target).answerFollow);
         if(resolved.length)await io.updateNote(path,current=>resolved.reduce((text,target)=>clearResolvedQuestion(text,target),current),()=>!this.stopped);
       }
-      for(const [path,targets] of approvalNotes){
+      for(const [path,{approvals:targets}] of notes){
         const resolved=targets.filter(target=>this.approvals!.view(target).status==='resolved');
         if(resolved.length)await io.updateNote(path,current=>resolved.reduce((text,target)=>clearApprovalControls(text,target),current),()=>!this.stopped);
       }
