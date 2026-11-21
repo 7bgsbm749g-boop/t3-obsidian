@@ -310,7 +310,7 @@ test('native edit actions follow the header through expansion, wrapping and remo
   let containerTop=100,containerHeight=32,headerHeight=20;
   const block:any={clientTop:1,getBoundingClientRect:()=>({top:containerTop,height:containerHeight}),querySelector:(selector:string)=>selector==='.callout'?fold:selector===':scope > .embed-actions'?actions:null};
   const actions:any={offsetParent:block,querySelector:()=>({}),style:{getPropertyValue:(key:string)=>values.get(key)??'',setProperty:(key:string,value:string)=>values.set(key,value),removeProperty:(key:string)=>values.delete(key)},classList:{contains:(key:string)=>classes.has(key),add:(key:string)=>classes.add(key),remove:(key:string)=>classes.delete(key)}};
-  const heading:any={setAttribute:()=>{},getBoundingClientRect:()=>({top:containerTop+7,height:headerHeight})};
+  const heading:any={setAttribute:()=>{},querySelector:()=>null,getBoundingClientRect:()=>({top:containerTop+7,height:headerHeight})};
   const fold:any={closest:(selector:string)=>selector==='.cm-embed-block'?block:null,querySelector:(selector:string)=>selector.includes('callout-title')?heading:null,classList:{contains:()=>false}};
   const root:any={body:{},documentElement:{},folds:[fold],querySelectorAll:(selector:string)=>selector.startsWith('.callout')?root.folds:[],addEventListener:()=>{},removeEventListener:()=>{}};
   (globalThis as any).MutationObserver=class {constructor(callback:any){mutation=callback;}observe(){}disconnect(){}};
@@ -373,4 +373,35 @@ test('steering retains the activity action in the shared history and advances it
  const resumed=presentToolGroups(renderLive()).display;
  assert.match(resumed,/data-t3-open-tool-group/);
  assert.match(resumed,/data-t3-tool-group="[^"]*new-tool/);
+});
+
+test('presentation processes mounted folds without rescanning the document and stops ended timers in place',async()=>{
+  const {installResponsePresentation}=await import('../src/responses/response-presentation');
+  const {parseHTML}=await import('linkedom');
+  const fold=(id:string,timer='')=>`<div class="cm-embed-block"><div class="callout is-collapsed" data-callout="t3-progress"><div class="callout-title"><span class="send-to-t3-fold-key" data-t3-fold="${id}:complete"></span>Done ${timer}</div><div class="callout-content"><details class="send-to-t3-tool" data-t3-tool-key="${id}"><summary>Legacy</summary></details></div></div></div>`;
+  const {document}=parseHTML(`<!doctype html><html><body><div class="workspace-leaf-content"><div class="cm-content">${fold('first')}</div></div></body></html>`);
+  const root=document as unknown as Document&{win:any};root.win={createDiv:()=>root.createElement('div')};
+  const savedObserver=globalThis.MutationObserver;let deliver:(records:any[])=>void=()=>{};
+  (globalThis as any).MutationObserver=class {constructor(callback:any){deliver=callback;}observe(){}disconnect(){}};
+  let scans=0;const scan=root.querySelectorAll.bind(root);root.querySelectorAll=((selector:string)=>{scans++;return scan(selector);}) as any;
+  let dispose=()=>{};
+  try{
+    dispose=installResponsePresentation(root);
+    const initial=scans,content=root.querySelector('.cm-content')!;
+    assert.equal(root.querySelector('details.send-to-t3-tool'),null,'the initial pass covers the document');
+    const holder=root.createElement('div');holder.innerHTML=fold('second',`<span class="send-to-t3-run-timer" data-t3-start="${Date.now()-5000}">0s</span>`);
+    const block=holder.firstElementChild!;content.append(block);
+    deliver([{type:'childList',target:content,addedNodes:[block],removedNodes:[]}]);await Promise.resolve();await Promise.resolve();
+    assert.equal(scans,initial,'a mounted fold is processed without a document scan');
+    const heading=block.querySelector('.callout-title')!;
+    assert.equal(heading.getAttribute('role'),'heading');assert.equal(heading.getAttribute('aria-expanded'),'false');
+    assert.equal(block.querySelector('details'),null,'legacy controls in the mounted fold are replaced');
+    const timer=block.querySelector<HTMLElement>('.send-to-t3-run-timer')!;assert.match(timer.textContent!,/^[45]s$/);
+    // Native reconciliation can end a retained timer in place.
+    timer.setAttribute('data-t3-end',String(Number(timer.dataset.t3Start)+2000));timer.textContent='stale';
+    await new Promise(resolve=>setTimeout(resolve,1100));
+    assert.equal(timer.textContent,'2s','an ended timer shows its final time and stops');
+    await new Promise(resolve=>setTimeout(resolve,1100));
+    assert.equal(timer.textContent,'2s');
+  }finally{dispose();globalThis.MutationObserver=savedObserver;}
 });
