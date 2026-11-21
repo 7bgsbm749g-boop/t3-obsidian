@@ -195,8 +195,8 @@ def start(evidence):
     (evidence / 'start-session.txt').write_text(result.stdout + result.stderr)
     session = json.loads(result.stdout)
     receipt = ROOT / 'emulator-session.json'
-    previous = json.loads(receipt.read_text()) if receipt.exists() else {}
-    if not (session.get('reused') and previous.get('id') == session['id']):
+    previous = json.loads(receipt.read_text()) if session.get('reused') and receipt.exists() else {}
+    if previous.get('id') != session['id']:
         # A reused session launched nothing; keep its original age and budget.
         previous = dict(session, startedAt=time.time(), memory=SESSION_MEMORY)
         receipt.write_text(json.dumps(previous))
@@ -454,6 +454,15 @@ def emulator_present(unit):
     return SERIAL in adb_devices()
 
 
+def wait_inactive(unit, timeout):
+    deadline = time.monotonic() + timeout
+    while unit_state(unit) in ACTIVE:
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(1)
+    return True
+
+
 def wait_exit(unit, timeout):
     deadline = time.monotonic() + timeout
     while emulator_present(unit):
@@ -516,9 +525,10 @@ def stop(evidence):
             result = run(['t3-session', 'release', session['id']], capture_output=True, text=True)
             outputs.append(result.stdout + result.stderr)
         except subprocess.CalledProcessError as error:
-            # A lease of an earlier turn cannot be released; it is stale only
-            # when its service has already stopped.
-            if not session.get('unit') or unit_state(session['unit']) in ACTIVE:
+            # Only a lease of an earlier turn is stale, and only once its
+            # service has stopped; it may still be closing after its release.
+            foreign = 'does not own the resource' in (error.stderr or '')
+            if not foreign or not session.get('unit') or not wait_inactive(session['unit'], 60):
                 raise
             outputs.append(f'{session["id"]}: stopped earlier, not released by this turn: {(error.stderr or "").strip()}')
         path.unlink()

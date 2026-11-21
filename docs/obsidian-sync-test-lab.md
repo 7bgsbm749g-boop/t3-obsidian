@@ -167,8 +167,9 @@ finish, and only after a successful flush. If neither the flush nor the
 power-off succeeds, `stop` fails and keeps the emulator and its session for
 inspection; its error gives the exact kill command. A device that is already
 offline cannot be synced; `stop.json` then reports `flushed: false`. `stop`
-removes each session receipt after release. A receipt of an earlier turn whose
-service has already stopped is dropped, so a later `restart` can start again. Stopping the emulator
+removes each session receipt after release. A receipt of an earlier turn is
+dropped once its service has stopped (it waits up to 60 seconds for one that is
+still closing), so a later `restart` can start again. Stopping the emulator
 directly after `adb push` without this flush lost unflushed guest writes and
 left empty runtime files in the lab vault. `install-plugin` and
 `restore-plugin` sync after every push and compare the Android checksums.

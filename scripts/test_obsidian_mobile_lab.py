@@ -277,7 +277,7 @@ class MobileLabTests(unittest.TestCase):
             def run(args, **kwargs):
                 args = [str(a) for a in args]
                 if 'release' in args:
-                    raise LAB.subprocess.CalledProcessError(75, args, stderr='This turn does not own the resource')
+                    raise LAB.subprocess.CalledProcessError(75, args, stderr='Session manager: This turn does not own the resource')
                 return types.SimpleNamespace(stdout='inactive\n', stderr='')
             with patch.object(LAB, 'run', side_effect=run), patch.object(LAB, 'adb_running', return_value=False), \
                     patch.object(LAB, 'session_memory', return_value=None):
@@ -292,13 +292,57 @@ class MobileLabTests(unittest.TestCase):
             def run(args, **kwargs):
                 args = [str(a) for a in args]
                 if 'release' in args:
-                    raise LAB.subprocess.CalledProcessError(75, args, stderr='This turn does not own the resource')
+                    raise LAB.subprocess.CalledProcessError(75, args, stderr='Session manager: This turn does not own the resource')
                 return types.SimpleNamespace(stdout='active\n', stderr='')
+            with patch.object(LAB, 'run', side_effect=run), patch.object(LAB, 'adb_running', return_value=False), \
+                    patch.object(LAB, 'session_memory', return_value=None), patch.object(LAB.time, 'sleep'), \
+                    patch.object(LAB.time, 'monotonic', side_effect=[0, 0, 100]):
+                with self.assertRaises(LAB.subprocess.CalledProcessError):
+                    LAB.stop(root)
+            self.assertTrue((root / 'emulator-session.json').exists())
+
+    def test_stop_waits_for_a_closing_session_of_an_earlier_turn(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(LAB, 'ROOT', Path(directory)):
+            root = self.lab_root(directory)
+            states = ['active', 'deactivating', 'inactive', 'inactive']
+            def run(args, **kwargs):
+                args = [str(a) for a in args]
+                if 'release' in args:
+                    raise LAB.subprocess.CalledProcessError(75, args, stderr='Session manager: This turn does not own the resource')
+                return types.SimpleNamespace(stdout=(states.pop(0) if len(states) > 1 else states[0]) + '\n', stderr='')
+            with patch.object(LAB, 'run', side_effect=run), patch.object(LAB, 'adb_running', return_value=False), \
+                    patch.object(LAB, 'session_memory', return_value=None), patch.object(LAB.time, 'sleep'):
+                LAB.stop(root)
+            self.assertFalse((root / 'emulator-session.json').exists())
+            self.assertFalse((root / 'adb-session.json').exists())
+
+    def test_stop_keeps_the_receipt_when_its_own_release_fails(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(LAB, 'ROOT', Path(directory)):
+            root = self.lab_root(directory)
+            def run(args, **kwargs):
+                args = [str(a) for a in args]
+                if 'release' in args:
+                    raise LAB.subprocess.CalledProcessError(75, args, stderr='Session manager: [Errno 28] No space left on device')
+                return types.SimpleNamespace(stdout='inactive\n', stderr='')
             with patch.object(LAB, 'run', side_effect=run), patch.object(LAB, 'adb_running', return_value=False), \
                     patch.object(LAB, 'session_memory', return_value=None):
                 with self.assertRaises(LAB.subprocess.CalledProcessError):
                     LAB.stop(root)
             self.assertTrue((root / 'emulator-session.json').exists())
+
+    def test_a_fresh_start_ignores_a_damaged_old_receipt(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(LAB, 'ROOT', Path(directory)), \
+                patch.object(LAB, 'EMULATOR', Path(directory) / 'emulator'), patch.object(LAB, 'IMAGE', Path(directory)), \
+                patch.object(LAB, 'SDK', Path(directory)):
+            (Path(directory) / 'emulator').write_text('')
+            (Path(directory) / 'device').mkdir()
+            (Path(directory) / 'device/userdata-qemu.img').write_text('')
+            (Path(directory) / 'emulator-session.json').write_text('{"id": "old", "un')
+            def run(args, **kwargs):
+                return types.SimpleNamespace(stdout=json.dumps({'id': 'new', 'unit': 'unit', 'reused': False}), stderr='')
+            with patch.object(LAB, 'run', side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+                LAB.start(Path(directory))
+            self.assertEqual(json.loads((Path(directory) / 'emulator-session.json').read_text())['id'], 'new')
 
     def test_released_receipts_are_removed(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(LAB, 'ROOT', Path(directory)):
