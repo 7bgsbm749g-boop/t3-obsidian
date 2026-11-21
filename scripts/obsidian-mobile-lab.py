@@ -193,9 +193,15 @@ def start(evidence):
     command = 'export ' + ' '.join(key + '=' + shlex.quote(value) for key, value in environment.items()) + '; exec ' + shlex.join([str(a) for a in args])
     result = run(['t3-session', 'start', '--key', SESSION, '--purpose', 'Isolated Android Obsidian recovery validation', '--gui', '--memory', SESSION_MEMORY, '--', '/usr/bin/sg', 'kvm', '-c', command], capture_output=True, text=True, timeout=90)
     (evidence / 'start-session.txt').write_text(result.stdout + result.stderr)
-    (ROOT / 'emulator-session.json').write_text(json.dumps(dict(json.loads(result.stdout), startedAt=time.time(), memory=SESSION_MEMORY)))
+    session = json.loads(result.stdout)
+    receipt = ROOT / 'emulator-session.json'
+    previous = json.loads(receipt.read_text()) if receipt.exists() else {}
+    if not (session.get('reused') and previous.get('id') == session['id']):
+        # A reused session launched nothing; keep its original age and budget.
+        previous = dict(session, startedAt=time.time(), memory=SESSION_MEMORY)
+        receipt.write_text(json.dumps(previous))
     print(result.stdout, end='')
-    return dict(session=SESSION, serial=SERIAL, memory=SESSION_MEMORY, owner='t3-obsidian mobile lab', shutdown=f'python3 scripts/obsidian-mobile-lab.py stop --evidence {shlex.quote(str(evidence))}')
+    return dict(session=SESSION, serial=SERIAL, memory=previous.get('memory'), owner='t3-obsidian mobile lab', shutdown=f'python3 scripts/obsidian-mobile-lab.py stop --evidence {shlex.quote(str(evidence))}')
 
 
 def wait_boot(timeout=180):
@@ -223,7 +229,7 @@ def restart(evidence, older_than_minutes=None):
     # A fresh boot returns QEMU and swiftshader host memory, so long runs call
     # this between rounds instead of growing one session until the OOM killer.
     age = session_age()
-    if older_than_minutes is not None and age is not None and age < older_than_minutes * 60 and adb_running():
+    if older_than_minutes is not None and age is not None and age < older_than_minutes * 60 and device_online():
         return dict(restarted=False, sessionMinutes=round(age / 60, 1))
     stopped = stop(evidence)
     deadline = time.monotonic() + 60
@@ -431,11 +437,30 @@ def session_memory():
         return dict(error=str(error))
 
 
+ACTIVE = ['active', 'activating', 'deactivating', 'reloading']
+
+
+def adb_devices():
+    return run([ADB, '-P', '5041', 'devices'], capture_output=True, text=True).stdout if adb_running() else ''
+
+
+def device_online():
+    return any(line.split() == [SERIAL, 'device'] for line in adb_devices().splitlines())
+
+
 def emulator_present(unit):
-    if unit and unit_state(unit) in ['active', 'activating', 'deactivating', 'reloading']:
+    if unit and unit_state(unit) in ACTIVE:
         return True
-    devices = run([ADB, '-P', '5041', 'devices'], capture_output=True, text=True).stdout if adb_running() else ''
-    return SERIAL in devices
+    return SERIAL in adb_devices()
+
+
+def wait_exit(unit, timeout):
+    deadline = time.monotonic() + timeout
+    while emulator_present(unit):
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(1)
+    return True
 
 
 def shutdown(timeout=90):
@@ -453,26 +478,30 @@ def shutdown(timeout=90):
         adb('shell', 'reboot', '-p', timeout=30)
     except subprocess.SubprocessError as error:
         receipt['poweroffCommand'] = str(error)
-    deadline = time.monotonic() + timeout
-    while emulator_present(unit):
-        if time.monotonic() > deadline:
-            break
-        time.sleep(1)
-    else:
+    if wait_exit(unit, timeout):
         receipt['method'] = 'poweroff'
-    if receipt['method'] is None:
-        adb('emu', 'kill')
-        receipt['method'] = 'emu-kill'
+        return receipt
+    if not receipt['flushed']:
+        # Killing now would drop unflushed writes; keep the session for inspection.
+        raise RuntimeError(f'Android neither flushed nor powered off; the emulator is still running. Force it only after inspection: {ADB} -P 5041 -s {SERIAL} emu kill')
+    adb('emu', 'kill')
+    receipt['method'] = 'emu-kill'
+    if not wait_exit(unit, 30):
+        raise RuntimeError('The emulator did not exit after emu kill')
     return receipt
 
 
 def stop(evidence):
     # Target this exact emulator; never kill a shared adb server or another AVD.
-    devices = run([ADB, '-P', '5041', 'devices'], capture_output=True, text=True).stdout if adb_running() else ''
+    devices = adb_devices()
     receipt = dict(session=SESSION, memory=session_memory())
     online = any(line.split() == [SERIAL, 'device'] for line in devices.splitlines())
     if online:
-        receipt['shutdown'] = shutdown()
+        try:
+            receipt['shutdown'] = shutdown()
+        except RuntimeError as error:
+            record(evidence, 'stop.json', dict(receipt, error=str(error), released=False))
+            raise
     elif SERIAL in devices:
         # An offline guest cannot be synced; report that its writes are unflushed.
         adb('emu', 'kill')
@@ -480,10 +509,19 @@ def stop(evidence):
     outputs = []
     for name in ['emulator-session.json', 'adb-session.json']:
         path = ROOT / name
-        if path.exists():
-            session = json.loads(path.read_text())
+        if not path.exists():
+            continue
+        session = json.loads(path.read_text())
+        try:
             result = run(['t3-session', 'release', session['id']], capture_output=True, text=True)
             outputs.append(result.stdout + result.stderr)
+        except subprocess.CalledProcessError as error:
+            # A lease of an earlier turn cannot be released; it is stale only
+            # when its service has already stopped.
+            if not session.get('unit') or unit_state(session['unit']) in ACTIVE:
+                raise
+            outputs.append(f'{session["id"]}: stopped earlier, not released by this turn: {(error.stderr or "").strip()}')
+        path.unlink()
     (evidence / 'stop-session.txt').write_text('\n'.join(outputs))
     receipt['released'] = True
     record(evidence, 'stop.json', receipt)
@@ -493,8 +531,8 @@ def stop(evidence):
 def backup_plugin(evidence, backup):
     """Pull the installed lab runtime; refuse empty or unverifiable copies."""
     manifest_path = backup / 'backup.json'
-    if manifest_path.exists():
-        raise RuntimeError('The backup directory already holds a backup; choose a new one')
+    if backup.exists() and any(backup.iterdir()):
+        raise RuntimeError('The backup directory is not empty; choose a new one')
     backup.mkdir(parents=True, exist_ok=True)
     hashes = {}
     for name in RUNTIME:
@@ -550,7 +588,9 @@ def main():
     parser.add_argument('--freeze-seconds', type=float, default=10)
     args = parser.parse_args()
     evidence = args.evidence.resolve()
-    if not evidence.is_relative_to(Path('/srv/t3-evidence')):
+    store = Path('/srv/t3-evidence')
+    # The store is a symlink to network storage; accept either spelling.
+    if not (evidence.is_relative_to(store) or evidence.is_relative_to(store.resolve())):
         parser.error('Evidence must be outside checkouts under /srv/t3-evidence')
     evidence.mkdir(parents=True, exist_ok=True)
     initialize()

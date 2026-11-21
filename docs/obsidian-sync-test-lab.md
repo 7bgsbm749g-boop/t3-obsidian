@@ -157,18 +157,23 @@ allowance leaves about 1.5 GiB for growth; reclaimable file cache fills the rest
 Host-side emulator memory grows with continuous use, so long runs restart the
 emulator in a clean state between rounds:
 `restart --if-older-than 10` stops it with a flush and cold-boots it again only
-when the session is at least 10 minutes old. `status` reports `restartDue`.
+when the session is at least 10 minutes old or the emulator is not online.
+`status` reports `restartDue`.
 Harnesses that import the script can call `restart(evidence, 10)` directly.
 
 `stop` runs `sync` in the guest, powers Android off with `reboot -p` and waits
 for the emulator to exit. It uses `adb emu kill` only when the power-off does not
-finish, and only after the flush. A device that is already offline cannot be
-synced; `stop.json` then reports `flushed: false`. Stopping the emulator
+finish, and only after a successful flush. If neither the flush nor the
+power-off succeeds, `stop` fails and keeps the emulator and its session for
+inspection; its error gives the exact kill command. A device that is already
+offline cannot be synced; `stop.json` then reports `flushed: false`. `stop`
+removes each session receipt after release. A receipt of an earlier turn whose
+service has already stopped is dropped, so a later `restart` can start again. Stopping the emulator
 directly after `adb push` without this flush lost unflushed guest writes and
 left empty runtime files in the lab vault. `install-plugin` and
 `restore-plugin` sync after every push and compare the Android checksums.
 `backup-plugin --backup-dir DIR` pulls the installed runtime with a checksum
-manifest and refuses empty files or an existing backup. `restore-plugin
+manifest. It needs a new or empty directory and refuses empty files. `restore-plugin
 --backup-dir DIR` refuses a backup whose files are missing, empty or do not
 match that manifest before it pushes anything. Keep backups outside the checkout.
 

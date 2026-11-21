@@ -75,7 +75,7 @@ class MobileLabTests(unittest.TestCase):
     def lab_root(self, directory):
         root = Path(directory)
         (root / 'emulator-session.json').write_text(json.dumps({'id': 'emu', 'unit': 't3session-emu.service', 'startedAt': 0}))
-        (root / 'adb-session.json').write_text(json.dumps({'id': 'adb'}))
+        (root / 'adb-session.json').write_text(json.dumps({'id': 'adb', 'unit': 't3session-adb.service'}))
         return root
 
     def fake_run(self, calls, devices='emulator-5580\tdevice\n', states=None):
@@ -132,7 +132,7 @@ class MobileLabTests(unittest.TestCase):
             calls = []
             with patch.object(LAB, 'run', side_effect=self.fake_run(calls, states=['active'])), patch.object(LAB, 'adb_running', return_value=True), \
                     patch.object(LAB, 'adb', side_effect=lambda *a, **k: calls.append(('adb', list(a)))), patch.object(LAB, 'session_memory', return_value=None), \
-                    patch.object(LAB.time, 'sleep'), patch.object(LAB.time, 'monotonic', side_effect=[0, 0, 100]):
+                    patch.object(LAB, 'wait_exit', side_effect=[False, True]):
                 result = LAB.shutdown(timeout=5)
             adb_calls = [call[1] for call in calls if call[0] == 'adb']
             self.assertEqual(adb_calls, [['shell', 'sync'], ['shell', 'reboot', '-p'], ['emu', 'kill']])
@@ -219,7 +219,7 @@ class MobileLabTests(unittest.TestCase):
             backup = self.write_backup(directory)
             before = (backup / 'backup.json').read_text()
             with patch.object(LAB, 'adb') as adb:
-                with self.assertRaisesRegex(RuntimeError, 'already holds a backup'):
+                with self.assertRaisesRegex(RuntimeError, 'not empty'):
                     LAB.backup_plugin(Path(directory), backup)
                 adb.assert_not_called()
             self.assertEqual((backup / 'backup.json').read_text(), before)
@@ -230,7 +230,7 @@ class MobileLabTests(unittest.TestCase):
             session = json.loads((root / 'emulator-session.json').read_text())
             session['startedAt'] = LAB.time.time() - 60
             (root / 'emulator-session.json').write_text(json.dumps(session))
-            with patch.object(LAB, 'adb_running', return_value=True), patch.object(LAB, 'stop') as stop, patch.object(LAB, 'start') as start:
+            with patch.object(LAB, 'device_online', return_value=True), patch.object(LAB, 'stop') as stop, patch.object(LAB, 'start') as start:
                 self.assertFalse(LAB.restart(root, LAB.RESTART_MINUTES)['restarted'])
                 stop.assert_not_called()
                 start.assert_not_called()
@@ -241,6 +241,120 @@ class MobileLabTests(unittest.TestCase):
                     patch.object(LAB, 'start', side_effect=lambda e: order.append('start')), patch.object(LAB, 'wait_boot', side_effect=lambda: order.append('boot')):
                 self.assertTrue(LAB.restart(root, LAB.RESTART_MINUTES)['restarted'])
             self.assertEqual(order, ['stop', 'start', 'boot'])
+
+    def test_stop_keeps_an_unflushed_guest_running(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(LAB, 'ROOT', Path(directory)):
+            root = self.lab_root(directory)
+            calls = []
+            def adb(*args, **kwargs):
+                calls.append(list(args))
+                if list(args) == ['shell', 'sync']:
+                    raise LAB.subprocess.TimeoutExpired('sync', 120)
+            with patch.object(LAB, 'run', side_effect=self.fake_run(calls)), patch.object(LAB, 'adb_running', return_value=True), \
+                    patch.object(LAB, 'adb', side_effect=adb), patch.object(LAB, 'session_memory', return_value=None), \
+                    patch.object(LAB, 'wait_exit', return_value=False):
+                with self.assertRaisesRegex(RuntimeError, 'neither flushed nor powered off'):
+                    LAB.stop(root)
+            self.assertNotIn(['emu', 'kill'], calls)
+            self.assertFalse(any(call[0] == 'run' and 'release' in call[1] for call in calls if isinstance(call, tuple)))
+            self.assertTrue((root / 'emulator-session.json').exists())
+            self.assertFalse(json.loads((root / 'stop.json').read_text())['released'])
+
+    def test_backup_never_pulls_over_an_older_runtime_copy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backup = Path(directory) / 'runtime-backup'
+            backup.mkdir()
+            (backup / 'main.js').write_text('only good copy')
+            with patch.object(LAB, 'adb') as adb:
+                with self.assertRaisesRegex(RuntimeError, 'not empty'):
+                    LAB.backup_plugin(Path(directory), backup)
+                adb.assert_not_called()
+            self.assertEqual((backup / 'main.js').read_text(), 'only good copy')
+
+    def test_stop_drops_stopped_receipts_of_an_earlier_turn(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(LAB, 'ROOT', Path(directory)):
+            root = self.lab_root(directory)
+            def run(args, **kwargs):
+                args = [str(a) for a in args]
+                if 'release' in args:
+                    raise LAB.subprocess.CalledProcessError(75, args, stderr='This turn does not own the resource')
+                return types.SimpleNamespace(stdout='inactive\n', stderr='')
+            with patch.object(LAB, 'run', side_effect=run), patch.object(LAB, 'adb_running', return_value=False), \
+                    patch.object(LAB, 'session_memory', return_value=None):
+                LAB.stop(root)
+            self.assertFalse((root / 'emulator-session.json').exists())
+            self.assertFalse((root / 'adb-session.json').exists())
+            self.assertIn('not released by this turn', (root / 'stop-session.txt').read_text())
+
+    def test_stop_never_drops_the_receipt_of_a_running_session(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(LAB, 'ROOT', Path(directory)):
+            root = self.lab_root(directory)
+            def run(args, **kwargs):
+                args = [str(a) for a in args]
+                if 'release' in args:
+                    raise LAB.subprocess.CalledProcessError(75, args, stderr='This turn does not own the resource')
+                return types.SimpleNamespace(stdout='active\n', stderr='')
+            with patch.object(LAB, 'run', side_effect=run), patch.object(LAB, 'adb_running', return_value=False), \
+                    patch.object(LAB, 'session_memory', return_value=None):
+                with self.assertRaises(LAB.subprocess.CalledProcessError):
+                    LAB.stop(root)
+            self.assertTrue((root / 'emulator-session.json').exists())
+
+    def test_released_receipts_are_removed(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(LAB, 'ROOT', Path(directory)):
+            root = self.lab_root(directory)
+            calls = []
+            with patch.object(LAB, 'run', side_effect=self.fake_run(calls)), patch.object(LAB, 'adb_running', return_value=False), \
+                    patch.object(LAB, 'session_memory', return_value=None):
+                LAB.stop(root)
+            self.assertEqual([call[1][-1] for call in calls if 'release' in call[1]], ['emu', 'adb'])
+            self.assertFalse((root / 'emulator-session.json').exists())
+
+    def test_restart_recovers_a_dead_emulator_while_adb_still_runs(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(LAB, 'ROOT', Path(directory)):
+            root = self.lab_root(directory)
+            session = json.loads((root / 'emulator-session.json').read_text())
+            session['startedAt'] = LAB.time.time() - 60
+            (root / 'emulator-session.json').write_text(json.dumps(session))
+            order = []
+            with patch.object(LAB, 'adb_running', return_value=True), patch.object(LAB, 'adb_devices', return_value='List of devices attached\n'), \
+                    patch.object(LAB, 'stop', side_effect=lambda e: order.append('stop')), patch.object(LAB.time, 'sleep'), \
+                    patch.object(LAB, 'start', side_effect=lambda e: order.append('start')), patch.object(LAB, 'wait_boot'):
+                with self.assertRaisesRegex(RuntimeError, 'ADB server did not close'), patch.object(LAB.time, 'monotonic', side_effect=[0, 100]):
+                    LAB.restart(root, LAB.RESTART_MINUTES)
+            self.assertEqual(order, ['stop'])
+
+    def test_a_reused_start_keeps_the_original_session_age(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(LAB, 'ROOT', Path(directory)), \
+                patch.object(LAB, 'EMULATOR', Path(directory) / 'emulator'), patch.object(LAB, 'IMAGE', Path(directory)), \
+                patch.object(LAB, 'SDK', Path(directory)):
+            (Path(directory) / 'emulator').write_text('')
+            (Path(directory) / 'device').mkdir()
+            (Path(directory) / 'device/userdata-qemu.img').write_text('')
+            original = {'id': 'emu', 'unit': 'unit', 'startedAt': 123, 'memory': '2300M'}
+            (Path(directory) / 'emulator-session.json').write_text(json.dumps(original))
+            def run(args, **kwargs):
+                return types.SimpleNamespace(stdout=json.dumps({'id': 'emu', 'unit': 'unit', 'reused': True}), stderr='')
+            with patch.object(LAB, 'run', side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+                result = LAB.start(Path(directory))
+            self.assertEqual(json.loads((Path(directory) / 'emulator-session.json').read_text()), original)
+            self.assertEqual(result['memory'], '2300M')
+
+    def test_evidence_under_the_linked_store_is_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory) / 'store'
+            store.mkdir()
+            link = Path(directory) / 'link'
+            link.symlink_to(store)
+            real = LAB.Path
+            def fake(value, *rest):
+                return link if str(value) == '/srv/t3-evidence' else real(value, *rest)
+            argv = ['lab', 'status', '--evidence', str(link / 'run')]
+            with patch.object(LAB.sys, 'argv', argv), patch.object(LAB, 'Path', side_effect=fake), \
+                    patch.object(LAB, 'ROOT', Path(directory) / 'root'), patch.object(LAB, 'status', return_value={}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                LAB.main()
+            self.assertTrue((store / 'run').is_dir())
 
 if __name__ == '__main__':
     unittest.main()
