@@ -44,7 +44,7 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
   },target=>onStop(target.id,target.view),icon,onError):()=>{};
   // Editor documents are immutable, so one index serves every pass until the
   // next edit. Other modes index their text once per pass.
-  const documentIndexes=new WeakMap<object,ReturnType<typeof streamBlockIndex>>();
+  const documentIndexes=new WeakMap<object,ReturnType<typeof streamBlockIndex>>(),lastIndexes=new WeakMap<MarkdownView,object>();
   // A full pass rescans the document; otherwise only the folds that changes
   // added, removed or changed are processed.
   let full=true;const pending=new Set<HTMLElement>(),touched=new Set<HTMLElement>();
@@ -58,7 +58,7 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
     full=false;pending.clear();touched.clear();
     const live=new Set<HTMLElement>();
     const measure:Measure[]=[];
-    const indexes=new Map<MarkdownView,ReturnType<typeof streamBlockIndex>>();
+    const indexes=new Map<MarkdownView,ReturnType<typeof streamBlockIndex>>();let rescan=false;
     const indexFor=(view:MarkdownView)=>{
       const doc=editorCM(view.editor)?.state?.doc;
       let index=doc?documentIndexes.get(doc):indexes.get(view);
@@ -66,6 +66,9 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
         index=streamBlockIndex(view.editor.getValue());
         if(doc)documentIndexes.set(doc,index);else indexes.set(view,index);
       }
+      // An edit can change other mounted streams too (a pasted duplicate
+      // makes a key ambiguous). The first scoped pass after it rescans.
+      const previous=lastIndexes.get(view);if(previous&&previous!==index&&!everything)rescan=true;lastIndexes.set(view,index);
       return index;
     };
     for(const fold of candidates){
@@ -155,11 +158,14 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
     for(const [actions,controls] of owned)if(!live.has(actions)&&(everything||!actions.isConnected||!controls.fold.isConnected||changedActions.has(actions))){release(actions);controls.close.remove();controls.follow.remove();controls.signIn.remove();controls.footer?.classList.remove('send-to-t3-stream-footer');controls.fold.style.removeProperty('--send-to-t3-stream-footer-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-space');controls.fold.style.removeProperty('--send-to-t3-stream-actions-footer');actions.classList.remove('send-to-t3-stream-actions','send-to-t3-stream-actions-bottom','send-to-t3-stream-actions-active','send-to-t3-stream-actions-moving','send-to-t3-stream-auth-required');if(controls.reading){actions.parentElement?.classList.remove('send-to-t3-has-reading-actions');actions.remove();}actions.closest('.cm-embed-block')?.classList.remove('send-to-t3-stream-collapsed');owned.delete(actions);layouts.delete(actions);}
 
     if(everything)for(const actions of [...observedBy.keys()])if(!owned.has(actions))release(actions);
+    if(rescan)schedule();
     if(resize){
       // Measure after the browser's own layout, in the resize callback, rather
       // than forcing layout after this pass's writes. Re-observing a toolbar
       // delivers a notification even when its size did not change.
-      for(const {actions} of measure){awaitingLayout.add(actions);resize.unobserve(actions);resize.observe(actions);}
+      // A toolbar whose controls all hid is 0x0 and gets no notification;
+      // its rendered fold always does.
+      for(const {actions,fold} of measure){awaitingLayout.add(actions);for(const element of [actions,fold]){resize.unobserve(element);resize.observe(element);}}
       return;
     }
     measureNow(measure);
