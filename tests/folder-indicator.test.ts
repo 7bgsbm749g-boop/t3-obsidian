@@ -148,10 +148,10 @@ test('the indicator poll redraws only for changed state or active responses',()=
   try{
     const controller=installFolderIndicators(body as any,()=>links,()=>notes,()=>undefined,()=>{tabs++;});
     assert.equal(tabs,1);const scanned=scans;
-    for(let i=0;i<5;i++)controller.poll();
+    for(let i=0;i<5;i++)assert.equal(controller.poll(),false,'An unchanged poll reports no redraw');
     assert.equal(tabs,1,'Completed streams need no tab redraw each second');assert.equal(scans,scanned);
     controller.refresh();assert.equal(tabs,2,'Events still redraw immediately');
-    notes=new Map([['Note.md',{active:1,input:0,complete:29,total:30}]]);controller.poll();assert.equal(tabs,3,'A state change redraws');
+    notes=new Map([['Note.md',{active:1,input:0,complete:29,total:30}]]);assert.equal(controller.poll(),true);assert.equal(tabs,3,'A state change redraws');
     controller.poll();controller.poll();assert.equal(tabs,5,'Active responses keep their titles decorated');
     notes=new Map([['Note.md',{active:0,input:0,complete:30,total:30}]]);controller.poll();controller.poll();assert.equal(tabs,6);
     links=[{folderPath:'App',projectTitle:'App'}];controller.poll();assert.equal(tabs,7,'A folder link change redraws');

@@ -116,6 +116,15 @@ export class CompletionGlow {
     for(const receipt of this.receipts.values())if(receipt.notePath===path&&this.unread(receipt))return true;
     return false;
   }
+  /** Periodic entry for the active note. The visibility checks read layout,
+   * so they run only while the note has an unread completion. A note with
+   * nothing unread keeps its current visit: an explicit mark-unread must
+   * survive while the same note stays focused. Focus and visibility loss
+   * still end the visit through view(undefined). */
+  poll(path:string|undefined,visible:()=>boolean,now=this.now()):void {
+    if(path&&this.unreadAt(path)){this.view(visible()?path:undefined,now);return;}
+    if(this.viewing?.path!==path)this.view(undefined,now);
+  }
   /** Only a focused, visible note counts; background tabs never acknowledge. */
   view(path:string|undefined,now=this.now()):void {
     if(this.stopped)return;
