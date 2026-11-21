@@ -774,7 +774,9 @@ export default class SendToT3 extends Plugin {
           const exists=(path:string)=>this.app.vault.getAbstractFileByPath(path) instanceof TFile;
           this.completionGlow?.observe(all,responseBindingRequests(this.settings.responseBindings??{}));
           const view=this.app.workspace.getActiveViewOfType(MarkdownView),doc=view?.containerEl.ownerDocument;
-          this.completionGlow?.view(view?.file&&doc?.visibilityState==='visible'&&doc.hasFocus()&&view.containerEl.getClientRects().length&&!doc.querySelector('.modal-container')?view.file.path:undefined);
+          // Visibility checks read layout; they matter only while this note
+          // has an unread completion to acknowledge.
+          this.completionGlow?.view(view?.file&&this.completionGlow.unreadAt(view.file.path)&&doc?.visibilityState==='visible'&&doc.hasFocus()&&view.containerEl.getClientRects().length&&!doc.querySelector('.modal-container')?view.file.path:undefined);
           const notes=noteIndicators(all,exists);
           return this.completionGlow?.project(notes,exists)??notes;
         },title=>{
@@ -798,7 +800,9 @@ export default class SendToT3 extends Plugin {
           const mobileTabs=mobile?.tabs?.()??[];
           for(const root of indicatorRoots)decorateMobileActivityTabs(root,mobileTabs.map(activityLeafPath),mobileTabs.indexOf(mobile?.activeTab?.(mobileTabs) as typeof mobileTabs[number]),!!mobile?.settings?.wrap,notes);
         });
-        this.registerInterval(window.setInterval(()=>this.folderIndicators?.refresh(),1000));
+        // Explorer, tab and focus changes redraw through their events. The
+        // interval only detects response state changes and acknowledgements.
+        this.registerInterval(window.setInterval(()=>{this.folderIndicators?.poll();this.noteInboxView?.refresh();},1000));
         this.registerEvent(this.app.workspace.on('layout-change',()=>this.folderIndicators?.refresh()));
         this.registerEvent(this.app.workspace.on('file-open',()=>this.folderIndicators?.refresh()));
         this.registerEvent(this.app.workspace.on('active-leaf-change',()=>this.folderIndicators?.refresh()));

@@ -111,6 +111,11 @@ export class CompletionGlow {
     // Sequential reads bound work when several saved machines are offline.
     for(const environmentId of environments){if(this.stopped)return;await this.read(environmentId,force);}
   }
+  /** Whether viewing this note could acknowledge a completion. */
+  unreadAt(path:string):boolean {
+    for(const receipt of this.receipts.values())if(receipt.notePath===path&&this.unread(receipt))return true;
+    return false;
+  }
   /** Only a focused, visible note counts; background tabs never acknowledge. */
   view(path:string|undefined,now=this.now()):void {
     if(this.stopped)return;
