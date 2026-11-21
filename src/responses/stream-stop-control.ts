@@ -1,5 +1,8 @@
 import {responseControlsChanged} from './response-controls-event';
 import type {MarkdownView} from 'obsidian';
+import {observeDocumentChanges,type DomBatch} from '../ui/dom-changes';
+
+const PROGRESS='.callout[data-callout="t3-progress"]';
 
 export interface StreamStopTarget {id:string;key:string;view:MarkdownView}
 
@@ -11,10 +14,15 @@ export function installStreamStopControls(root:Document,resolve:(fold:HTMLElemen
   const identity=(target:StreamStopTarget)=>JSON.stringify([target.id,target.key]);
   const same=(a:StreamStopTarget|undefined,b:StreamStopTarget|undefined)=>!!a&&!!b&&a.view===b.view&&identity(a)===identity(b);
   const shown=(target:StreamStopTarget)=>same(active,target);
-  const refresh=()=>{
-    queued=false;if(disposed)return;
-    const live=new Set<HTMLElement>();let activeExists=false;
-    for(const fold of Array.from(root.querySelectorAll<HTMLElement>('.callout[data-callout="t3-progress"]'))){
+  // Interaction refreshes every control. Document changes refresh only the
+  // folds they added or changed, and release folds that left the document.
+  let fullPending=false;const pendingFolds=new Set<HTMLElement>();
+  const refresh=()=>{queued=false;update(true,[]);};
+  const flush=()=>{queued=false;const everything=fullPending,folds=[...pendingFolds];fullPending=false;pendingFolds.clear();update(everything,folds);};
+  const update=(everything:boolean,folds:HTMLElement[])=>{
+    if(disposed)return;
+    const live=new Set<HTMLElement>(),candidates=everything?Array.from(root.querySelectorAll<HTMLElement>(PROGRESS)):folds.filter(fold=>fold.isConnected);let activeExists=false;
+    for(const fold of candidates){
       const target=resolve(fold);if(!target)continue;
       live.add(fold);fold.classList.add('send-to-t3-stream-stoppable');
       let button=controls.get(fold);
@@ -37,10 +45,19 @@ export function installStreamStopControls(root:Document,resolve:(fold:HTMLElemen
         fold.style.setProperty('--send-to-t3-stop-center',`${header.top+header.height/2-box.top-fold.clientTop}px`);
       }
     }
+    if(!everything)activeExists||=[...controls].some(([fold,button])=>fold.isConnected&&!button.hidden&&!(candidates.includes(fold)&&!live.has(fold)));
     if(!activeExists)active=undefined;
-    for(const [fold,button] of controls)if(!live.has(fold)){button.remove();resize?.unobserve(fold);fold.classList.remove('send-to-t3-stream-stoppable','send-to-t3-stop-visible');fold.closest('.cm-embed-block')?.classList.remove('send-to-t3-stop-visible');fold.style.removeProperty('--send-to-t3-stop-center');controls.delete(fold);}
+    for(const [fold,button] of controls)if(!live.has(fold)&&(everything||!fold.isConnected||candidates.includes(fold))){button.remove();resize?.unobserve(fold);fold.classList.remove('send-to-t3-stream-stoppable','send-to-t3-stop-visible');fold.closest('.cm-embed-block')?.classList.remove('send-to-t3-stop-visible');fold.style.removeProperty('--send-to-t3-stop-center');controls.delete(fold);}
   };
-  const schedule=()=>{if(!queued&&!disposed){queued=true;queueMicrotask(refresh);}};
+  const schedule=()=>{fullPending=true;if(!queued&&!disposed){queued=true;queueMicrotask(flush);}};
+  const changed=(batch:DomBatch)=>{
+    if(batch.opaque){schedule();return;}
+    if(!batch.childList)return;
+    const before=pendingFolds.size;
+    for(const fold of batch.within(PROGRESS))pendingFolds.add(fold as HTMLElement);
+    for(const fold of batch.containing(PROGRESS))pendingFolds.add(fold as HTMLElement);
+    if((pendingFolds.size>before||batch.removed&&controls.size)&&!queued&&!disposed){queued=true;queueMicrotask(flush);}
+  };
   const find=(target:EventTarget|null)=>{
     const element=target as Element|null;
     let fold=element?.closest?.<HTMLElement>('.callout[data-callout="t3-progress"]');
@@ -94,8 +111,8 @@ export function installStreamStopControls(root:Document,resolve:(fold:HTMLElemen
   // Do not cancel selection, link navigation, title folding or touch scrolling.
   root.addEventListener('pointerdown',pointer,true);root.addEventListener('pointercancel',resetPointerFocus,true);root.addEventListener('keydown',resetPointerFocus,true);root.addEventListener('click',click,true);root.addEventListener('focusin',reveal,true);root.addEventListener('focusout',blur,true);
   const resize=typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(schedule);
-  const observer=new MutationObserver(schedule);observer.observe(root.body,{childList:true,subtree:true});
+  const stopChanges=observeDocumentChanges(root,changed);
   root.addEventListener(responseControlsChanged,schedule);
   refresh();
-  return ()=>{disposed=true;root.removeEventListener(responseControlsChanged,schedule);observer.disconnect();resize?.disconnect();root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('pointercancel',resetPointerFocus,true);root.removeEventListener('keydown',resetPointerFocus,true);root.removeEventListener('click',click,true);root.removeEventListener('focusin',reveal,true);root.removeEventListener('focusout',blur,true);for(const [fold,button] of controls){button.remove();fold.classList.remove('send-to-t3-stream-stoppable','send-to-t3-stop-visible');fold.closest('.cm-embed-block')?.classList.remove('send-to-t3-stop-visible');fold.style.removeProperty('--send-to-t3-stop-center');}controls.clear();};
+  return ()=>{disposed=true;root.removeEventListener(responseControlsChanged,schedule);stopChanges();resize?.disconnect();root.removeEventListener('pointerdown',pointer,true);root.removeEventListener('pointercancel',resetPointerFocus,true);root.removeEventListener('keydown',resetPointerFocus,true);root.removeEventListener('click',click,true);root.removeEventListener('focusin',reveal,true);root.removeEventListener('focusout',blur,true);for(const [fold,button] of controls){button.remove();fold.classList.remove('send-to-t3-stream-stoppable','send-to-t3-stop-visible');fold.closest('.cm-embed-block')?.classList.remove('send-to-t3-stop-visible');fold.style.removeProperty('--send-to-t3-stop-center');}controls.clear();};
 }

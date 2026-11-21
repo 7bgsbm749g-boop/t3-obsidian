@@ -132,6 +132,7 @@ import {changeInboxThreads,inboxThreadTargets} from '../notes/note-inbox-threads
 import {CompletionGlow} from '../responses/completion-glow';
 import {folderNotePath,type FolderNotesSettings} from '../projects/folder-note-adapter';
 import {installFolderIndicators,type FolderIndicatorController} from '../projects/folder-indicator';
+import {observeDocumentChanges} from '../ui/dom-changes';
 import {connectVaultRemote,loadVaultLocations,vaultIdentity,vaultRegistration,waitForVaultNote,type VaultLocation,type VaultRegistration} from '../connection/vault-connection';
 import {loadProjectCreationLocations,rememberProjectCreationLocation,projectCreationDefaults,workspaceParentPath,type ProjectCreationLocation} from '../projects/workspace-picker';
 import {ProjectCreateModal,ProjectCreationCancelled,workspaceInsideVault,NEW_FOLDER_PROJECT,isNewProjectKey,newProjectKey,newProjectMachine,type ProjectLocation} from '../projects/project-create-ui';
@@ -455,16 +456,25 @@ export default class SendToT3 extends Plugin {
         const dispose=mountToolGroups(details,value=>nativeResponses(this.app).toolGroup(details,value),(html,target)=>MarkdownRenderer.render(this.app,details.classList.contains('send-to-t3-response-history')?nativeResponses(this.app).renderToolBody(details,html):html,target,this.app.workspace.getActiveFile()?.path??'',child),error=>new Notice(`T3 Code: ${message(error)}`));
         child.register(dispose);this.toolRenderings.set(details,{ref,child,dispose});
       };
-      const openHistories=()=>{
+      const closedHistory='details.send-to-t3-response-history[data-t3-tool-ref]:not([open])';
+      const openHistories=(candidates:Iterable<HTMLDetailsElement>=Array.from(root.querySelectorAll<HTMLDetailsElement>(closedHistory)))=>{
         if(this.stopped)return;
-        for(const details of Array.from(root.querySelectorAll<HTMLDetailsElement>('details.send-to-t3-response-history[data-t3-tool-ref]:not([open])'))){
+        for(const details of candidates){
           const fold=details.closest('.callout[data-callout="t3-progress"]');if(fold&&!fold.classList.contains('is-collapsed'))details.open=true;
         }
       };
       root.addEventListener('t3-review-response-location',review);root.addEventListener('toggle',toggle,true);
-      const observer=new MutationObserver((records=[])=>{for(const [details,rendering] of this.toolRenderings)if(!details.isConnected){rendering.dispose();this.removeChild(rendering.child);this.toolRenderings.delete(details);}if(records.some(record=>record.type==='childList'||(record.target as Element).matches?.('.callout[data-callout="t3-progress"]')))openHistories();});
-      observer.observe(root,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});
-      return ()=>{root.removeEventListener('t3-review-response-location',review);root.removeEventListener('toggle',toggle,true);observer.disconnect();for(const [details,rendering] of this.toolRenderings)if(details.ownerDocument===root){rendering.dispose();this.removeChild(rendering.child);this.toolRenderings.delete(details);}};
+      const stopChanges=observeDocumentChanges(root,batch=>{
+        if(batch.removed)for(const [details,rendering] of this.toolRenderings)if(!details.isConnected){rendering.dispose();this.removeChild(rendering.child);this.toolRenderings.delete(details);}
+        // Only newly mounted histories and expanded progress folds can open.
+        if(batch.opaque){openHistories();return;}
+        const expanded=new Set<Element>();
+        for(const {target} of batch.attributes()){const fold=target as Element;if(fold.classList?.contains('callout')&&fold.getAttribute('data-callout')==='t3-progress'&&!fold.classList.contains('is-collapsed'))expanded.add(fold);}
+        const candidates=new Set<HTMLDetailsElement>(batch.within(closedHistory) as HTMLDetailsElement[]);
+        for(const fold of expanded)for(const details of Array.from(fold.querySelectorAll<HTMLDetailsElement>(closedHistory)))candidates.add(details);
+        if(candidates.size)openHistories(candidates);
+      });
+      return ()=>{root.removeEventListener('t3-review-response-location',review);root.removeEventListener('toggle',toggle,true);stopChanges();for(const [details,rendering] of this.toolRenderings)if(details.ownerDocument===root){rendering.dispose();this.removeChild(rendering.child);this.toolRenderings.delete(details);}};
     }));
     const data = await this.loadSettings();
     this.lastDiskSnapshot=JSON.stringify(data);
