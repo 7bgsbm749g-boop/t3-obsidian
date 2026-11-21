@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {parseHTML} from 'linkedom';
-import {DomBatch,observeDocumentChanges,OBSERVED_ATTRIBUTES} from '../src/ui/dom-changes';
+import {DomBatch,observeDocumentChanges,OBSERVED_ATTRIBUTES,PLUGIN_MARKUP,hasPluginMarkup,isProgressFold} from '../src/ui/dom-changes';
 
 const page=(body:string)=>parseHTML(`<!doctype html><html><body>${body}</body></html>`).document as unknown as Document;
 
@@ -29,7 +29,7 @@ test('a batch narrows changes to added plugin subtrees and changed parents',()=>
     <div class="cm-embed-block" id="block"><div class="callout" data-callout="t3-progress" id="fold"><div class="callout-title"><span class="send-to-t3-fold-key" data-t3-fold="a:complete"></span></div><div class="callout-content" id="content"><p id="para">Body</p></div></div></div>
   </div>`);
   const content=root.querySelector('.cm-content')!,line=root.getElementById('line')!,block=root.getElementById('block')!,para=root.getElementById('para')!;
-  let queries=0;const query=line.querySelector.bind(line);line.querySelector=((selector:string)=>{queries++;return query(selector);}) as any;
+  let queries=0;const query=line.querySelectorAll.bind(line);line.querySelectorAll=((selector:string)=>{queries++;return query(selector);}) as any;
   const batch=new DomBatch([
     {type:'childList',target:content,addedNodes:[line,block] as any,removedNodes:[] as any},
     {type:'childList',target:root.getElementById('content')!,addedNodes:[para] as any,removedNodes:[root.createElement('p')] as any},
@@ -37,8 +37,16 @@ test('a batch narrows changes to added plugin subtrees and changed parents',()=>
   assert.equal(batch.opaque,false);assert.equal(batch.removed,true);assert.equal(batch.elements,true);
   assert.deepEqual(batch.scopes().map(element=>element.id),['block'],'an ordinary editor line holds no plugin markup');
   assert.equal(queries,1);batch.scopes();assert.equal(queries,1,'scopes are computed once per batch');
-  assert.deepEqual(batch.within('.callout[data-callout="t3-progress"]').map(element=>element.id),['fold']);
-  assert.deepEqual(batch.containing('.callout').map(element=>element.id),['fold'],'a changed parent maps to its fold');
+  assert.deepEqual(batch.within(isProgressFold).map(element=>element.id),['fold']);
+  assert.equal(batch.within(isProgressFold),batch.within(isProgressFold),'listeners share one classification');
+  assert.deepEqual(batch.containing(isProgressFold).map(element=>element.id),['fold'],'a changed parent maps to its fold');
   assert.equal(new DomBatch([{type:'childList',target:content,addedNodes:[{nodeType:1}] as any,removedNodes:[] as any}] as any).opaque,true,'an uninspectable node asks for a full scan');
   assert.equal(new DomBatch([]).opaque,true);
+});
+
+test('the markup test without selectors agrees with the plugin markup selector',()=>{
+  const root=page(`<div class="callout" data-callout="note"></div><div class="cm-embed-block"></div><span class="x send-to-t3-run-timer"></span>
+    <svg class="send-to-t3-linked-folder-logo"></svg><span data-t3-tool-icon="wrench"></span><span data-t3-question="q"></span><a href="t3-question:abc">Answer</a>
+    <a href="https://example.com">Web</a><span class="cm-line"></span><span data-t3-other="1"></span><div data-t3-worktree-setup="1"></div>`);
+  for(const element of Array.from(root.body.querySelectorAll('*')))assert.equal(hasPluginMarkup(element),element.matches(PLUGIN_MARKUP),element.outerHTML);
 });

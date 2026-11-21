@@ -6,6 +6,7 @@ export function activityShineTargets(root:ParentNode):Set<HTMLElement> {
   for(const label of spinnerLabels(Array.from(root.querySelectorAll<HTMLElement>('.send-to-t3-inline-spinner'))))targets.add(label);
   return targets;
 }
+const has=(element:Element|null|undefined,name:string)=>!!element?.classList.contains(name);
 function spinnerLabels(spinners:HTMLElement[]):HTMLElement[] {
   const labels:HTMLElement[]=[];
   for(const spinner of spinners){
@@ -15,13 +16,18 @@ function spinnerLabels(spinners:HTMLElement[]):HTMLElement[] {
   }
   return labels;
 }
-
-/** Targets in one added subtree, including the subtree root. A spinner's label
- * is its previous sibling, so an added spinner also checks its own label. */
-export function activityShineTargetsWithin(scope:Element):Set<HTMLElement> {
-  const targets=activityShineTargets(scope);
-  if(scope.matches(SHINE_SELECTOR))targets.add(scope as HTMLElement);
-  if(scope.matches('.send-to-t3-inline-spinner')&&scope.parentElement)for(const label of spinnerLabels([scope as HTMLElement]))targets.add(label);
+const inProgressTool=(element:Element)=>has(element,'send-to-t3-tool')&&element.getAttribute('data-t3-tool-status')==='inProgress';
+/** Shine targets among plugin markup elements (see PLUGIN_MARKUP), classified
+ * with the same rules as activityShineTargets but without selector queries. */
+export function activityShineTargetsAmong(elements:Iterable<Element>):Set<HTMLElement> {
+  const targets=new Set<HTMLElement>();
+  for(const element of elements){
+    if(!element.isConnected)continue;
+    if(element.getAttribute('data-t3-active-title')==='true'||has(element,'send-to-t3-file-opening'))targets.add(element as HTMLElement);
+    if(has(element,'send-to-t3-run-name')){const status=element.previousElementSibling;if(has(status,'send-to-t3-run-status')&&status!.getAttribute('data-status')==='Running')targets.add(element as HTMLElement);}
+    if(inProgressTool(element))for(const summary of Array.from(element.children))if(summary.tagName==='SUMMARY')for(const span of Array.from(summary.children))if(span.tagName==='SPAN'&&!span.hasAttribute('data-t3-tool-icon'))targets.add(span as HTMLElement);
+    if(has(element,'send-to-t3-inline-spinner'))for(const label of spinnerLabels([element as HTMLElement]))targets.add(label);
+  }
   return targets;
 }
 
@@ -59,8 +65,7 @@ export function installActivityShine(root:Document):()=>void {
       for(const element of watched.keys())if(!targets.has(element)||!element.isConnected)clear(element);
     }else{
       if(removed)for(const element of [...watched.keys()])if(!element.isConnected||!isActivityShineTarget(element))clear(element);
-      targets=new Set();
-      for(const scope of scopes)if(scope.isConnected)for(const element of activityShineTargetsWithin(scope))targets.add(element);
+      targets=activityShineTargetsAmong(scopes);
     }
     for(const element of targets){
       if(!watched.has(element)){watched.set(element,!intersection);intersection?.observe(element);}
@@ -72,10 +77,12 @@ export function installActivityShine(root:Document):()=>void {
   };
   const schedule=(everything=true)=>{if(everything)full=true;if(!queued&&!disposed){queued=true;queueMicrotask(refresh);}};
   const changed=(batch:DomBatch)=>{
-    const attributes=batch.attributes().some(record=>record.attributeName!=='class'||(record.target as Element).matches?.('.send-to-t3-file-opening, [data-t3-shine]'));
+    const attributes=batch.attributes().some(record=>{const target=record.target as Element;return record.attributeName!=='class'||!!target.classList?.contains('send-to-t3-file-opening')||!!target.hasAttribute?.('data-t3-shine');});
     if(attributes||batch.opaque){schedule();return;}
     if(batch.removed&&watched.size)recheck=true;
-    for(const element of batch.scopes())scoped.add(element);
+    for(const element of batch.markup())scoped.add(element);
+    // A label added inside an existing in-progress tool summary.
+    for(const tool of batch.containing(inProgressTool))scoped.add(tool);
     if(recheck||scoped.size)schedule(false);
   };
   const stopChanges=observeDocumentChanges(root,changed);

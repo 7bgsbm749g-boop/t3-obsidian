@@ -1,6 +1,6 @@
 import {responseControlsChanged} from './response-controls-event';
 import type {MarkdownView} from 'obsidian';
-import {observeDocumentChanges,type DomBatch} from '../ui/dom-changes';
+import {observeDocumentChanges,isProgressFold,type DomBatch} from '../ui/dom-changes';
 
 const PROGRESS='.callout[data-callout="t3-progress"]';
 
@@ -54,8 +54,8 @@ export function installStreamStopControls(root:Document,resolve:(fold:HTMLElemen
     if(batch.opaque){schedule();return;}
     if(!batch.childList)return;
     const before=pendingFolds.size;
-    for(const fold of batch.within(PROGRESS))pendingFolds.add(fold as HTMLElement);
-    for(const fold of batch.containing(PROGRESS))pendingFolds.add(fold as HTMLElement);
+    for(const fold of batch.within(isProgressFold))pendingFolds.add(fold as HTMLElement);
+    for(const fold of batch.containing(isProgressFold))pendingFolds.add(fold as HTMLElement);
     if((pendingFolds.size>before||batch.removed&&controls.size)&&!queued&&!disposed){queued=true;queueMicrotask(flush);}
   };
   const find=(target:EventTarget|null)=>{

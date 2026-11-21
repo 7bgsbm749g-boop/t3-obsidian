@@ -2,7 +2,18 @@ import {clockForDocument} from '../shared/clock';
 import type {InlineThreadState} from '../conversations/inline-thread';
 import {reconcileResponseDOM} from './response-dom';
 import {setupDuration} from '../projects/worktree-setup';
-import {observeDocumentChanges,type DomBatch} from '../ui/dom-changes';
+import {observeDocumentChanges,pluginMarkupIn,isProgressFold,isThoughtFold,type DomBatch,type ElementTest} from '../ui/dom-changes';
+
+const has=(element:Element,name:string)=>element.classList.contains(name);
+// Each selector below has an equivalent test for scoped passes, which
+// classify the plugin markup of changed subtrees instead of querying again.
+const LEGACY_TOOL:[string,ElementTest]=['details.send-to-t3-tool',element=>element.tagName==='DETAILS'&&has(element,'send-to-t3-tool')];
+const TIMERS:[string,ElementTest]=['[data-t3-setup-start], .send-to-t3-run-timer[data-t3-start]',element=>element.hasAttribute('data-t3-setup-start')||has(element,'send-to-t3-run-timer')&&element.hasAttribute('data-t3-start')];
+const TIMES:[string,ElementTest]=['.send-to-t3-thought-time[data-t3-thought-at], .send-to-t3-notification-time[data-t3-notification-at]',element=>has(element,'send-to-t3-thought-time')&&element.hasAttribute('data-t3-thought-at')||has(element,'send-to-t3-notification-time')&&element.hasAttribute('data-t3-notification-at')];
+const FOLDS:Array<[string,ElementTest]>=[['.callout[data-callout="t3-progress"]',isProgressFold],['.callout[data-callout="t3-thought"]',isThoughtFold]];
+const GROUPS:[string,ElementTest]=['details[data-t3-tool-group], details[data-t3-answer-id], details[data-t3-tasks-id], details[data-t3-plan-id], div[data-t3-worktree-setup]',element=>element.tagName==='DETAILS'&&(element.hasAttribute('data-t3-tool-group')||element.hasAttribute('data-t3-answer-id')||element.hasAttribute('data-t3-tasks-id')||element.hasAttribute('data-t3-plan-id'))||element.tagName==='DIV'&&element.hasAttribute('data-t3-worktree-setup')];
+const ICONS:[string,ElementTest]=['[data-t3-tool-icon]',element=>element.hasAttribute('data-t3-tool-icon')];
+const foldOrThought:ElementTest=element=>isProgressFold(element)||isThoughtFold(element);
 
 export type IntermediateMode='remove'|'keep'|'collapse';
 export type FinalAnswerFormat='formatted'|'raw-markdown';
@@ -105,38 +116,36 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   const refresh=()=>{
     queued=false;if(disposed)return;
     const everything=full,scoped=[...scopes];full=false;scopes.clear();
-    const select=<T extends Element>(selector:string):T[]=>{
+    // Restructuring below (legacy replacement, retained swaps) invalidates
+    // the scoped markup list; it is then collected again.
+    let markup:Element[]|undefined;
+    const select=<T extends Element>([selector,test]:[string,ElementTest]):T[]=>{
       if(everything)return Array.from(root.querySelectorAll<T>(selector));
-      const found=new Set<T>();
-      for(const scope of scoped){
-        if(!scope.isConnected)continue;
-        if(scope.matches(selector))found.add(scope as T);
-        for(const element of Array.from(scope.querySelectorAll<T>(selector)))found.add(element);
-      }
-      return [...found];
+      if(!markup){const found=new Set<Element>();for(const scope of scoped)if(scope.isConnected)for(const element of pluginMarkupIn(scope))found.add(element);markup=[...found];}
+      return markup.filter(element=>element.isConnected&&test(element)) as T[];
     };
     // Old notes keep their exact canonical bytes. Remove legacy tool detail
     // controls only from the rendered view, including lazily mounted history.
-    for(const details of select<HTMLDetailsElement>('details.send-to-t3-tool')){
+    for(const details of select<HTMLDetailsElement>(LEGACY_TOOL)){markup=undefined;
       const row=root.win.createDiv();
       for(const attribute of Array.from(details.attributes))row.setAttribute(attribute.name,attribute.value);
       const summary=details.querySelector(':scope > summary');
       if(summary)row.append(...Array.from(summary.childNodes));
-      details.replaceWith(row);
+      details.replaceWith(row);if(!everything)scoped.push(row);
     }
     const layout=new Set<Element>(),actionsInUse=new Set<HTMLElement>(),align:Array<{actions:HTMLElement;heading:HTMLElement;block:HTMLElement}>=[];
     if(everything)liveTimers.clear();
-    for(const timer of select<HTMLElement>('[data-t3-setup-start], .send-to-t3-run-timer[data-t3-start]'))updateTimer(timer);
+    for(const timer of select<HTMLElement>(TIMERS))updateTimer(timer);
     if(liveTimers.size&&timerTick===undefined)timerTick=setInterval(updateTimers,1000);
     else if(!liveTimers.size)stopTimers();
-    for(const time of select<HTMLElement>('.send-to-t3-thought-time[data-t3-thought-at], .send-to-t3-notification-time[data-t3-notification-at]')){
+    for(const time of select<HTMLElement>(TIMES)){
       const at=Number(time.dataset.t3ThoughtAt??time.dataset.t3NotificationAt);if(!Number.isFinite(at))continue;
       const date=new Date(at),text=date.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
       if(time.textContent!==text)time.textContent=text;
       time.title=date.toLocaleString();
     }
     // Reconcile the outer history before finding its nested thought folds.
-    for(const selector of ['.callout[data-callout="t3-progress"]','.callout[data-callout="t3-thought"]'])for(let fold of select<HTMLElement>(selector)){
+    for(const kind of FOLDS)for(let fold of select<HTMLElement>(kind)){
       const id=key(fold),container=owner(fold);
       const thought=id?.startsWith('thought:');
       // Reconcile before the next paint. Only active responses retain ordinary
@@ -149,7 +158,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
           const oldTitle=title(previous),newTitle=title(fold),oldContent=previous.querySelector(':scope > .callout-content'),newContent=fold.querySelector(':scope > .callout-content');
           if(oldTitle&&newTitle&&oldContent&&newContent){
             reconcileResponseDOM(oldTitle,newTitle);reconcileResponseDOM(oldContent,newContent);
-            fold.replaceWith(previous);fold=previous;
+            fold.replaceWith(previous);fold=previous;markup=undefined;if(!everything)scoped.push(previous);
           }
         }
         cache.set(id,fold);if(cache.size>64)cache.delete(cache.keys().next().value!);
@@ -199,12 +208,12 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
       }
     }
     // Keep tool and submitted-answer disclosures through native renders.
-    for(let group of select<HTMLElement>('details[data-t3-tool-group], details[data-t3-answer-id], details[data-t3-tasks-id], details[data-t3-plan-id], div[data-t3-worktree-setup]')){
+    for(let group of select<HTMLElement>(GROUPS)){
       const id=detailId(group)!;
       const surface=group.closest('.cm-content, .markdown-preview-view')??owner(group);
       let cache=retainedTools.get(surface);if(!cache){cache=new Map();retainedTools.set(surface,cache);}
       const previous=cache.get(id);
-      if(previous&&previous!==group&&!previous.isConnected){reconcileResponseDOM(previous,group);group.replaceWith(previous);group=previous;}
+      if(previous&&previous!==group&&!previous.isConnected){reconcileResponseDOM(previous,group);group.replaceWith(previous);group=previous;markup=undefined;if(!everything)scoped.push(previous);}
       cache.set(id,group);if(cache.size>64)cache.delete(cache.keys().next().value!);
       for(const detail of [group,...Array.from(group.querySelectorAll<HTMLElement>('details[data-t3-tool-key]'))]){
         const id=detailId(detail);
@@ -212,7 +221,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
         if(choice!==undefined)detail.toggleAttribute('open',choice);
       }
     }
-    if(icon)for(const element of select<HTMLElement>('[data-t3-tool-icon]'))if(!element.firstChild)icon(element,element.dataset.t3ToolIcon??'wrench');
+    if(icon)for(const element of select<HTMLElement>(ICONS))if(!element.firstChild)icon(element,element.dataset.t3ToolIcon??'wrench');
     // A scoped pass sees only its subtrees. It releases elements that left
     // the document; a full pass also releases connected ones it did not use.
     const released=(element:Element)=>everything?!layout.has(element):!element.isConnected;
@@ -226,7 +235,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
     if(!batch.elements)return;
     const before=scopes.size;
     for(const element of batch.scopes())scopes.add(element);
-    for(const fold of batch.containing('.callout[data-callout="t3-progress"], .callout[data-callout="t3-thought"]'))scopes.add(fold);
+    for(const fold of batch.containing(foldOrThought))scopes.add(fold);
     // Removal only releases observers of elements that left the document.
     if((scopes.size>before||batch.removed)&&!queued&&!disposed){queued=true;queueMicrotask(refresh);}
   };

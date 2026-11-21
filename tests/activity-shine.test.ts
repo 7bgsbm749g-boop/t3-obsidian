@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {parseHTML} from 'linkedom';
-import {activityShineTargets,installActivityShine} from '../src/ui/activity-shine';
+import {activityShineTargets,activityShineTargetsAmong,installActivityShine} from '../src/ui/activity-shine';
+import {pluginMarkupIn} from '../src/ui/dom-changes';
 
 class Element {
   attrs=new Map<string,string>();properties=new Map<string,string>();textContent='';isConnected=true;
@@ -107,4 +108,9 @@ test('tool status and transient loading labels refresh shine without new loading
     assert.equal(root.getElementById('active-title')!.getAttribute('data-t3-shine'),'true','unrelated active titles keep their shine');
     dispose();
   }finally{globalThis.MutationObserver=previous;}
+});
+
+test('scoped shine classification of added markup agrees with the document selectors',()=>{
+  const root=loadingDocument(),ids=(targets:Set<HTMLElement>)=>[...targets].map(label=>label.id).sort();
+  assert.deepEqual(ids(activityShineTargetsAmong(pluginMarkupIn(root.body))),ids(activityShineTargets(root)));
 });

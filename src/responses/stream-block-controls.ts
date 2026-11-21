@@ -7,7 +7,7 @@ import {responseScrollChanged} from './response-scroll';
 import {installResponseDrag} from './response-drag';
 import {installStreamStopControls} from './stream-stop-control';
 import {editorCM} from '../shared/native-editor';
-import {observeDocumentChanges,type DomBatch} from '../ui/dom-changes';
+import {observeDocumentChanges,closestWhere,isEmbedBlock,isProgressFold,isReadingView,type DomBatch} from '../ui/dom-changes';
 
 const PROGRESS='.callout[data-callout="t3-progress"]';
 
@@ -69,7 +69,7 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
       return index;
     };
     for(const fold of candidates){
-      const block=fold.closest<HTMLElement>('.cm-embed-block'),reading=!!fold.closest('.markdown-preview-view');
+      const block=closestWhere(fold,isEmbedBlock) as HTMLElement|null,reading=!!closestWhere(fold,isReadingView);
       if(!reading&&(!block||block.querySelector('.callout')!==fold))continue;
       const existing=reading?fold.querySelector<HTMLElement>(':scope > .send-to-t3-reading-actions'):block!.querySelector<HTMLElement>(':scope > .embed-actions');
       if(existing)changedActions.add(existing);
@@ -228,10 +228,11 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
   });
   // Map a changed node to the stream fold whose controls it can affect: its
   // own fold, or the fold of the native widget that holds its toolbar.
+  const widgetOrReadingFold=(element:Element)=>isEmbedBlock(element)||isProgressFold(element)&&!!closestWhere(element,isReadingView);
   const foldOf=(element:Element)=>{
-    const fold=element.closest<HTMLElement>(PROGRESS);if(fold)pending.add(fold);
-    const block=element.closest('.cm-embed-block'),first=block?.querySelector<HTMLElement>('.callout');
-    if(first?.matches(PROGRESS))pending.add(first);
+    const fold=closestWhere(element,isProgressFold) as HTMLElement|null;if(fold)pending.add(fold);
+    const block=closestWhere(element,isEmbedBlock),first=block?.querySelector<HTMLElement>('.callout');
+    if(first&&isProgressFold(first))pending.add(first);
     const actions=block?.querySelector<HTMLElement>(':scope > .embed-actions');if(actions)touched.add(actions);
   };
   const changed=(batch:DomBatch)=>{
@@ -242,11 +243,11 @@ export function installStreamBlockControls(app:App,root:Document,icon:(element:H
       if(target.classList?.contains('callout')&&target.getAttribute('data-callout')==='t3-progress'&&((record.oldValue??'').split(/\s+/).includes('is-collapsed')!==target.classList.contains('is-collapsed')))pending.add(target as HTMLElement);
     }
     if(batch.childList){
-      for(const fold of batch.within(PROGRESS))pending.add(fold as HTMLElement);
-      for(const block of batch.within('.cm-embed-block'))foldOf(block);
+      for(const fold of batch.within(isProgressFold))pending.add(fold as HTMLElement);
+      for(const block of batch.within(isEmbedBlock))foldOf(block);
       // An added node's ancestors are its record target's: map each changed
       // parent once to its widget or Reading fold.
-      for(const parent of batch.containing('.cm-embed-block, .markdown-preview-view '+PROGRESS))foldOf(parent);
+      for(const parent of batch.containing(widgetOrReadingFold))foldOf(parent);
     }
     if(pending.size+touched.size>before||batch.removed)scheduleScoped();
   };

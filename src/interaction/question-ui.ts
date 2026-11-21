@@ -8,7 +8,7 @@ import type {Extension} from '@codemirror/state';
 import type {DecorationSet,EditorView,ViewUpdate} from '@codemirror/view';
 import {parseQuestionToken,questionKey,questionSections,type QuestionTarget} from './questions';
 import {QuestionController} from './question-controller';
-import {observeDocumentChanges} from '../ui/dom-changes';
+import {observeDocumentChanges,closestWhere} from '../ui/dom-changes';
 
 function buttonLabel(controller:QuestionController,target:QuestionTarget){const view=controller.view(target);return view.status==='submitting'?(view.accepted?'Answer sent':'Submitting…'):view.status==='resolved'?'Answered':'Answer';}
 export function questionButton(controller:QuestionController,target:QuestionTarget,open:(target:QuestionTarget)=>void,doc:Document=activeDocument){
@@ -24,6 +24,7 @@ export function questionButton(controller:QuestionController,target:QuestionTarg
 export function installQuestionLinks(root:Document,controller:QuestionController,open:(target:QuestionTarget,button:HTMLElement)=>void){
   const controls=new Map<HTMLElement,()=>void>();
   const linkSelector='[data-t3-question] a[href^="t3-question:"]';
+  const isQuestionLink=(element:Element)=>element.tagName==='A'&&!!element.getAttribute('href')?.startsWith('t3-question:')&&!!closestWhere(element.parentElement,parent=>parent.hasAttribute('data-t3-question'));
   const scan=(links:Iterable<HTMLAnchorElement>=Array.from(root.querySelectorAll<HTMLAnchorElement>(linkSelector)),removed=true)=>{
     if(removed)for(const [button,dispose] of controls)if(!button.isConnected){dispose();controls.delete(button);}
     for(const link of links){
@@ -37,7 +38,7 @@ export function installQuestionLinks(root:Document,controller:QuestionController
   const stopChanges=observeDocumentChanges(root,batch=>{
     if(batch.opaque){scan();return;}
     if(!batch.elements)return;
-    const links=batch.within(linkSelector) as HTMLAnchorElement[];
+    const links=batch.within(isQuestionLink) as HTMLAnchorElement[];
     if(links.length||batch.removed&&controls.size)scan(links,batch.removed);
   });scan();
   return ()=>{stopChanges();for(const dispose of controls.values())dispose();controls.clear();};

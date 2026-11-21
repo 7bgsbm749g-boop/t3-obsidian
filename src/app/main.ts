@@ -132,7 +132,7 @@ import {changeInboxThreads,inboxThreadTargets} from '../notes/note-inbox-threads
 import {CompletionGlow} from '../responses/completion-glow';
 import {folderNotePath,type FolderNotesSettings} from '../projects/folder-note-adapter';
 import {installFolderIndicators,type FolderIndicatorController} from '../projects/folder-indicator';
-import {observeDocumentChanges} from '../ui/dom-changes';
+import {observeDocumentChanges,isProgressFold} from '../ui/dom-changes';
 import {connectVaultRemote,loadVaultLocations,vaultIdentity,vaultRegistration,waitForVaultNote,type VaultLocation,type VaultRegistration} from '../connection/vault-connection';
 import {loadProjectCreationLocations,rememberProjectCreationLocation,projectCreationDefaults,workspaceParentPath,type ProjectCreationLocation} from '../projects/workspace-picker';
 import {ProjectCreateModal,ProjectCreationCancelled,workspaceInsideVault,NEW_FOLDER_PROJECT,isNewProjectKey,newProjectKey,newProjectMachine,type ProjectLocation} from '../projects/project-create-ui';
@@ -457,6 +457,7 @@ export default class SendToT3 extends Plugin {
         child.register(dispose);this.toolRenderings.set(details,{ref,child,dispose});
       };
       const closedHistory='details.send-to-t3-response-history[data-t3-tool-ref]:not([open])';
+      const isClosedHistory=(element:Element)=>element.tagName==='DETAILS'&&element.classList.contains('send-to-t3-response-history')&&element.hasAttribute('data-t3-tool-ref')&&!element.hasAttribute('open');
       const openHistories=(candidates:Iterable<HTMLDetailsElement>=Array.from(root.querySelectorAll<HTMLDetailsElement>(closedHistory)))=>{
         if(this.stopped)return;
         for(const details of candidates){
@@ -469,8 +470,8 @@ export default class SendToT3 extends Plugin {
         // Only newly mounted histories and expanded progress folds can open.
         if(batch.opaque){openHistories();return;}
         const expanded=new Set<Element>();
-        for(const {target} of batch.attributes()){const fold=target as Element;if(fold.classList?.contains('callout')&&fold.getAttribute('data-callout')==='t3-progress'&&!fold.classList.contains('is-collapsed'))expanded.add(fold);}
-        const candidates=new Set<HTMLDetailsElement>(batch.within(closedHistory) as HTMLDetailsElement[]);
+        for(const {target} of batch.attributes()){const fold=target as Element;if(fold.classList&&isProgressFold(fold)&&!fold.classList.contains('is-collapsed'))expanded.add(fold);}
+        const candidates=new Set<HTMLDetailsElement>(batch.within(isClosedHistory) as HTMLDetailsElement[]);
         for(const fold of expanded)for(const details of Array.from(fold.querySelectorAll<HTMLDetailsElement>(closedHistory)))candidates.add(details);
         if(candidates.size)openHistories(candidates);
       });

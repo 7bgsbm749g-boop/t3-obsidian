@@ -3,7 +3,7 @@ import {editorCM} from '../shared/native-editor';
 import type {App,MarkdownView} from 'obsidian';
 import {nativeResponses} from './native-response-manager';
 import type {NativeResponseView} from './native-response-view';
-import {observeDocumentChanges,type DomBatch} from '../ui/dom-changes';
+import {observeDocumentChanges,closestWhere,isProgressFold,type DomBatch} from '../ui/dom-changes';
 
 const PROGRESS='.callout[data-callout="t3-progress"]';
 
@@ -76,7 +76,7 @@ export function installResponseDrag(app:App,root:Document,icon:(element:HTMLElem
   let full=true;const pending=new Set<HTMLElement>();
   const refresh=()=>{
     queued=false;if(disposed)return;
-    const everything=full,candidates=everything?Array.from(root.querySelectorAll<HTMLElement>('.markdown-source-view.is-live-preview '+PROGRESS)):[...pending].filter(fold=>fold.isConnected&&fold.closest('.markdown-source-view.is-live-preview'));
+    const everything=full,candidates=everything?Array.from(root.querySelectorAll<HTMLElement>('.markdown-source-view.is-live-preview '+PROGRESS)):[...pending].filter(fold=>fold.isConnected&&closestWhere(fold,element=>element.classList.contains('markdown-source-view')&&element.classList.contains('is-live-preview')));
     full=false;pending.clear();
     const live=new Set<HTMLElement>();
     for(const fold of candidates){
@@ -97,8 +97,8 @@ export function installResponseDrag(app:App,root:Document,icon:(element:HTMLElem
     if(batch.opaque){schedule();return;}
     if(!batch.childList)return;
     const before=pending.size;
-    for(const fold of batch.within(PROGRESS))pending.add(fold as HTMLElement);
-    for(const fold of batch.containing(PROGRESS))pending.add(fold as HTMLElement);
+    for(const fold of batch.within(isProgressFold))pending.add(fold as HTMLElement);
+    for(const fold of batch.containing(isProgressFold))pending.add(fold as HTMLElement);
     if((pending.size>before||batch.removed&&grips.size)&&!queued&&!disposed){queued=true;queueMicrotask(refresh);}
   };
   root.addEventListener('pointerdown',down,true);root.addEventListener('pointermove',move,{capture:true,passive:false});root.addEventListener('pointerup',up,true);root.addEventListener('pointercancel',cancel,true);root.addEventListener('keydown',keydown,true);root.addEventListener('click',click,true);win.addEventListener('blur',clear);
