@@ -535,3 +535,24 @@ test('ordinary transactions around retained tools map exact saved bytes without 
  }
  h.adapter.dispose();assert.equal(h.read(),expected);
 });
+
+test('source-mode reads serialize an unchanged CodeMirror document once and recheck every edit',()=>{
+  const document=`Before\n\n${responseAnchor(id)}\n\nAfter`;
+  let gets=0,state=EditorState.create({doc:document});
+  const cm:any={get state(){return state;},dispatch:(spec:any)=>{state=state.update(spec).state;}};
+  const editMode:any={cm,get:()=>{gets++;return state.doc.toString();}};
+  const view:any={editor:{cm},editMode,currentMode:editMode,getViewData:()=>editMode.get(),setViewData:()=>{},getMode:()=>'source',requestSave:()=>{},save:async()=>{}};
+  const adapter=new NativeResponseView(view,document,record=>{throw Error(record.reason);},async()=>document);
+  adapter.setResponses([{id,body:'> [!t3-progress]- Done <span data-t3-fold="thread:complete"></span>\n> Output'}]);
+  gets=0;
+  const first=adapter.recoveryDocument();
+  for(let i=0;i<50;i++){assert.equal(adapter.recoveryDocument(),first);assert.equal(adapter.saved(),document);}
+  assert.equal(first,document);assert.equal(gets,1,'an unchanged document is serialized once');
+  // An ordinary edit makes a new immutable document and a fresh exact read.
+  state=state.update({changes:{from:state.doc.length,insert:' edited'}}).state;
+  assert.equal(adapter.saved(),document+' edited');assert.equal(gets,2);
+  // Reading view and other modes always read the native text.
+  view.currentMode={get:()=>{gets++;return state.doc.toString();}};
+  adapter.saved();adapter.saved();assert.equal(gets,4);
+  adapter.dispose();
+});

@@ -239,7 +239,29 @@ export class NativeResponseView {
     return projection;
   }
   private restoreSaved(display:string){return this.restoreSavedTools(savedProjection(display,this.projection));}
-  private displayed(){return this.originalGet.call(this.view);}
+  /** Obsidian's source mode serializes its immutable CodeMirror document.
+   * The same document object always yields the same bytes, so the idle tick
+   * reuses one string instead of rebuilding the whole note on every read. */
+  private displayCache?:{doc:object;text:string;projection:ResponseProjection};
+  private savedCache?:{display:string;projection:ResponseProjection;tools:unknown;saved:string};
+  private sourceDocument():object|undefined {
+    const view=this.view as MarkdownView&{currentMode?:unknown;editMode?:{cm?:unknown}},cm=editorCM(this.view.editor);
+    // Only Obsidian's own source mode reads this exact editor's document.
+    return cm&&view.currentMode!==undefined&&view.currentMode===view.editMode&&view.editMode?.cm===cm?cm.state?.doc:undefined;
+  }
+  private displayed():string {
+    const doc=this.sourceDocument(),cache=this.displayCache;
+    if(doc&&cache?.doc===doc){
+      // Share the validated projection's string so later exact comparisons
+      // with it are identity checks. Compare once per projection.
+      if(cache.projection!==this.projection){cache.projection=this.projection;if(cache.text===this.projection.display)cache.text=this.projection.display;}
+      return cache.text;
+    }
+    let text=this.originalGet.call(this.view);
+    if(text===this.projection.display)text=this.projection.display;
+    this.displayCache=doc?{doc,text,projection:this.projection}:undefined;
+    return text;
+  }
   private nativeCheckpoint(){return this.saveBaseline?this.saveBaseline.value:nativeMarkdownView(this.view).lastSavedData;}
   /** TextFileView's debounce retains its original save function. Its call to
    * getViewData is followed synchronously by lastSavedData and saving=true.
@@ -276,7 +298,15 @@ export class NativeResponseView {
    * projection; all file writes continue to use saved() and the save fence. */
   recoveryDocument():string {return this.conflictLocal();}
   private localSaved():string {
-    const display=this.displayed();
+    const display=this.displayed(),memo=this.savedCache;
+    // Unchanged native bytes and the same validated projection give the same
+    // saved text. Any edit yields a new display string and a full check.
+    if(memo&&memo.display===display&&memo.projection===this.projection&&memo.tools===this.savedTools)return memo.saved;
+    const saved=this.checkedSaved(display);
+    this.savedCache={display,projection:this.projection,tools:this.savedTools,saved};
+    return saved;
+  }
+  private checkedSaved(display:string):string {
     if(!this.projection.ranges.length&&display===this.projection.saved)return display;
     const doc=editorCM(this.view.editor)?.state?.doc,cached=doc&&this.checkedDocuments.get(doc);
     if(cached&&cached.display===display){this.projection=cached;return cached.saved;}
@@ -537,7 +567,7 @@ export class NativeResponseView {
     if(this.view.setViewData===this.setWrapper)this.view.setViewData=this.originalSet;
     if(this.view.save===this.saveWrapper)this.view.save=this.originalSave;
     if(this.view.requestSave===this.requestSaveWrapper)this.view.requestSave=this.originalRequestSave;
-    this.savedToolHistory.clear();
+    this.savedToolHistory.clear();this.displayCache=undefined;this.savedCache=undefined;
     this.lazyTools.clear();this.lazyToolCharacters=0;
     this.lazyToolParents.clear();
     this.disposed=true;
