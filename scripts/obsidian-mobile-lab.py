@@ -32,9 +32,10 @@ RUNTIME = ['main.js', 'manifest.json', 'styles.css']
 GUEST_RAM_MIB = 1536
 # Host allowance for the whole emulator session: KVM guest RAM (the guest page
 # cache eventually touches all of it) plus QEMU, swiftshader/gfxstream buffers
-# and mapped emulator libraries. On 2026-11-21 the old 2300M allowance filled
-# with 256M of swap after 7 minutes of benchmark use, and the kernel OOM-killed
-# the emulator after 17m40s. See docs/obsidian-sync-test-lab.md for the sizing.
+# and mapped emulator libraries. On 2026-11-21 the session held 2036 MiB anon
+# after boot and 2276 MiB after 30 s of Obsidian; the old 2300M allowance filled
+# its 256M swap within 7 minutes of benchmark use, and the kernel OOM-killed the
+# emulator after 17m40s. See docs/obsidian-sync-test-lab.md for the sizing.
 SESSION_MEMORY = '3584M'
 # Long runs restart the emulator in a clean state before host-side growth can
 # reach that allowance. 7-minute sessions survived; 17-minute ones did not.
