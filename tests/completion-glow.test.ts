@@ -58,6 +58,19 @@ test('focused viewing acknowledges the exact completion after 750 ms and confirm
   h.glow.view(undefined);h.view();await drain();assert.equal(h.visits.length,2);h.glow.dispose();
 });
 
+test('the indicator poll keeps a focused visit so an explicit mark-unread survives',async()=>{
+  const h=fixture();h.glow.observe([response()]);await h.glow.refresh();
+  let checks=0;const visible=()=>{checks++;return true;};
+  h.glow.poll('App/Nested/Note.md',visible,1000);h.glow.poll('App/Nested/Note.md',visible,2000);await drain();
+  assert.equal(h.visits.length,1);assert.deepEqual(unread(h.glow),[]);
+  const read=checks;h.glow.poll('App/Nested/Note.md',visible,3000);assert.equal(checks,read,'Nothing unread needs no layout check');
+  h.thread.lastVisitedAt=before;await h.glow.refresh(true);
+  for(const now of [4000,5000,6000])h.glow.poll('App/Nested/Note.md',visible,now);await drain();
+  assert.equal(h.visits.length,1,'An explicit mark-unread survives the poll while the note stays focused');
+  h.glow.poll('Other.md',visible,7000);h.glow.poll('App/Nested/Note.md',visible,8000);h.glow.poll('App/Nested/Note.md',visible,9000);await drain();
+  assert.equal(h.visits.length,2,'Returning to the note starts another visit');h.glow.dispose();
+});
+
 test('visiting an older bound reply never acknowledges a newer unseen run',async()=>{
   const h=fixture();h.thread.latestRunId='new-run';h.thread.latestRunCompletedAt=later;
   h.glow.observe([response()]);await h.glow.refresh();h.view();await drain();

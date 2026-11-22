@@ -56,7 +56,14 @@ export function decorateNoteIndicators(root:ParentNode,notes:Map<string,NoteIndi
     if(indicator.getAttribute('aria-label')!==label)indicator.setAttribute('aria-label',label);
   }
 }
-export interface FolderIndicatorController {refresh():void;dispose():void}
+/** refresh() redraws now. poll() redraws only when the indicator state
+ * changed, or while a response is active: tab bars owned by Obsidian or other
+ * plugins can re-render their titles without an event. poll() reports
+ * whether it redrew. */
+export interface FolderIndicatorController {refresh():void;poll():boolean;dispose():void}
+export function indicatorState(notes:Map<string,NoteIndicator>,links:FolderLink[]):{key:string;active:boolean} {
+  return {key:JSON.stringify([[...notes],links]),active:[...notes.values()].some(note=>note.active>0)};
+}
 export function installFolderIndicators(root:HTMLElement|(()=>Iterable<HTMLElement>),getLinks:()=>FolderLink[],getNotes:()=>Map<string,NoteIndicator>=()=>new Map(),folderNote:(title:HTMLElement)=>string|undefined=()=>undefined,decorateTabs:(notes:Map<string,NoteIndicator>)=>void=()=>{}):FolderIndicatorController{
   let stopped=false,scheduled=false;
   const observers=new Map<HTMLElement,MutationObserver>(),ownedRoots=new Set<HTMLElement>();
@@ -67,9 +74,12 @@ export function installFolderIndicators(root:HTMLElement|(()=>Iterable<HTMLEleme
     for(const badge of Array.from(element.querySelectorAll('.'+LINKED_FOLDER_BADGE_CLASS+', .'+NOTE_INDICATOR_CLASS)))badge.remove();
   };
   const schedule=()=>{if(stopped||scheduled)return;scheduled=true;void Promise.resolve().then(()=>{scheduled=false;refresh();}).catch(error=>{scheduled=false;logFailure('folder.indicators.refresh.failed',error);});};
-  const refresh=()=>{
-    if(stopped)return;
-    const currentRoots=new Set(roots()),notes=getNotes();
+  let applied:string|undefined;
+  const refresh=(force=true):boolean=>{
+    if(stopped)return false;
+    const currentRoots=new Set(roots()),notes=getNotes(),links=getLinks(),state=indicatorState(notes,links);
+    if(!force&&!state.active&&state.key===applied&&[...currentRoots].every(current=>ownedRoots.has(current))&&ownedRoots.size===currentRoots.size)return false;
+    applied=state.key;
     for(const previous of ownedRoots)if(!currentRoots.has(previous)){clearRoot(previous);ownedRoots.delete(previous);}
     for(const current of currentRoots)ownedRoots.add(current);
     const explorers=new Set(Array.from(currentRoots).flatMap(current=>Array.from(current.querySelectorAll<HTMLElement>('.nav-files-container'))));
@@ -79,9 +89,10 @@ export function installFolderIndicators(root:HTMLElement|(()=>Iterable<HTMLEleme
       if(!observers.has(explorer)){
         const observer=new MutationObserver(schedule);observer.observe(explorer,{childList:true,subtree:true,attributes:true,attributeFilter:['class','data-path']});observers.set(explorer,observer);
       }
-      decorateLinkedFolders(explorer,getLinks());decorateNoteIndicators(explorer,notes,folderNote);
+      decorateLinkedFolders(explorer,links);decorateNoteIndicators(explorer,notes,folderNote);
     }
+    return true;
   };
   refresh();
-  return {refresh,dispose(){stopped=true;decorateTabs(new Map());for(const observer of observers.values())observer.disconnect();observers.clear();for(const current of ownedRoots)clearRoot(current);ownedRoots.clear();}};
+  return {refresh:()=>refresh(),poll:()=>refresh(false),dispose(){stopped=true;decorateTabs(new Map());for(const observer of observers.values())observer.disconnect();observers.clear();for(const current of ownedRoots)clearRoot(current);ownedRoots.clear();}};
 }

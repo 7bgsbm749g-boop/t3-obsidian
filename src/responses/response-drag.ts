@@ -3,6 +3,9 @@ import {editorCM} from '../shared/native-editor';
 import type {App,MarkdownView} from 'obsidian';
 import {nativeResponses} from './native-response-manager';
 import type {NativeResponseView} from './native-response-view';
+import {observeDocumentChanges,closestWhere,isProgressFold,type DomBatch} from '../ui/dom-changes';
+
+const PROGRESS='.callout[data-callout="t3-progress"]';
 
 /** Pointer listeners belong to the document, not a streaming callout node.
  * Replacing rendered tokens cannot lose an in-progress drag or its release. */
@@ -68,10 +71,15 @@ export function installResponseDrag(app:App,root:Document,icon:(element:HTMLElem
   const cancel=(event:PointerEvent)=>{if(drag?.pointer===event.pointerId)clear();};
   const keydown=(event:KeyboardEvent)=>{if(drag&&event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();clear();}};
   const click=(event:MouseEvent)=>{if((event.target as Element)?.closest?.('.send-to-t3-response-drag')){event.preventDefault();event.stopImmediatePropagation();}};
+  // Control changes rescan. Document changes process only added or changed
+  // folds, and release grips whose fold left or was processed without one.
+  let full=true;const pending=new Set<HTMLElement>();
   const refresh=()=>{
     queued=false;if(disposed)return;
+    const everything=full,candidates=everything?Array.from(root.querySelectorAll<HTMLElement>('.markdown-source-view.is-live-preview '+PROGRESS)):[...pending].filter(fold=>fold.isConnected&&closestWhere(fold,element=>element.classList.contains('markdown-source-view')&&element.classList.contains('is-live-preview')));
+    full=false;pending.clear();
     const live=new Set<HTMLElement>();
-    for(const fold of Array.from(root.querySelectorAll<HTMLElement>('.markdown-source-view.is-live-preview .callout[data-callout="t3-progress"]'))){
+    for(const fold of candidates){
       const widget=fold.closest('.cm-embed-block');if(!widget||widget.querySelector('.callout')!==fold)continue;
       const heading=fold.querySelector<HTMLElement>(':scope > .callout-title'),key=heading?.querySelector<HTMLElement>('.send-to-t3-fold-key')?.dataset.t3Fold;
       const view=app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.file&&view.contentEl.contains(fold));
@@ -81,13 +89,21 @@ export function installResponseDrag(app:App,root:Document,icon:(element:HTMLElem
       if(!grip){grip=root.win.createSpan();grip.className='send-to-t3-response-drag';grip.setAttribute('aria-label','Drag active response');grip.setAttribute('title','Drag to move response');icon(grip,'grip-vertical');heading.prepend(grip);}
       live.add(grip);grips.set(grip,{fold,key,view,adapter,id});
     }
-    for(const [grip] of grips)if(!live.has(grip)){grip.remove();grips.delete(grip);}
+    for(const [grip,item] of grips)if(!live.has(grip)&&(everything||!grip.isConnected||!item.fold.isConnected||candidates.includes(item.fold))){grip.remove();grips.delete(grip);}
     if(drag&&!current(drag))clear();
   };
-  const schedule=()=>{if(!queued&&!disposed){queued=true;queueMicrotask(refresh);}};
+  const schedule=()=>{full=true;if(!queued&&!disposed){queued=true;queueMicrotask(refresh);}};
+  const changed=(batch:DomBatch)=>{
+    if(batch.opaque){schedule();return;}
+    if(!batch.childList)return;
+    const before=pending.size;
+    for(const fold of batch.within(isProgressFold))pending.add(fold as HTMLElement);
+    for(const fold of batch.containing(isProgressFold))pending.add(fold as HTMLElement);
+    if((pending.size>before||batch.removed&&grips.size)&&!queued&&!disposed){queued=true;queueMicrotask(refresh);}
+  };
   root.addEventListener('pointerdown',down,true);root.addEventListener('pointermove',move,{capture:true,passive:false});root.addEventListener('pointerup',up,true);root.addEventListener('pointercancel',cancel,true);root.addEventListener('keydown',keydown,true);root.addEventListener('click',click,true);win.addEventListener('blur',clear);
-  const observer=new win.MutationObserver(schedule);observer.observe(root.body,{childList:true,subtree:true});
+  const stopChanges=observeDocumentChanges(root,changed);
   root.addEventListener(responseControlsChanged,schedule);
   refresh();
-  return ()=>{disposed=true;root.removeEventListener(responseControlsChanged,schedule);clear();observer.disconnect();for(const [grip] of grips)grip.remove();grips.clear();root.removeEventListener('pointerdown',down,true);root.removeEventListener('pointermove',move,true);root.removeEventListener('pointerup',up,true);root.removeEventListener('pointercancel',cancel,true);root.removeEventListener('keydown',keydown,true);root.removeEventListener('click',click,true);win.removeEventListener('blur',clear);};
+  return ()=>{disposed=true;root.removeEventListener(responseControlsChanged,schedule);clear();stopChanges();for(const [grip] of grips)grip.remove();grips.clear();root.removeEventListener('pointerdown',down,true);root.removeEventListener('pointermove',move,true);root.removeEventListener('pointerup',up,true);root.removeEventListener('pointercancel',cancel,true);root.removeEventListener('keydown',keydown,true);root.removeEventListener('click',click,true);win.removeEventListener('blur',clear);};
 }

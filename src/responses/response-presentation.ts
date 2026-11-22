@@ -2,6 +2,18 @@ import {clockForDocument} from '../shared/clock';
 import type {InlineThreadState} from '../conversations/inline-thread';
 import {reconcileResponseDOM} from './response-dom';
 import {setupDuration} from '../projects/worktree-setup';
+import {observeDocumentChanges,pluginMarkupIn,isProgressFold,isThoughtFold,type DomBatch,type ElementTest} from '../ui/dom-changes';
+
+const has=(element:Element,name:string)=>element.classList.contains(name);
+// Each selector below has an equivalent test for scoped passes, which
+// classify the plugin markup of changed subtrees instead of querying again.
+const LEGACY_TOOL:[string,ElementTest]=['details.send-to-t3-tool',element=>element.tagName==='DETAILS'&&has(element,'send-to-t3-tool')];
+const TIMERS:[string,ElementTest]=['[data-t3-setup-start], .send-to-t3-run-timer[data-t3-start]',element=>element.hasAttribute('data-t3-setup-start')||has(element,'send-to-t3-run-timer')&&element.hasAttribute('data-t3-start')];
+const TIMES:[string,ElementTest]=['.send-to-t3-thought-time[data-t3-thought-at], .send-to-t3-notification-time[data-t3-notification-at]',element=>has(element,'send-to-t3-thought-time')&&element.hasAttribute('data-t3-thought-at')||has(element,'send-to-t3-notification-time')&&element.hasAttribute('data-t3-notification-at')];
+const FOLDS:Array<[string,ElementTest]>=[['.callout[data-callout="t3-progress"]',isProgressFold],['.callout[data-callout="t3-thought"]',isThoughtFold]];
+const GROUPS:[string,ElementTest]=['details[data-t3-tool-group], details[data-t3-answer-id], details[data-t3-tasks-id], details[data-t3-plan-id], div[data-t3-worktree-setup]',element=>element.tagName==='DETAILS'&&(element.hasAttribute('data-t3-tool-group')||element.hasAttribute('data-t3-answer-id')||element.hasAttribute('data-t3-tasks-id')||element.hasAttribute('data-t3-plan-id'))||element.tagName==='DIV'&&element.hasAttribute('data-t3-worktree-setup')];
+const ICONS:[string,ElementTest]=['[data-t3-tool-icon]',element=>element.hasAttribute('data-t3-tool-icon')];
+const foldOrThought:ElementTest=element=>isProgressFold(element)||isThoughtFold(element);
 
 export type IntermediateMode='remove'|'keep'|'collapse';
 export type FinalAnswerFormat='formatted'|'raw-markdown';
@@ -55,7 +67,14 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   const retained=new WeakMap<Element,Map<string,HTMLElement>>();
   const retainedTools=new WeakMap<Element,Map<string,HTMLElement>>();
   const toolChoices=new WeakMap<Element,Map<string,boolean>>();
-  const owner=(element:Element)=>element.closest('.workspace-leaf-content')??root.documentElement;
+  // A rendered element stays in its pane; recheck containment, not selectors.
+  const owners=new WeakMap<Element,Element>();
+  const owner=(element:Element)=>{
+    const cached=owners.get(element);if(cached&&cached!==root.documentElement&&cached.contains?.(element))return cached;
+    const found=element.closest('.workspace-leaf-content')??root.documentElement;
+    if(found!==root.documentElement)owners.set(element,found);else owners.delete(element);
+    return found;
+  };
   const detailSelector='details[data-t3-tool-group], details[data-t3-tool-key], details[data-t3-answer-id], details[data-t3-tasks-id], details[data-t3-plan-id]';
   const detailId=(element:Element)=>element.getAttribute('data-t3-tool-group')??element.getAttribute('data-t3-tool-key')??(element.hasAttribute('data-t3-worktree-setup')?`setup:${element.getAttribute('data-t3-worktree-setup')}`:element.hasAttribute('data-t3-answer-id')?`answer:${element.getAttribute('data-t3-answer-id')}`:element.hasAttribute('data-t3-tasks-id')?`tasks:${element.getAttribute('data-t3-tasks-id')}`:element.hasAttribute('data-t3-plan-id')?`plan:${element.getAttribute('data-t3-plan-id')}`:undefined);
   const key=(element:Element)=>element.querySelector<HTMLElement>('.send-to-t3-fold-key')?.dataset.t3Fold;
@@ -63,53 +82,70 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
   const seen=new WeakMap<Element,{heading:HTMLElement;key:string|undefined}>();
   const watched=new Set<Element>(),aligned=new Set<HTMLElement>();
   let restoring=false,queued=false,disposed=false;
-  const liveTimers=new Map<HTMLElement,()=>string>();
+  const liveTimers=new Set<HTMLElement>();
   let timerTick:ReturnType<typeof setInterval>|undefined;
   const stopTimers=()=>{if(timerTick!==undefined){clearInterval(timerTick);timerTick=undefined;}};
+  // Read the timer's current attributes on every update. Native reconciliation
+  // can add an end time to a retained element in place.
+  const timerText=(timer:HTMLElement):{text:string;live:boolean}|undefined=>{
+    const attribute=(name:string)=>timer.getAttribute(name)??undefined;
+    if(timer.hasAttribute('data-t3-setup-start')){
+      const start=Number(attribute('data-t3-setup-start')),end=attribute('data-t3-setup-end');
+      if(!Number.isFinite(start))return;
+      return {text:setupDuration((end!==undefined&&Number.isFinite(Number(end))?Number(end):Date.now())-start),live:!end};
+    }
+    const start=Number(attribute('data-t3-start')),end=attribute('data-t3-end');
+    if(!Number.isFinite(start))return;
+    return {text:elapsedRun({startedAt:new Date(start).toISOString(),...(end&&Number.isFinite(Number(end))?{finishedAt:new Date(Number(end)).toISOString()}:{})}),live:!end};
+  };
+  const updateTimer=(timer:HTMLElement)=>{
+    const state=timerText(timer);
+    if(state&&timer.textContent!==state.text)timer.textContent=state.text;
+    if(state?.live)liveTimers.add(timer);else liveTimers.delete(timer);
+  };
   const updateTimers=()=>{
-    for(const [element,format] of liveTimers){
+    for(const element of liveTimers){
       if(!element.isConnected){liveTimers.delete(element);continue;}
-      const text=format();if(element.textContent!==text)element.textContent=text;
+      updateTimer(element);
     }
     if(!liveTimers.size)stopTimers();
   };
+  // A full pass rescans the document. Otherwise only added subtrees and folds
+  // whose children changed are processed; scrolling mounts them in turn.
+  let full=true;const scopes=new Set<Element>();
   const refresh=()=>{
     queued=false;if(disposed)return;
+    const everything=full,scoped=[...scopes];full=false;scopes.clear();
+    // Restructuring below (legacy replacement, retained swaps) invalidates
+    // the scoped markup list; it is then collected again.
+    let markup:Element[]|undefined;
+    const select=<T extends Element>([selector,test]:[string,ElementTest]):T[]=>{
+      if(everything)return Array.from(root.querySelectorAll<T>(selector));
+      if(!markup){const found=new Set<Element>();for(const scope of scoped)if(scope.isConnected)for(const element of pluginMarkupIn(scope))found.add(element);markup=[...found];}
+      return markup.filter(element=>element.isConnected&&test(element)) as T[];
+    };
     // Old notes keep their exact canonical bytes. Remove legacy tool detail
     // controls only from the rendered view, including lazily mounted history.
-    for(const details of Array.from(root.querySelectorAll<HTMLDetailsElement>('details.send-to-t3-tool'))){
+    for(const details of select<HTMLDetailsElement>(LEGACY_TOOL)){markup=undefined;
       const row=root.win.createDiv();
       for(const attribute of Array.from(details.attributes))row.setAttribute(attribute.name,attribute.value);
       const summary=details.querySelector(':scope > summary');
       if(summary)row.append(...Array.from(summary.childNodes));
-      details.replaceWith(row);
+      details.replaceWith(row);if(!everything)scoped.push(row);
     }
-    const layout=new Set<Element>(),actionsInUse=new Set<HTMLElement>();
-    liveTimers.clear();
-    for(const timer of Array.from(root.querySelectorAll<HTMLElement>('[data-t3-setup-start]'))){
-      const start=Number(timer.dataset.t3SetupStart),end=timer.dataset.t3SetupEnd;
-      if(!Number.isFinite(start))continue;
-      if(!end)liveTimers.set(timer,()=>setupDuration(Date.now()-start));
-      const text=setupDuration((end!==undefined&&Number.isFinite(Number(end))?Number(end):Date.now())-start);
-      if(timer.textContent!==text)timer.textContent=text;
-    }
-    for(const timer of Array.from(root.querySelectorAll<HTMLElement>('.send-to-t3-run-timer[data-t3-start]'))){
-      const start=Number(timer.dataset.t3Start),end=timer.dataset.t3End;
-      if(!Number.isFinite(start))continue;
-      if(!end)liveTimers.set(timer,()=>elapsedRun({startedAt:new Date(start).toISOString()}));
-      const text=elapsedRun({startedAt:new Date(start).toISOString(),...(end&&Number.isFinite(Number(end))?{finishedAt:new Date(Number(end)).toISOString()}:{})});
-      if(timer.textContent!==text)timer.textContent=text;
-    }
+    const layout=new Set<Element>(),actionsInUse=new Set<HTMLElement>(),align:Array<{actions:HTMLElement;heading:HTMLElement;block:HTMLElement}>=[];
+    if(everything)liveTimers.clear();
+    for(const timer of select<HTMLElement>(TIMERS))updateTimer(timer);
     if(liveTimers.size&&timerTick===undefined)timerTick=setInterval(updateTimers,1000);
     else if(!liveTimers.size)stopTimers();
-    for(const time of Array.from(root.querySelectorAll<HTMLElement>('.send-to-t3-thought-time[data-t3-thought-at], .send-to-t3-notification-time[data-t3-notification-at]'))){
+    for(const time of select<HTMLElement>(TIMES)){
       const at=Number(time.dataset.t3ThoughtAt??time.dataset.t3NotificationAt);if(!Number.isFinite(at))continue;
       const date=new Date(at),text=date.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
       if(time.textContent!==text)time.textContent=text;
       time.title=date.toLocaleString();
     }
     // Reconcile the outer history before finding its nested thought folds.
-    for(const selector of ['.callout[data-callout="t3-progress"]','.callout[data-callout="t3-thought"]'])for(let fold of Array.from(root.querySelectorAll<HTMLElement>(selector))){
+    for(const kind of FOLDS)for(let fold of select<HTMLElement>(kind)){
       const id=key(fold),container=owner(fold);
       const thought=id?.startsWith('thought:');
       // Reconcile before the next paint. Only active responses retain ordinary
@@ -122,7 +158,7 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
           const oldTitle=title(previous),newTitle=title(fold),oldContent=previous.querySelector(':scope > .callout-content'),newContent=fold.querySelector(':scope > .callout-content');
           if(oldTitle&&newTitle&&oldContent&&newContent){
             reconcileResponseDOM(oldTitle,newTitle);reconcileResponseDOM(oldContent,newContent);
-            fold.replaceWith(previous);fold=previous;
+            fold.replaceWith(previous);fold=previous;markup=undefined;if(!everything)scoped.push(previous);
           }
         }
         cache.set(id,fold);if(cache.size>64)cache.delete(cache.keys().next().value!);
@@ -146,17 +182,10 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
       const block=fold.closest<HTMLElement>('.cm-embed-block');
       // Native callouts live inside a markdown-rendered wrapper. Only the
       // outer callout owns this widget's action; nested examples do not.
+      // Generated streams own their toolbar and its alignment. Measure other
+      // native actions after this pass's writes, in one batch.
       const actions=block?.querySelector('.callout')===fold?block.querySelector<HTMLElement>(':scope > .embed-actions'):undefined;
-      if(actions?.querySelector('.edit-block-button')&&!actions.classList.contains('send-to-t3-stream-actions')){
-        const parent=(actions.offsetParent as HTMLElement|null)??block!;
-        layout.add(heading);layout.add(parent);actionsInUse.add(actions);
-        const header=heading.getBoundingClientRect(),container=parent.getBoundingClientRect();
-        if(header.height>0){
-          const center=`${header.top-container.top-parent.clientTop+header.height/2}px`;
-          if(actions.style.getPropertyValue('--send-to-t3-header-center')!==center)actions.style.setProperty('--send-to-t3-header-center',center);
-          actions.classList.add('send-to-t3-progress-actions');aligned.add(actions);
-        }
-      }
+      if(actions?.querySelector('.edit-block-button')&&!actions.classList.contains('send-to-t3-stream-actions')&&!heading.querySelector('.send-to-t3-fold-key, .send-to-t3-inline-spinner'))align.push({actions,heading,block:block!});
       const previous=seen.get(fold),fresh=previous?.heading!==heading||previous?.key!==id;
       seen.set(fold,{heading,key:id});
       const expanded=id?(choices.get(owner(fold))?.get(id)??(thought||id.endsWith(':complete')?false:id.endsWith(':active')?true:undefined)):undefined;
@@ -168,13 +197,23 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
         heading.setAttribute('aria-expanded',String(!fold.classList.contains('is-collapsed')));
       }
     }
+    const parents=align.map(item=>({...item,parent:(item.actions.offsetParent as HTMLElement|null)??item.block}));
+    const centers=parents.map(item=>({...item,header:item.heading.getBoundingClientRect(),container:item.parent.getBoundingClientRect(),clientTop:item.parent.clientTop}));
+    for(const {actions,heading,parent,header,container,clientTop} of centers){
+      layout.add(heading);layout.add(parent);actionsInUse.add(actions);
+      if(header.height>0){
+        const center=`${header.top-container.top-clientTop+header.height/2}px`;
+        if(actions.style.getPropertyValue('--send-to-t3-header-center')!==center)actions.style.setProperty('--send-to-t3-header-center',center);
+        actions.classList.add('send-to-t3-progress-actions');aligned.add(actions);
+      }
+    }
     // Keep tool and submitted-answer disclosures through native renders.
-    for(let group of Array.from(root.querySelectorAll<HTMLElement>('details[data-t3-tool-group], details[data-t3-answer-id], details[data-t3-tasks-id], details[data-t3-plan-id], div[data-t3-worktree-setup]'))){
+    for(let group of select<HTMLElement>(GROUPS)){
       const id=detailId(group)!;
       const surface=group.closest('.cm-content, .markdown-preview-view')??owner(group);
       let cache=retainedTools.get(surface);if(!cache){cache=new Map();retainedTools.set(surface,cache);}
       const previous=cache.get(id);
-      if(previous&&previous!==group&&!previous.isConnected){reconcileResponseDOM(previous,group);group.replaceWith(previous);group=previous;}
+      if(previous&&previous!==group&&!previous.isConnected){reconcileResponseDOM(previous,group);group.replaceWith(previous);group=previous;markup=undefined;if(!everything)scoped.push(previous);}
       cache.set(id,group);if(cache.size>64)cache.delete(cache.keys().next().value!);
       for(const detail of [group,...Array.from(group.querySelectorAll<HTMLElement>('details[data-t3-tool-key]'))]){
         const id=detailId(detail);
@@ -182,12 +221,24 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
         if(choice!==undefined)detail.toggleAttribute('open',choice);
       }
     }
-    if(icon)for(const element of Array.from(root.querySelectorAll<HTMLElement>('[data-t3-tool-icon]')))if(!element.firstChild)icon(element,element.dataset.t3ToolIcon??'wrench');
-    for(const element of watched)if(!layout.has(element)){resize?.unobserve(element);watched.delete(element);}
+    if(icon)for(const element of select<HTMLElement>(ICONS))if(!element.firstChild)icon(element,element.dataset.t3ToolIcon??'wrench');
+    // A scoped pass sees only its subtrees. It releases elements that left
+    // the document; a full pass also releases connected ones it did not use.
+    const released=(element:Element)=>everything?!layout.has(element):!element.isConnected;
+    for(const element of watched)if(released(element)){resize?.unobserve(element);watched.delete(element);}
     for(const element of layout)if(!watched.has(element)){resize?.observe(element);watched.add(element);}
-    for(const actions of aligned)if(!actionsInUse.has(actions)){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');aligned.delete(actions);}
+    for(const actions of aligned)if(everything?!actionsInUse.has(actions):!actions.isConnected||actions.classList.contains('send-to-t3-stream-actions')){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');aligned.delete(actions);}
   };
-  const schedule=()=>{if(!queued&&!disposed){queued=true;queueMicrotask(refresh);}};
+  const schedule=()=>{full=true;if(!queued&&!disposed){queued=true;queueMicrotask(refresh);}};
+  const changed=(batch:DomBatch)=>{
+    if(batch.opaque){schedule();return;}
+    if(!batch.elements)return;
+    const before=scopes.size;
+    for(const element of batch.scopes())scopes.add(element);
+    for(const fold of batch.containing(foldOrThought))scopes.add(fold);
+    // Removal only releases observers of elements that left the document.
+    if((scopes.size>before||batch.removed)&&!queued&&!disposed){queued=true;queueMicrotask(refresh);}
+  };
   const resize=typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(schedule);
   const remember=(event:Event)=>{
     if(restoring)return;
@@ -231,9 +282,8 @@ export function installResponsePresentation(root:Document,icon?:(element:HTMLEle
     }
     remember(event);
   };
-  const observer=new MutationObserver(records=>{if(records.some(record=>[...Array.from(record.addedNodes),...Array.from(record.removedNodes)].some(node=>node.nodeType===1)))schedule();});
-  observer.observe(root.body,{childList:true,subtree:true});
+  const stopChanges=observeDocumentChanges(root,changed);
   root.addEventListener('click',click,true);root.addEventListener('keydown',keyboard);root.addEventListener('toggle',rememberTool,true);
   refresh();
-  return ()=>{root.removeEventListener('click',openActivity);disposed=true;observer.disconnect();resize?.disconnect();for(const actions of aligned){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');}stopTimers();liveTimers.clear();root.removeEventListener('click',click,true);root.removeEventListener('keydown',keyboard);root.removeEventListener('toggle',rememberTool,true);};
+  return ()=>{root.removeEventListener('click',openActivity);disposed=true;stopChanges();resize?.disconnect();for(const actions of aligned){actions.classList.remove('send-to-t3-progress-actions');actions.style.removeProperty('--send-to-t3-header-center');}stopTimers();liveTimers.clear();root.removeEventListener('click',click,true);root.removeEventListener('keydown',keyboard);root.removeEventListener('toggle',rememberTool,true);};
 }
