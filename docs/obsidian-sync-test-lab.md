@@ -136,11 +136,47 @@ The test vault is **T3 Mobile Lab**, in Android Obsidian's private app storage.
 
 The emulator owns console port 5580 and a separate loopback ADB server on 5041.
 Both run under `t3-session`; the lab uses an operation lock to serialize runs.
-The VM has 1536 MiB guest RAM and a 768 MiB explicitly provisioned data image,
-with a 2300 MiB host test budget. The official `-lowram` option keeps that guest
-budget explicit. This is a small functional test device, not a performance
-reference. Check disk headroom before setup. The command refuses unsafe archive
-paths, wrong artifact sizes and checksum mismatches.
+The VM has 1536 MiB guest RAM and a 768 MiB explicitly provisioned data image.
+The official `-lowram` option keeps that guest budget explicit. This is a small
+functional test device, not a performance reference. Check disk headroom before
+setup. The command refuses unsafe archive paths, wrong artifact sizes and
+checksum mismatches.
+
+The emulator session has a 3584 MiB host allowance (`SESSION_MEMORY`) plus the
+normal 256 MiB session swap. KVM guest RAM is anonymous host memory, and the
+guest page cache eventually touches all 1536 MiB of it. QEMU, swiftshader and
+gfxstream buffers and the emulator libraries come on top; the WebView heap is
+inside guest RAM. On 2026-11-21 the session held 2036 MiB of anonymous memory
+directly after boot and 2276 MiB after Obsidian was open for 30 seconds, so
+host-side overhead was already above 700 MiB. The old 2300 MiB allowance filled
+its 256 MiB swap within 7 minutes of benchmark use, and the kernel OOM-killed
+the emulator after 17 min 40 s, above 2556 MiB of RAM and swap. The new
+allowance leaves about 1.5 GiB for growth; reclaimable file cache fills the rest. Size changes from the session's cgroup counters, which
+`status` reports and `stop` records in `stop.json`; do not cap shared apps.
+
+Host-side emulator memory grows with continuous use, so long runs restart the
+emulator in a clean state between rounds:
+`restart --if-older-than 10` stops it with a flush and cold-boots it again only
+when the session is at least 10 minutes old or the emulator is not online.
+`status` reports `restartDue`.
+Harnesses that import the script can call `restart(evidence, 10)` directly.
+
+`stop` runs `sync` in the guest, powers Android off with `reboot -p` and waits
+for the emulator to exit. It uses `adb emu kill` only when the power-off does not
+finish, and only after a successful flush. If neither the flush nor the
+power-off succeeds, `stop` fails and keeps the emulator and its session for
+inspection; its error gives the exact kill command. A device that is already
+offline cannot be synced; `stop.json` then reports `flushed: false`. `stop`
+removes each session receipt after release. A receipt of an earlier turn is
+dropped once its service has stopped (it waits up to 60 seconds for one that is
+still closing), so a later `restart` can start again. Stopping the emulator
+directly after `adb push` without this flush lost unflushed guest writes and
+left empty runtime files in the lab vault. `install-plugin` and
+`restore-plugin` sync after every push and compare the Android checksums.
+`backup-plugin --backup-dir DIR` pulls the installed runtime with a checksum
+manifest. It needs a new or empty directory and refuses empty files. `restore-plugin
+--backup-dir DIR` refuses a backup whose files are missing, empty or do not
+match that manifest before it pushes anything. Keep backups outside the checkout.
 
 Use a new external evidence directory for each attempt:
 
@@ -168,6 +204,14 @@ python3 scripts/obsidian-mobile-lab.py run --scenario suspension --freeze-second
 python3 scripts/obsidian-mobile-lab.py run --scenario pane-gap --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-pane-gap
 python3 scripts/obsidian-mobile-lab.py run --scenario closed-destination --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-closed
 python3 scripts/obsidian-mobile-lab.py stop --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-stop
+```
+
+For a long run, restart between rounds and keep a verified runtime backup:
+
+```sh
+python3 scripts/obsidian-mobile-lab.py backup-plugin --backup-dir /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-backup --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-backup-log
+python3 scripts/obsidian-mobile-lab.py restart --if-older-than 10 --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-restart-ROUND
+python3 scripts/obsidian-mobile-lab.py restore-plugin --backup-dir /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-backup --evidence /srv/t3-evidence/t3-obsidian/mobile-lab/UNIQUE-restore
 ```
 
 `run` waits for plugin startup, installs the guarded native fixture, captures
