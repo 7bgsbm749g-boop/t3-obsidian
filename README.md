@@ -115,9 +115,10 @@ Streaming RAM capture: [device-local streaming memory diagnostics](docs/stream-m
 
 ### Plugin updates
 
-T3 Code checks its latest published GitHub release at startup and when Obsidian
-returns to the foreground or comes online. Background checks run at most once
-per six hours. A banner at the top says **Update available for t3-obsidian (vVERSION)**,
+T3 Code opens a public release notification stream at `https://kiri.wtf/t3-obsidian/releases`.
+It receives the current version when it connects and new versions as GitHub publishes them.
+The stream requires no account or vault information. T3 Code checks GitHub for the
+release details before showing an update. A banner at the top says **Update available for t3-obsidian (vVERSION)**,
 shows the GitHub release description and change list, and offers **Update** and
 **Dismiss**. Long notes scroll while the buttons stay visible. Releases with no
 description show a short fallback message. Dismiss
