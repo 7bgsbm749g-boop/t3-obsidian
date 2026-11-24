@@ -2,7 +2,7 @@ import {pendingApprovals} from '../interaction/approvals';
 import {pendingQuestions} from '../interaction/questions';
 import type {Editor} from 'obsidian';
 import {responseIds} from '../responses/response-container';
-import {applyThreadItem,inlineTurnMessages,turnForMessage,turnPhase,type InlineThreadState} from './inline-thread';
+import {applyThreadItem,turnForMessage,turnPhase,type InlineThreadState} from './inline-thread';
 import type {ThreadStreamItem,ThreadWatch} from './thread-stream';
 
 export interface ComposerActivity {status:string;lines:string[];running:boolean;requestKey?:string}
@@ -15,6 +15,7 @@ export class InlineAgentEdit {
   private source?:string;
   private earlierSources=new Set<string>();
   private closedBlock=false;
+  private confirmingCompletion=false;
   private state:InlineThreadState={messages:[],activities:[]};
   private watch?:ThreadWatch;
   activity:ComposerActivity={status:'Waiting for T3',lines:[],running:true};
@@ -50,7 +51,8 @@ export class InlineAgentEdit {
       const open='<edit-'+this.token+'>',close='</edit-'+this.token+'>';
       const lines=this.state.messages.filter(m=>m.turnId===turn&&m.role==='reasoning').slice(-6).map(m=>m.text.slice(-1000));
       for(const msg of messages){
-        const start=msg.text.indexOf(open);
+        const blocks=msg.text.split(open);
+        const start=msg.text.lastIndexOf(open);
         if(start<0){if(msg.text.trim())lines.push(msg.text.slice(-1000));continue;}
         if(this.earlierSources.has(msg.id))continue;
         const revision=Boolean(this.source&&this.source!==msg.id);
@@ -70,7 +72,8 @@ export class InlineAgentEdit {
           this.expected=this.expected.slice(0,left)+addition+this.expected.slice(this.to);
           this.from=left+addition.length;this.to=this.from;this.written=body;
         }
-        if(start)lines.push(msg.text.slice(0,start).slice(-1000));
+        if(blocks[0].trim())lines.push(blocks[0].slice(-1000));
+        for(const previous of blocks.slice(1,-1)){const end=previous.indexOf(close);if(end>=0&&previous.slice(end+close.length).trim())lines.push(previous.slice(end+close.length).slice(-1000));}
         if(end>=0){const tail=msg.text.slice(start+open.length+end+close.length);if(tail.trim())lines.push(tail.slice(-1000));}
       }
       lines.push(...this.state.activities.filter(a=>a.turnId===turn&&a.summary).slice(-8).map(a=>a.summary.slice(0,300)));
@@ -79,10 +82,18 @@ export class InlineAgentEdit {
       const requestKey=questions.length||approvals.length?JSON.stringify([questions,approvals]):'';
       this.activity={running:true,status:requestKey?'Waiting for input':'Working',lines:lines.slice(-12),requestKey};
       const phase=turnPhase(this.state,turn);
-      const final=inlineTurnMessages(this.state,turn).at(-1);
-      const terminal=this.state.latestTurn?.turnId===turn?this.state.latestTurn:this.state.turns?.[turn];
-      const finalReady=final&&!final.streaming&&(!terminal?.assistantMessageId||messages.some(msg=>msg.id===terminal.assistantMessageId&&!msg.streaming));
-      if(phase==='complete'&&!finalReady){this.activity.status='Finishing';this.changed();return;}
+      if(phase==='complete'){
+        // A completion event can name the last *progress* message as final.
+        // Inspect the canonical turn before releasing the writer, including
+        // completed tool-only runs for which there is no assistant message.
+        const thread=item.kind==='snapshot'?item.snapshot.thread:undefined;
+        const canonical=thread?.latestTurn?.turnId===turn?thread.latestTurn:thread?.turns?.[turn];
+        const confirmed=canonical?.state==='completed'&&!thread?.messages.some(m=>m.turnId===turn&&m.role==='assistant'&&m.streaming);
+        if(!confirmed||!this.closedBlock&&!this.confirmingCompletion){
+          if(!this.confirmingCompletion){this.confirmingCompletion=true;this.watch?.refresh?.();}
+          this.activity.status='Finishing';this.changed();return;
+        }
+      }
       if(phase!=='running')this.finish(phase==='complete'?(this.closedBlock?'Edit complete':this.source?'The edit ended before its closing marker':'Finished without an inline edit'):phase==='error'?'Run failed':'Stopped');
       else this.changed();
     }catch(error){this.finish(error instanceof Error?error.message:String(error));}

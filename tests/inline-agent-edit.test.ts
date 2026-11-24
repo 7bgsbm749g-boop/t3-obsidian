@@ -28,3 +28,17 @@ test('a revised output after steering replaces only the owned text',()=>{
   const f=fixture();f.update('<edit-id>amber</edit-id>');f.update('<edit-id>blu','running',true,'steered');assert.equal(f.document(),'Hello amber world');
   f.update('<edit-id>blue</edit-id>','completed',false,'steered');assert.equal(f.document(),'Hello blue world');
 });
+
+test('sealed commentary and turn completion before the final edit do not close the watcher',()=>{
+  const f=fixture();f.update('Working','running',false,'progress');f.update('Working','completed',false,'progress');
+  assert.equal(f.edit.activity.running,true);f.update('<edit-id>green</edit-id>','completed',false,'answer');
+  assert.equal(f.document(),'Hello green world');assert.equal(f.edit.activity.running,false);
+});
+test('a finished canonical turn with no assistant output releases the writer',()=>{
+  const f=fixture(),snapshot={kind:'snapshot' as const,snapshot:{thread:{latestTurn:{turnId:'turn',state:'completed',messageId:'user'},messages:[{id:'user',role:'user',turnId:'turn',streaming:false,text:'edit'}]}}};
+  f.edit.receive(snapshot,'user');f.edit.receive(snapshot,'user');assert.equal(f.edit.activity.running,false);assert.equal(f.document(),'Hello old world');
+});
+test('steering can revise an edit in the same assistant message',()=>{
+  const f=fixture();const first='<edit-id>red</edit-id>';f.update(first);f.update(first+' Revised: <edit-id>blue</edit-id>','completed',false);
+  assert.equal(f.document(),'Hello blue world');assert.ok(f.edit.activity.lines.every(line=>!line.includes('edit-id')));
+});

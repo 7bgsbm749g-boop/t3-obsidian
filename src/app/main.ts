@@ -1546,7 +1546,7 @@ export default class SendToT3 extends Plugin {
       const prompt=edit.prompt(text);
       this.agentEdits.set(file,entry);this.activeAgentEdits.add(edit);changed();
       try{
-        await this.sendChat(prompt,this.noteContext(file),{...route,barePrompt:true,requestId:id,onPrepared:request=>{request.inlineAgentPath=file.path;},onAccepted:(request,threadId)=>{
+        await this.sendChat(prompt,this.noteContext(file),{...route,barePrompt:true,inlineAgent:true,requestId:id,onAccepted:(request,threadId)=>{
           const environmentId=request.directPlan?.environmentId??request.connection.environmentId;
           if(!environmentId){edit.finish('T3 accepted the message, but its machine is unavailable for inline typing.');return;}
           entry.target={environmentId,projectId:request.project.id,threadId,title:request.title,kind:'thread'};
@@ -1554,7 +1554,8 @@ export default class SendToT3 extends Plugin {
         }});
       }catch(error){edit.finish(message(error));throw error;}
     };
-    const host=this.withSendAvailability({...base,getInlineDefaults:()=>({...this.settings.inlineStreaming,enabled:!this.agentEdits.get(file)?.edit.activity.running}),
+    const startsInEditorStream=!this.agentEdits.get(file)?.edit.activity.running;
+    const host=this.withSendAvailability({...base,getInlineDefaults:()=>({...this.settings.inlineStreaming,enabled:startsInEditorStream}),
       renderInlineRequests:element=>{const entry=this.agentEdits.get(file);return entry?.target&&entry.edit.activity.running?this.renderRunRequests(element,entry.target,entry.edit.requestState()):undefined;},
       composerActivity:()=>this.agentEdits.get(file)?.edit.activity,
       acceptedDestination:()=>{const run=this.agentEdits.get(file)?.target,previous=run&&this.previousNoteThread(file.path,run.threadId);return run&&previous?{threadId:run.threadId,projectKey:projectKey(this.projectForNoteThread(previous)),label:run.title}:undefined;},
@@ -2710,7 +2711,7 @@ export default class SendToT3 extends Plugin {
     const thread=this.preparedThread(connection,project,threadId,preparation)??await this.readChatThread(connection,project,threadId);
     return typeof thread?.title==='string'&&thread.title.trim()?thread.title.slice(0,160):'T3 thread';
   }
-  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{preparation?:SendPreparation;threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;jobOptions?:ResolvedJobOptions;barePrompt?:boolean;onAccepted?:(request:Request,threadId:string)=>void;sourceContext?:EditorChatContext;onTargetResolved?:()=>void;onPrepared?:(request:Request,input:string)=>void|Promise<void>}):Promise<void> {
+  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{preparation?:SendPreparation;threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;jobOptions?:ResolvedJobOptions;barePrompt?:boolean;inlineAgent?:boolean;onAccepted?:(request:Request,threadId:string)=>void;sourceContext?:EditorChatContext;onTargetResolved?:()=>void;onPrepared?:(request:Request,input:string)=>void|Promise<void>}):Promise<void> {
     if(this.busy)throw Error('Another send is in progress. Wait for it to finish.');
     if(!prompt.trim())throw Error('Enter a message before sending.');
     if(options?.jobOptions?.providerCommand)options={...options,barePrompt:true,sourceContext:undefined};
@@ -2770,7 +2771,7 @@ export default class SendToT3 extends Plugin {
       }
       if(this.stopped)throw Error('The plugin was disabled before sending.');
       const title=await this.requestTitle(connection,project,threadId,note?.path,options?.preparation);
-      request={...(this.settings.hideObsidianThreads===true&&!threadId?{hideObsidianThread:true}:{}),...(smartCapture?{smartSend:smartCapture}:{}),...(options?.jobOptions?{jobOptions:options.jobOptions}:{}),id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
+      request={...(this.settings.hideObsidianThreads===true&&!threadId?{hideObsidianThread:true}:{}),...(options?.inlineAgent&&note?{inlineAgentPath:note.path}:{}),...(smartCapture?{smartSend:smartCapture}:{}),...(options?.jobOptions?{jobOptions:options.jobOptions}:{}),id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
       if(options?.jobOptions?.context?.records?.length)request.context={version:1,records:[...(request.context?.records??[]),...structuredClone(options.jobOptions.context.records)]};
       if(note&&!options?.barePrompt)await this.prepareNoteSteering(request,note.path,preparedInput,options?.sourceContext,options?.responseId,steeringSource);
       await options?.onPrepared?.(request,preparedInput);
