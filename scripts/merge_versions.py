@@ -61,9 +61,12 @@ def activate(repo: str, source: str, ledger: dict) -> None:
         raise ValueError('Invalid versioning cutover source.')
 
 
-def pending_prs(repo: str, source: str, ledger: dict) -> list[dict]:
+def pending_prs(repo: str, source: str, ledger: dict, merged_event=None) -> list[dict]:
     since = datetime.fromisoformat(ledger['since'].replace('Z', '+00:00'))
     rows = release.pages(f'repos/{repo}/pulls?state=closed&base=main&sort=updated&direction=desc')
+    if merged_event:
+        rows = [row for row in rows if row['number'] != merged_event['number']]
+        rows.append(merged_event)
     candidates = []
     for row in rows:
         if (row.get('merged_at') is None or row['base']['ref'] != 'main'
@@ -122,7 +125,7 @@ def commit_assignment(repo: str, source: str, values: dict, number: int, selecte
     return created['sha']
 
 
-def assign(repo: str, prepare_snapshot=None) -> dict:
+def assign(repo: str, prepare_snapshot=None, merged_event=None) -> dict:
     if not re.fullmatch(r'[\w.-]+/[\w.-]+', repo):
         raise ValueError('Invalid repository identity.')
     conflicts = 0
@@ -134,7 +137,7 @@ def assign(repo: str, prepare_snapshot=None) -> dict:
         ledger = ledger_state(values[LEDGER])
         activate(repo, source, ledger)
         release.metadata_version(values)
-        pending = pending_prs(repo, source, ledger)
+        pending = pending_prs(repo, source, ledger, merged_event)
         if not pending or (prepare_snapshot and ledger.get('latest') and ledger['latest']['version'] != prepared):
             if not ledger.get('latest'):
                 raise ValueError('No completed PR assignment exists yet. Nothing can be released.')
@@ -203,9 +206,18 @@ def prepare_completed(repo: str, selected: str, source: str) -> None:
 
 def main() -> None:
     # This is a write-capable CI action, never a development-time bump command.
-    if os.environ.get('GITHUB_REF') != 'refs/heads/main' or os.environ.get('GITHUB_EVENT_NAME') not in ('push', 'workflow_dispatch'):
+    event = os.environ.get('GITHUB_EVENT_NAME')
+    repo = os.environ['GITHUB_REPOSITORY']
+    if os.environ.get('GITHUB_REF') != 'refs/heads/main' or event not in ('push', 'workflow_dispatch', 'pull_request_target'):
         raise ValueError('Version assignment runs only for main in GitHub Actions.')
-    result = assign(os.environ['GITHUB_REPOSITORY'], prepare_completed)
+    merged = None
+    if event == 'pull_request_target':
+        payload = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+        merged = payload['pull_request']
+        if (payload['action'] != 'closed' or not merged.get('merged') or not merged.get('merged_at')
+                or merged['base']['ref'] != 'main' or merged['base']['repo']['full_name'] != repo):
+            raise ValueError('Expected a merged PR for this repository and main branch.')
+    result = assign(repo, prepare_completed, merged)
     if output := os.environ.get('GITHUB_OUTPUT'):
         with open(output, 'a') as stream:
             stream.write(f'source={result["source"]}\nversion={result["version"]}\n')

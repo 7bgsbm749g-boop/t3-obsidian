@@ -121,11 +121,18 @@ class TaggedPublicationTests(unittest.TestCase):
 
     def test_preparation_retries_existing_tag_after_failed_dispatch_or_upload(self):
         for existing in [None, self.draft()]:
-            with self.subTest(existing=existing), patch.object(release, 'tag_commit', return_value='a' * 40), patch.object(release, 'find_release', return_value=existing), patch.object(release, 'api', return_value=None) as api:
+            with self.subTest(existing=existing), patch.object(release, 'tag_commit', return_value='a' * 40), patch.object(release, 'find_release', return_value=existing), patch.object(release, 'api', side_effect=[None, {'workflow_runs': []}, None]) as api:
                 release.prepare('owner/repo', '0.0.999', 'a' * 40)
                 mutations = [call for call in api.call_args_list if 'payload' in call.kwargs]
                 self.assertEqual(len(mutations), 1)
                 self.assertTrue(mutations[0].args[0].endswith('/dispatches'))
+
+    def test_active_build_at_exact_tag_and_commit_is_reused(self):
+        source = 'a' * 40
+        run = {'head_sha': source, 'head_branch': '0.0.999', 'event': 'workflow_dispatch', 'status': 'queued'}
+        with patch.object(release, 'tag_commit', return_value=source), patch.object(release, 'find_release', return_value=None), patch.object(release, 'api', side_effect=[None, {'workflow_runs': [run]}]) as api:
+            release.prepare('owner/repo', '0.0.999', source)
+            self.assertFalse(any('payload' in call.kwargs for call in api.call_args_list))
 
     def test_preparation_refuses_reused_version_and_version_older_than_latest(self):
         with patch.object(release, 'tag_commit', return_value='b' * 40), patch.object(release, 'api') as api:

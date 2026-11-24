@@ -3,6 +3,9 @@ name: Assign merged PR versions
 on:
   push:
     branches: [main]
+  pull_request_target:
+    types: [closed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -17,7 +20,7 @@ concurrency:
 
 jobs:
   assign:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'pull_request_target' || github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

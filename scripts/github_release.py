@@ -157,6 +157,13 @@ def prepare(repo: str, selected: str, source: str) -> None:
         if release is not None and not release['draft']:
             print(f'Already released {selected} at {source}; nothing to publish.')
             return
+        runs = api(f'repos/{repo}/actions/workflows/release-provenance.yml/runs'
+                   f'?branch={selected}&head_sha={source}&per_page=100')
+        if any(run['head_branch'] == selected and run['head_sha'] == source
+               and run['event'] in ('push', 'workflow_dispatch') and run['status'] != 'completed'
+               for run in runs['workflow_runs']):
+            print(f'Release build already active for {selected} at {source}.')
+            return
     else:
         api(f'repos/{repo}/git/refs', payload={'ref': 'refs/tags/' + selected, 'sha': source})
     # GITHUB_TOKEN-created tags do not trigger push workflows. Dispatch at the

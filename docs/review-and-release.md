@@ -137,6 +137,10 @@ dispatches the release at its tag. Multiple merges get distinct release builds.
 Tag publication is serialized so a slower build cannot displace a newer Latest
 release.
 
+The merged-PR event also supplies its receipt information if GitHub has not
+indexed the closed PR yet. Both triggers run trusted code from `main`.
+When the tag already has an active build at its exact commit, recovery reuses it.
+
 If an assignment fails, inspect the failed run. A recovery run of
 `pr-versions.yml` on `main` resumes from committed receipts without a duplicate
 bump. Do not manually bump PR branches or force an uncertain write. Keep merge

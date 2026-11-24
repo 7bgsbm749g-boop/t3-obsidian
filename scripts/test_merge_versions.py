@@ -126,6 +126,11 @@ class AutomaticVersionTests(unittest.TestCase):
         self.assertEqual(attempts, [('0.0.1006', self.github.stamps[0])]*2 +
                          [('0.0.1007', self.github.stamps[1])])
 
+    def test_merge_event_supplies_pr_before_closed_list_is_indexed(self):
+        self.github.closed = [pr(12, None)]
+        result = versions.assign('owner/repo', merged_event=pr(12))
+        self.assertEqual([row['pr'] for row in result['assignments']], [12])
+
     def test_rerun_is_idempotent_and_does_not_consume_another_number(self):
         first = versions.assign('owner/repo'); mutations = len(self.github.mutations)
         second = versions.assign('owner/repo')
@@ -208,6 +213,7 @@ class VersionSnapshotTests(unittest.TestCase):
             (root / 'source.txt').write_text('Original')
             git('init', '--quiet'); git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.invalid')
             git('add', '.'); git('commit', '--quiet', '-m', 'Merged source')
+            git('branch', '-M', 'main')
             parent = git('rev-parse', 'HEAD')
             release.set_version(values, '0.0.1006')
             values[versions.LEDGER]['pullRequests']['12'] = {'version': '0.0.1006', 'mergeCommit': 'b' * 40}
@@ -215,6 +221,17 @@ class VersionSnapshotTests(unittest.TestCase):
             for name in versions.FILES:(root / name).write_text(json.dumps(values[name]))
             git('add', '.'); git('commit', '--quiet', '-m', 'Assign version')
             with patch.object(release, 'ROOT', root):
+                with tempfile.TemporaryDirectory() as runner_path:
+                    runner = Path(runner_path)
+                    subprocess.run(['git', 'init', '--quiet', runner_path], check=True)
+                    subprocess.run(['git', 'remote', 'add', 'origin', directory], cwd=runner, check=True)
+                    subprocess.run(['git', 'fetch', '--quiet', 'origin', parent], cwd=runner, check=True)
+                    subprocess.run(['git', 'checkout', '--quiet', '--detach', parent], cwd=runner, check=True)
+                    stamp = git('rev-parse', 'HEAD')
+                    with patch.object(release, 'ROOT', runner), patch.object(release, 'prepare') as dispatch:
+                        versions.prepare_completed('owner/repo', '0.0.1006', stamp)
+                        dispatch.assert_called_once_with('owner/repo', '0.0.1006', stamp)
+                    self.assertEqual(subprocess.check_output(['git','rev-parse','HEAD'],cwd=runner,text=True).strip(), parent)
                 versions.versioned_snapshot(root, git('rev-parse', 'HEAD'))
                 (root / 'source.txt').write_text('Another merge without assignment')
                 git('add', '.'); git('commit', '--quiet', '-m', 'Unnumbered source')
@@ -239,8 +256,23 @@ class VersionSnapshotTests(unittest.TestCase):
                 with patch.dict(os.environ, {'GITHUB_EVENT_NAME': event, 'GITHUB_REF': ref}):
                     with self.assertRaisesRegex(ValueError, 'only for main'):
                         versions.main()
-            assign.assert_called_once()
+            assign.assert_called_once_with('owner/repo', versions.prepare_completed, None)
 
+    def test_only_closed_merged_events_from_this_base_feed_reconciliation(self):
+        row = pr(12)
+        row.update(merged=True, base={'ref':'main', 'repo':{'full_name':'owner/repo'}})
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+            'GITHUB_EVENT_PATH':str(Path(directory)/'event'), 'GITHUB_REF':'refs/heads/main',
+            'GITHUB_EVENT_NAME':'pull_request_target', 'GITHUB_REPOSITORY':'owner/repo'
+        }), patch.object(versions, 'assign', return_value={'source':'a'*40,'version':'0.0.1006'}) as assign:
+            path = Path(os.environ['GITHUB_EVENT_PATH'])
+            path.write_text(json.dumps({'action':'closed','pull_request':row}))
+            versions.main()
+            assign.assert_called_once_with('owner/repo',versions.prepare_completed,row)
+            row['merged']=False
+            path.write_text(json.dumps({'action':'closed','pull_request':row}))
+            with self.assertRaisesRegex(ValueError,'Expected a merged PR'):
+                versions.main()
     def test_latest_receipt_must_match_the_recorded_version(self):
         value = metadata()[versions.LEDGER]
         value['pullRequests']['12'] = {'version': '0.0.1006', 'mergeCommit': 'a' * 40}
@@ -253,7 +285,9 @@ class VersionSnapshotTests(unittest.TestCase):
         assignment = (root / '.github/workflows/pr-versions.yml').read_text()
         release_flow = (root / '.github/workflows/release-provenance.yml').read_text()
         for setting in ['group: main-version-metadata', 'queue: max', 'actions: write',
-                        'branches: [main]', 'workflow_dispatch:', 'python3 scripts/merge_versions.py']:
+                        'branches: [main]', 'workflow_dispatch:', 'pull_request_target:', 'types: [closed]',
+                        'fetch-depth: 0', 'ref: main', 'cancel-in-progress: false', 'pull-requests: read',
+                        'GH_TOKEN: ${{ github.token }}', 'python3 scripts/merge_versions.py']:
             self.assertIn(setting, assignment)
         self.assertNotIn('schedule:', release_flow)
         self.assertIn('group: public-plugin-release', release_flow)
