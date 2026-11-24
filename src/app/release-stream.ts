@@ -13,6 +13,7 @@ export function subscribeToReleases(onVersion:(version:string)=>Promise<boolean>
   function connect(){
     const source=new EventSource('https://kiri.wtf/t3-obsidian/releases');
     current=source;
+    let receivedVersion='';
     function reconnect(){
       if(current!==source)return;
       current=undefined;
@@ -58,7 +59,12 @@ export function subscribeToReleases(onVersion:(version:string)=>Promise<boolean>
     source.onmessage=event=>{
       if(current!==source||typeof event.data!=='string'||!/^\d+\.\d+\.\d+$/.test(event.data))return;
       heartbeat();
-      if(event.data===announced&&(pending||Date.now()<retryAt))return;
+      const replay=event.data!==receivedVersion;
+      receivedVersion=event.data;
+      if(event.data===announced){
+        if(pending)return;
+        if(retryAt===Infinity?!replay:Date.now()<retryAt)return;
+      }
       if(announced!==event.data)retryIndex=0;
       announced=event.data;
       verify(announced);

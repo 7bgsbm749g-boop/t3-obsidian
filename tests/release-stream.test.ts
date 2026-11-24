@@ -37,12 +37,14 @@ test('reconnect, heartbeat timeout, bounded verification and unload', async t=>{
   live.onmessage!({data:'0.0.1'});assert.equal(checks,1);
   for(const pause of [75000,300000,21600000]){
     now+=pause-1;
-    const before=checks;
+    const before:number=checks;
     live.heartbeat();assert.equal(checks,before);
     now++;live.heartbeat();await Promise.resolve();assert.equal(checks,before+1);
   }
   assert.equal(live.closed,false);
   live.onmessage!({data:'0.0.2'});await Promise.resolve();assert.equal(checks,5);
   sources[0].onerror!();assert.equal(delay,75000);
-  sources.at(-1)!.onerror!();assert.ok(delay<2000);stop();assert.equal(job,undefined);
+  sources.at(-1)!.onerror!();assert.ok(delay<2000);fire();
+  sources.at(-1)!.onmessage!({data:'0.0.2'});await Promise.resolve();assert.equal(checks,6);
+  sources.at(-1)!.onerror!();stop();assert.equal(job,undefined);
 });

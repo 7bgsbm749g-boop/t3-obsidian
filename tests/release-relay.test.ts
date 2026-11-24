@@ -64,3 +64,26 @@ test('a publication during the first GitHub lookup wins over an older snapshot',
   assert.equal(Buffer.from((await reader.read()).value!).toString(),'data: 0.0.10\n\n');
   await reader.cancel();
 });
+
+test('a subscription during a stale in-flight lookup gets a shared follow-up snapshot',{timeout:5000},async t=>{
+  // @ts-expect-error The standalone Node service is a JavaScript module.
+  const {releaseRelay}=await import('../scripts/release-relay/server.mjs') as {releaseRelay(key:string,readLatest:()=>Promise<string>,cacheMs:number):Server};
+  let snapshot!:(version:string)=>void, started!:()=>void, reads=0;
+  const reading=new Promise<void>(resolve=>{started=resolve;});
+  const server=releaseRelay('key',async()=>{
+    if(++reads>1)return '0.0.10';
+    started();return new Promise(resolve=>{snapshot=resolve;});
+  },100);
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  t.after(()=>{server.closeAllConnections();server.close();});
+  const url='http://127.0.0.1:'+(server.address() as AddressInfo).port+'/t3-obsidian/releases';
+  const first=fetch(url);await reading;
+  const request=once(server,'request');const second=fetch(url);await request;
+  snapshot('0.0.9');
+  for(const response of await Promise.all([first,second])){
+    const reader=response.body!.getReader();let data='';
+    while(!data.includes('data: 0.0.10'))data+=Buffer.from((await reader.read()).value!).toString();
+    assert.ok(data.includes('data: 0.0.9'));await reader.cancel();
+  }
+  assert.equal(reads,2);
+});
