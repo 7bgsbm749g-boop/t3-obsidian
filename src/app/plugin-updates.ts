@@ -59,13 +59,21 @@ export interface UpdateHost {
   report(message:string):void;
 }
 export class PluginUpdates {
-  private stopped=false;private checking?:Promise<void>;private lastCheck:number|undefined;private state:UpdateState|null=null;
-  constructor(private host:UpdateHost,private now=()=>Date.now()){}
-  check(manual=false):Promise<void>{
-    if(this.stopped||this.state?.busy)return Promise.resolve();
+  private stopped=false;private checking?:Promise<string|undefined>;private state:UpdateState|null=null;
+  constructor(private host:UpdateHost){}
+  async announced(version:string):Promise<boolean>{
+    if(!/^\d+\.\d+\.\d+$/.test(version))return true;
+    // Finish an older request before checking the newly announced release.
+    if(this.checking)await this.checking;
+    if(this.stopped||this.host.dismissed()===version||this.state?.release.version===version)return true;
+    const running=this.host.running?.();
+    if(running&&!newerRelease(version,running))return true;
+    const verified=await this.check();
+    return !!verified&&!newerRelease(version,verified);
+  }
+  check(manual=false):Promise<string|undefined>{
+    if(this.stopped||this.state?.busy)return Promise.resolve(undefined);
     if(this.checking)return this.checking;
-    if(!manual&&this.lastCheck!==undefined&&this.now()-this.lastCheck<6*60*60*1000)return Promise.resolve();
-    this.lastCheck=this.now();
     const work=this.runCheck(manual);this.checking=work;void work.finally(()=>{if(this.checking===work)this.checking=undefined;});return work;
   }
   private async runCheck(manual:boolean){
@@ -76,6 +84,7 @@ export class PluginUpdates {
         if(manual||this.host.dismissed()!==release.version)this.show({release,busy:false,message:updateTitle(release.version)});
         else this.show(null);
       }else {this.show(null);if(manual)this.host.report('T3 Code is up to date.');}
+      return release?.version;
     }catch(error){if(manual&&!this.stopped)this.host.report(`Could not check for updates. ${error instanceof Error?error.message:'Try again later.'}`);}
   }
   async update(){

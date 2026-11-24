@@ -35,12 +35,12 @@ test('preflight downloads only the manifest; reject wrong identity, version, app
  await assert.rejects(releaseManifest(release,async()=>({status:503,text:'down'}),'t-three-code',()=>true,false),/503/);
  await assert.rejects(releaseManifest(release,async()=>({status:200,text:' '.repeat(16_385)}),'t-three-code',()=>true,false),/too large/);
 });
-function controller(){let clock=0,version='0.0.450',dismissed:unknown,checks=0,installs=0,fail=false,latest=release;const rendered:(UpdateState|null)[]=[],notices:string[]=[];const updates=new PluginUpdates({installed:async()=>version,latest:async()=>{checks++;if(fail)throw Error('offline');return latest;},dismissed:()=>dismissed,dismiss:v=>{dismissed=v;},render:s=>rendered.push(s),report:s=>notices.push(s),install:async()=>{installs++;if(fail)throw Error('download failed');}},()=>clock);return {updates,rendered,notices,checks:()=>checks,installs:()=>installs,setFail:(v:boolean)=>{fail=v;},setVersion:(v:string)=>{version=v;},setRelease:(v:string)=>{latest=readRelease(metadata(v))!;},advance:()=>{clock+=6*60*60*1000;}};}
-test('startup/focus checks coalesce and throttle; dismiss survives checks but not the next release',async()=>{
+function controller(){let version='0.0.450',dismissed:unknown,checks=0,installs=0,fail=false,latest=release;const rendered:(UpdateState|null)[]=[],notices:string[]=[];const updates=new PluginUpdates({installed:async()=>version,latest:async()=>{checks++;if(fail)throw Error('offline');return latest;},dismissed:()=>dismissed,dismiss:v=>{dismissed=v;},render:s=>rendered.push(s),report:s=>notices.push(s),install:async()=>{installs++;if(fail)throw Error('download failed');}});return {updates,rendered,notices,checks:()=>checks,installs:()=>installs,setFail:(v:boolean)=>{fail=v;},setVersion:(v:string)=>{version=v;},setRelease:(v:string)=>{latest=readRelease(metadata(v))!;}};}
+test('release announcements bypass the old throttle; dismiss survives checks but not the next release',async()=>{
  const f=controller();await Promise.all([f.updates.check(),f.updates.check()]);assert.equal(f.checks(),1);assert.equal(f.rendered.at(-1)?.release.version,release.version);assert.equal(f.rendered.at(-1)?.message,'Update available for t3-obsidian (v0.0.451)');
- f.updates.dismiss();assert.equal(f.rendered.at(-1),null);await f.updates.check();assert.equal(f.checks(),1);
- f.advance();await f.updates.check();assert.equal(f.rendered.at(-1),null);await f.updates.check(true);assert.equal(f.rendered.at(-1)?.release.version,release.version);
- f.updates.dismiss();f.setRelease('0.0.452');f.advance();await f.updates.check();assert.equal(f.rendered.at(-1)?.release.version,'0.0.452');
+ f.updates.dismiss();assert.equal(f.rendered.at(-1),null);await f.updates.announced(release.version);assert.equal(f.checks(),1);
+ await f.updates.announced(release.version);assert.equal(f.rendered.at(-1),null);await f.updates.check(true);assert.equal(f.rendered.at(-1)?.release.version,release.version);
+ f.updates.dismiss();f.setRelease('0.0.452');await f.updates.announced('0.0.452');assert.equal(f.rendered.at(-1)?.release.version,'0.0.452');
 });
 test('offline background checks stay quiet; manual retry and errors stay available',async()=>{
  const f=controller();f.setFail(true);await f.updates.check();assert.equal(f.notices.length,0);await f.updates.check(true);assert.match(f.notices[0],/offline/);
@@ -49,11 +49,11 @@ test('offline background checks stay quiet; manual retry and errors stay availab
  f.setVersion('0.0.451');await f.updates.check(true);assert.match(f.notices.at(-1)!,/up to date/);
 });
 test('manual and foreground checks retain an installed update until its code is running',async()=>{
- let disk='0.0.450',running='0.0.450',clock=0,installs=0;const rendered:(UpdateState|null)[]=[],notices:string[]=[];
- const updates=new PluginUpdates({installed:async()=>disk,running:()=>running,latest:async()=>release,dismissed:()=>null,dismiss:()=>{},render:state=>rendered.push(state),report:message=>notices.push(message),install:async()=>{installs++;disk=release.version;if(installs===1)throw Error('Save pending');running=release.version;}},()=>clock);
+ let disk='0.0.450',running='0.0.450',installs=0;const rendered:(UpdateState|null)[]=[],notices:string[]=[];
+ const updates=new PluginUpdates({installed:async()=>disk,running:()=>running,latest:async()=>release,dismissed:()=>null,dismiss:()=>{},render:state=>rendered.push(state),report:message=>notices.push(message),install:async()=>{installs++;disk=release.version;if(installs===1)throw Error('Save pending');running=release.version;}});
  await updates.check();await updates.update();assert.match(rendered.at(-1)!.message,/Save pending/);
  await updates.check(true);assert.equal(rendered.at(-1)?.release.version,release.version);assert.equal(notices.length,0);
- clock+=6*60*60*1000;await updates.check();assert.equal(rendered.at(-1)?.busy,false);assert.equal(rendered.at(-1)?.release.version,release.version);
+ await updates.check();assert.equal(rendered.at(-1)?.busy,false);assert.equal(rendered.at(-1)?.release.version,release.version);
  await updates.update();assert.equal(installs,2);assert.equal(rendered.at(-1),null);
  await updates.check(true);assert.match(notices.at(-1)!,/up to date/);
 });
@@ -70,4 +70,11 @@ test('unload drops late checks and prevents further installs',async()=>{
 test('busy banner rejects duplicate update clicks and dismiss until completion',async()=>{
  let finish!:()=>void,installs=0,dismissals=0;const updates=new PluginUpdates({installed:async()=> '0.0.450',latest:async()=>release,install:()=>{installs++;return new Promise<void>(r=>finish=r);},dismissed:()=>null,dismiss:()=>{dismissals++;},render:()=>{},report:()=>{}});
  await updates.check();const work=updates.update();await updates.update();updates.dismiss();assert.equal(installs,1);assert.equal(dismissals,0);finish();await work;
+});
+test('announce requests another attempt only when the release could not be verified',async()=>{
+ const f=controller();
+ f.setFail(true);assert.equal(await f.updates.announced(release.version),false);assert.deepEqual(f.notices,[]);
+ f.setFail(false);assert.equal(await f.updates.announced('0.0.452'),false);
+ f.setRelease('0.0.452');assert.equal(await f.updates.announced('0.0.452'),true);
+ assert.equal(f.rendered.at(-1)?.release.version,'0.0.452');
 });

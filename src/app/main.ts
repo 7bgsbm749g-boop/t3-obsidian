@@ -1,4 +1,5 @@
 import {SharedThreadStreams} from '../conversations/shared-thread-stream';
+import {subscribeToReleases} from './release-stream';
 import {PluginUpdates,latestRelease} from './plugin-updates';
 import {UpdateBanner} from './update-banner';
 import {installedVersion,requestRelease,updatePlugin,updateStorage} from './update-install';
@@ -437,10 +438,7 @@ export default class SendToT3 extends Plugin {
       }
     });
     const updates=this.pluginUpdates;this.register(()=>{updates.dispose();banner.dispose();});
-    const root=workspaceDocument(this.app),win=root.defaultView;
-    this.registerDomEvent(root,'visibilitychange',()=>{if(!root.hidden)void updates.check();});
-    if(win){this.registerDomEvent(win,'focus',()=>void updates.check());this.registerDomEvent(win,'online',()=>void updates.check());}
-    void updates.check();
+    this.register(subscribeToReleases(version=>updates.announced(version),()=>void updates.check()));
   }
   async onload() {
     const document=workspaceDocument(this.app);
