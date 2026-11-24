@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: write
   pull-requests: read
 
@@ -23,10 +24,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: main
+          fetch-depth: 0
           persist-credentials: false
       - name: Test version assignment
         run: python3 -m unittest scripts.test_merge_versions scripts.test_github_release scripts.test_release_policy
-      - name: Assign versions to unprocessed merged PRs
+      - name: Assign versions and start each merged PR release
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/merge_versions.py

@@ -88,16 +88,10 @@ remaining limits in the PR. Use a draft PR if required validation is incomplete.
 Do not merge the PR unless the user requests it.
 
 `push`, `push to GitHub`, and `push to main` authorize source uploads only.
-Feature-branch and main pushes do not immediately publish or create tags.
-After merge, GitHub assigns each PR a newer numeric `0.0.BUILD`, aligned across
-all version files and checked against other open PRs and existing release tags.
-The GitHub nightly schedule tags and releases its selected `main` snapshot at
-midnight UTC, skipping an unchanged, already published commit. It never releases
-unmerged PRs or changes a version's existing tag. Explicit early releases remain
-separate work: a deliberate numeric tag push starts the release build;
-workflow dispatch at that tag can retry it. Vault installation and Obsidian
-directory submission or review remain separate. Developing agents finish at
-the PR unless directed otherwise.
+After each PR merge, GitHub assigns a new numeric `0.0.BUILD`, tags the exact
+assignment commit and starts its release build. Feature branch pushes do not
+publish releases. Retry a failed build at its existing tag. Personal-vault
+delivery and directory submission are separate requests.
 
 Before a push, read any shared private instructions with
 `python3 scripts/maintainer_config.py --instructions`. Use an explicit refspec
@@ -110,7 +104,7 @@ the development stage, not a release-title label. Titles use
 `t3-obsidian VERSION`. Keep all version files aligned and preserve published
 history. GitHub allocates versions after merge, not during development. Feature-labelled
 test builds use the current numeric source base without reserving a number.
-A merge-time bump does not publish. Only explicit user direction can end Alpha.
+Only explicit user direction can end Alpha.
 
 ### Automatic post-merge versions
 
@@ -122,17 +116,16 @@ commits a distinct version and receipt for every unprocessed merged PR.
 
 `pr-versions.json` is generated history. Preserve its receipts and cutover time;
 do not edit it or version metadata on development branches. Each assignment is
-one atomic, non-forced update of all metadata and the receipt. Workflow runs and
-nightly preparation share one queued concurrency group. Confirmed concurrent
-updates are retried; uncertain writes stop and reconcile from receipts on rerun.
+one atomic, non-forced update of all metadata and the receipt. The queued assignment workflow starts a release build
+for each completed version before it allocates the next one. A failed dispatch
+can be retried from the committed receipt.
 The workflow reconciles missed events, so delayed runs do not lose merged PRs.
 
 Normal merge authorization, source review, checks and exact-head guards still
 apply. Do not merge merely to test this workflow. If a run fails after merge,
 inspect it and rerun the assignment workflow on `main`; never ask the user to
-pick a version or manually replay a bump. Nightly release preparation also
-reconciles assignments, then releases only a completed version snapshot.
-An assigned version is not an immediate release or personal-vault installation.
+pick a version or manually replay a bump. Each tag build verifies, builds,
+attests and publishes the assigned release.
 See [Review and release checks](docs/review-and-release.md).
 
 Personal-vault delivery is separate from development validation, PRs, merges

@@ -42,27 +42,21 @@ Development CI verifies aligned metadata without an early bump. Merging agents
 use normal reviewed-head checks and do not run version allocation themselves.
 Do not edit the generated ledger or bump metadata during development.
 
-At midnight UTC each night, GitHub schedules a release of the `main` commit
-selected after reconciling pending PR assignments. Only that completed version
-snapshot is tagged, built, attested
-and published; unmerged PRs are not included. Intermediate PR versions need not
-be published. An unchanged, already published snapshot is skipped. GitHub may
-delay the scheduled start; midnight is the requested start, not a guaranteed
-publication time.
+After each merge, GitHub tags the completed metadata commit and immediately
+dispatches the release workflow at that tag. Each merged PR gets its own
+release, even when one assignment run handles several merges. Publication
+follows a successful build, lint check and attestation of the three assets.
 
-Nightly preparation shares the assignment queue and first reconciles pending
-merges. It then checks out the exact completed metadata commit returned by that
-step, even if another merge arrives meanwhile. It refuses to reuse a tag for another commit or release a
-version older than the latest release. An interrupted run can retry the same
-tag without replacing it. Explicit numeric tag pushes can still start a manual
-release; workflow dispatch at that tag can retry its build and publication.
+If preparation stops between recording the assignment and dispatching the
+build, rerun the assignment workflow on `main`. It recovers the latest receipt
+before allocating another version. A tag build can be retried at its original
+tag. An already published snapshot is skipped. Tags and assets are immutable.
 
 The local release queue and worker remain removed. Personal-vault
 delivery is separate and requires an explicit user request; no PR, main merge
 or GitHub release requires it. See [Review and release checks](review-and-release.md).
 [release-policy.json](../release-policy.json) and `scripts/release_policy.py`
-remain inputs to the GitHub release workflow. The nightly schedule becomes
-active only after its workflow is merged into the default branch.
+remain inputs to the GitHub release workflow.
 
 ## Historical records
 

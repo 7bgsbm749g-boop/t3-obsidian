@@ -112,6 +112,20 @@ class AutomaticVersionTests(unittest.TestCase):
             self.assertEqual(state[versions.LEDGER]['latest']['source'], self.github.parents[row['commit']][0])
         self.assertEqual(len(self.github.stamps), 2)
 
+    def test_interrupted_release_is_retried_before_the_next_merge_is_assigned(self):
+        attempts = []
+        def prepare(repo, version, commit):
+            attempts.append((version, commit))
+            self.assertEqual(self.github.states[commit][versions.LEDGER]['latest']['version'], version)
+            if len(attempts) == 1:
+                raise RuntimeError('dispatch interrupted')
+        with self.assertRaisesRegex(RuntimeError, 'dispatch interrupted'):
+            versions.assign('owner/repo', prepare)
+        self.assertEqual(len(self.github.stamps), 1)
+        versions.assign('owner/repo', prepare)
+        self.assertEqual(attempts, [('0.0.1006', self.github.stamps[0])]*2 +
+                         [('0.0.1007', self.github.stamps[1])])
+
     def test_rerun_is_idempotent_and_does_not_consume_another_number(self):
         first = versions.assign('owner/repo'); mutations = len(self.github.mutations)
         second = versions.assign('owner/repo')
@@ -151,7 +165,7 @@ class AutomaticVersionTests(unittest.TestCase):
         self.assertEqual(self.github.stamps, [])
         self.assertEqual(sum(path.endswith('/git/refs/heads/main') for path, _, _ in self.github.mutations), 1)
 
-    def test_late_merge_is_deferred_and_nightly_pins_last_completed_assignment(self):
+    def test_late_merge_is_deferred_and_reconciliation_pins_last_completed_assignment(self):
         self.github.closed = [pr(12)]
         first = versions.assign('owner/repo')
         self.github.closed.append(pr(13)); self.github.unreachable.add(pr(13)['merge_commit_sha'])
@@ -234,19 +248,15 @@ class VersionSnapshotTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'latest PR version'):
             versions.ledger_state(value)
 
-    def test_versioning_and_nightly_share_serial_queue_and_pin_the_returned_source(self):
+    def test_post_merge_assignment_can_dispatch_release_builds(self):
         root = Path(__file__).resolve().parent.parent
         assignment = (root / '.github/workflows/pr-versions.yml').read_text()
         release_flow = (root / '.github/workflows/release-provenance.yml').read_text()
-        for text in [assignment, release_flow]:
-            self.assertIn('group: main-version-metadata', text)
-            self.assertIn('queue: max', text)
-            self.assertIn('cancel-in-progress: false', text)
-            self.assertIn('pull-requests: read', text)
-            self.assertIn('GH_TOKEN: ${{ github.token }}', text)
-        self.assertIn('ref: ${{ steps.versioning.outputs.source }}', release_flow)
-        self.assertIn('branches: [main]', assignment)
-        self.assertIn('workflow_dispatch:', assignment)
+        for setting in ['group: main-version-metadata', 'queue: max', 'actions: write',
+                        'branches: [main]', 'workflow_dispatch:', 'python3 scripts/merge_versions.py']:
+            self.assertIn(setting, assignment)
+        self.assertNotIn('schedule:', release_flow)
+        self.assertIn('group: public-plugin-release', release_flow)
         versions.ledger_state(json.loads((root / versions.LEDGER).read_text()))
 
 

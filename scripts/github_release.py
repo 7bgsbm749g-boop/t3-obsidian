@@ -144,14 +144,14 @@ def find_release(repo: str, selected: str):
 
 
 def prepare(repo: str, selected: str, source: str) -> None:
-    """Release the scheduled main snapshot without changing source versions."""
+    """Release the completed assignment without changing source versions."""
     existing = tag_commit(repo, selected)
     if existing is not None and existing != source:
         raise ValueError('This version already belongs to another commit. Repair post-merge assignment; never move a release tag.')
     latest = api(f'repos/{repo}/releases/latest', missing=True)
     if (latest is not None and re.fullmatch(r'0\.0\.(0|[1-9][0-9]*)', latest['tag_name'])
             and int(selected.rsplit('.', 1)[1]) < int(latest['tag_name'].rsplit('.', 1)[1])):
-        raise ValueError('The scheduled version is older than the latest release. Update main before releasing.')
+        raise ValueError('The assigned version is older than the latest release. Update main before releasing.')
     if existing is not None:
         release = find_release(repo, selected)
         if release is not None and not release['draft']:
@@ -224,8 +224,8 @@ def main() -> None:
     expected = 'refs/heads/main' if args.action == 'prepare' else 'refs/tags/' + selected
     if os.environ['GITHUB_REF'] != expected:
         raise ValueError('Release action does not match the event ref.')
-    if args.action == 'prepare' and os.environ.get('GITHUB_EVENT_NAME') != 'schedule':
-        raise ValueError('Only the nightly schedule can prepare an automatic release.')
+    if args.action == 'prepare' and os.environ.get('GITHUB_EVENT_NAME') not in ('push', 'workflow_dispatch'):
+        raise ValueError('Only post-merge assignment or manual recovery can prepare a release.')
     if args.action == 'prepare':
         from merge_versions import versioned_snapshot
         versioned_snapshot(ROOT, source)
