@@ -25,18 +25,24 @@ test('reconnect, heartbeat timeout, bounded verification and unload', async t=>{
     t.after(()=>{if(previous)Object.defineProperty(globalThis,key,previous);else Reflect.deleteProperty(globalThis,key);});
   }
   function fire(){const pending=job;job=undefined;assert.ok(pending);pending();}
+  let now=1;
+  t.mock.method(Date,'now',()=>now);
   let checks=0,fallback=0;
   const stop=subscribeToReleases(async version=>{checks++;return version==='0.0.2';},()=>{fallback++;});
   sources[0].heartbeat();assert.equal(delay,75000);fire();
   assert.ok(sources[0].closed);assert.equal(fallback,1);fire();
   sources[1].onerror!();assert.equal(fallback,1);fire();
-  for(let attempt=0;attempt<3;attempt++){
-    sources.at(-1)!.onmessage!({data:'0.0.1'});await Promise.resolve();
-    if(attempt<2)fire();
+  const live=sources.at(-1)!;
+  live.onmessage!({data:'0.0.1'});await Promise.resolve();
+  live.onmessage!({data:'0.0.1'});assert.equal(checks,1);
+  for(const pause of [75000,300000,21600000]){
+    now+=pause-1;
+    const before=checks;
+    live.heartbeat();assert.equal(checks,before);
+    now++;live.heartbeat();await Promise.resolve();assert.equal(checks,before+1);
   }
-  assert.equal(checks,3);assert.equal(delay,75000);
-  sources.at(-1)!.onmessage!({data:'0.0.1'});assert.equal(checks,3);
-  sources.at(-1)!.onmessage!({data:'0.0.2'});await Promise.resolve();assert.equal(checks,4);
+  assert.equal(live.closed,false);
+  live.onmessage!({data:'0.0.2'});await Promise.resolve();assert.equal(checks,5);
   sources[0].onerror!();assert.equal(delay,75000);
   sources.at(-1)!.onerror!();assert.ok(delay<2000);stop();assert.equal(job,undefined);
 });

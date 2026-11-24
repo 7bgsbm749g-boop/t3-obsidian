@@ -12,10 +12,11 @@ function version(release) {
   return match && match.slice(1).join('.');
 }
 
-export function releaseRelay(secret, readLatest, now = Date.now) {
+export function releaseRelay(secret, readLatest, cacheMs = 300000) {
   let latest;
   let nextLookup = 0;
   let lookup;
+  let deferred;
   const clients = new Set();
   const frame = () => 'data: ' + latest + '\n\n';
   function send(client, data) {
@@ -29,12 +30,22 @@ export function releaseRelay(secret, readLatest, now = Date.now) {
   // A connection can recover a missed webhook. Share GitHub's snapshot across
   // subscribers, including simultaneous connections after a network outage.
   function reconcile() {
-    if (!lookup && now() >= nextLookup) {
-      nextLookup = now() + 300000;
-      lookup = readLatest().then(publish).catch(() => {
-        nextLookup = now() + 60000;
-      }).finally(() => { lookup = undefined; });
+    if (lookup) return lookup;
+    const remaining = nextLookup - Date.now();
+    if (remaining > 0) {
+      // Coalesce connections inside the cache window into one later lookup.
+      if (!deferred) deferred = setTimeout(() => {
+        deferred = undefined;
+        if (clients.size) reconcile();
+      }, remaining).unref();
+      return;
     }
+    clearTimeout(deferred);
+    deferred = undefined;
+    nextLookup = Date.now() + cacheMs;
+    lookup = readLatest().then(publish).catch(() => {
+      nextLookup = Date.now() + 60000;
+    }).finally(() => { lookup = undefined; });
     return lookup;
   }
   const server = createServer(async (req, res) => {
@@ -74,7 +85,7 @@ export function releaseRelay(secret, readLatest, now = Date.now) {
   });
   const heartbeat = setInterval(() => { for (const client of clients) if (client.headersSent) send(client, 'event: heartbeat\ndata: ok\n\n'); }, 20000);
   heartbeat.unref();
-  server.on('close', () => clearInterval(heartbeat));
+  server.on('close', () => { clearInterval(heartbeat); clearTimeout(deferred); });
   return server;
 }
 

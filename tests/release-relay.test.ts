@@ -8,9 +8,9 @@ import type {AddressInfo} from 'node:net';
 
 test('signed publication reaches connected clients and reconnecting clients receive latest', {timeout:10000}, async t => {
   // @ts-expect-error The standalone Node service is a JavaScript module.
-  const {releaseRelay}=await import('../scripts/release-relay/server.mjs') as {releaseRelay(key:string,latest:()=>Promise<string>,now:()=>number):Server};
-  let upstream='0.0.9', clock=100;
-  const key='test-only', server=releaseRelay(key,async()=>upstream,()=>clock);
+  const {releaseRelay}=await import('../scripts/release-relay/server.mjs') as {releaseRelay(key:string,latest:()=>Promise<string>,cacheMs:number):Server};
+  let upstream='0.0.9';
+  const key='test-only', server=releaseRelay(key,async()=>upstream,500);
   server.listen(0,'127.0.0.1');
   await once(server,'listening');
   const url='http://127.0.0.1:'+(server.address() as AddressInfo).port+'/t3-obsidian/releases';
@@ -38,7 +38,8 @@ test('signed publication reaches connected clients and reconnecting clients rece
   assert.equal(await publish('0.0.9'),204);
   const next=await stream();
   assert.equal(await frame(next),'data: 0.0.10\n\n');
-  upstream='0.0.12';clock+=300001;
+  // A connection inside the shared cache window must still recover the miss.
+  upstream='0.0.12';
   const recovered=await stream();
   assert.equal(await frame(next),'data: 0.0.12\n\n');
   await recovered.cancel();

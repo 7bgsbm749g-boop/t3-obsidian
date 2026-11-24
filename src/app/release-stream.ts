@@ -5,8 +5,11 @@ export function subscribeToReleases(onVersion:(version:string)=>Promise<boolean>
   let timer:number|undefined;
   let delay=1000;
   let nextFallback=0;
-  let unconfirmed='';
-  let attempts=0;
+  let announced='';
+  let retryIndex=0;
+  let retryAt=Infinity;
+  let pending:Promise<boolean>|undefined;
+  const verificationDelays=[75000,300000,6*60*60*1000];
   function connect(){
     const source=new EventSource('https://kiri.wtf/t3-obsidian/releases');
     current=source;
@@ -32,20 +35,33 @@ export function subscribeToReleases(onVersion:(version:string)=>Promise<boolean>
       timer=window.setTimeout(disconnected,75000);
     }
     heartbeat();
-    source.addEventListener('heartbeat',heartbeat);
+    function verify(version:string){
+      // Keep the stream open while GitHub refreshes its release metadata.
+      retryAt=Infinity;
+      const check=onVersion(version);
+      pending=check;
+      const settled=(verified:boolean)=>{
+        if(check!==pending||version!==announced)return;
+        pending=undefined;
+        if(verified){delay=1000;retryIndex=0;}
+        else{
+          retryAt=Date.now()+verificationDelays[retryIndex];
+          retryIndex=Math.min(retryIndex+1,verificationDelays.length-1);
+        }
+      };
+      void check.then(settled,()=>settled(false));
+    }
+    source.addEventListener('heartbeat',()=>{
+      heartbeat();
+      if(current===source&&Date.now()>=retryAt)verify(announced);
+    });
     source.onmessage=event=>{
       if(current!==source||typeof event.data!=='string'||!/^\d+\.\d+\.\d+$/.test(event.data))return;
       heartbeat();
-      const version=event.data;
-      if(version!==unconfirmed){unconfirmed=version;attempts=0;}
-      if(attempts>=3)return;
-      attempts++;
-      const settled=(verified:boolean)=>{
-        if(current!==source||version!==unconfirmed)return;
-        if(verified){delay=1000;attempts=0;}
-        else if(attempts<3)reconnect();
-      };
-      void onVersion(version).then(settled,()=>settled(false));
+      if(event.data===announced&&(pending||Date.now()<retryAt))return;
+      if(announced!==event.data)retryIndex=0;
+      announced=event.data;
+      verify(announced);
     };
     source.onerror=disconnected;
   }
