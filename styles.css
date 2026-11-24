@@ -924,3 +924,5 @@ a.send-to-t3-subagent:focus-visible { outline:2px solid var(--interactive-accent
 .t3-composer-activity { max-height: min(28vh, 12rem); overflow: auto; margin: 0 var(--size-4-2); border-inline-start: 2px solid var(--interactive-accent); padding-inline-start: var(--size-4-2); }
 .t3-composer-status { font-size: var(--font-ui-small); font-weight: var(--font-semibold); }
 .t3-composer-events { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-muted); font-size: var(--font-ui-small); }
+
+.t3-send-streaming.t3-composer-mode > span { position: static; padding: 0; border: 0; background: transparent; box-shadow: none; opacity: 1; transform: none; }

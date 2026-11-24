@@ -64,7 +64,7 @@ export class CheckedNoteEdits {
       const notePath=command.notePath!,document=await this.io.read(notePath);if(document===undefined)throw Error('The current note is unavailable.');
       if(new TextEncoder().encode(document).length>1_000_000)throw Error('This note is too large for a checked edit.');
       const active=responseIds(document);
-      if(active.length||command.bindingId)throw Error('Finish the editor stream before editing this note.');
+      if(active.length||command.bindingId)throw Error('Finish the editor stream before editing this note. If this is your reply, give the proposed text in your answer and finish the turn.');
       const snapshot:EditSnapshot={editId:command.id,notePath,...(command.bindingId?{bindingId:command.bindingId}:{}),original:document,originalHash:contentHash(document),createdAt:this.io.now?.()??Date.now(),status:'prepared'};
       await this.io.save(snapshot);return {id:command.id,ok:true,...snapshot,protectedReplyIds:active};
     }
@@ -91,7 +91,7 @@ export class CheckedNoteEdits {
     }
     protect(snapshot.original,proposed);
     const current=await this.io.read(snapshot.notePath);if(current===undefined)throw Error('The note was moved, deleted or is unavailable.');
-    if(snapshot.bindingId||responseIds(current).length)throw Error('A reply started in this note. Finish the editor stream and prepare the edit again.');
+    if(snapshot.bindingId||responseIds(current).length)throw Error('A reply started in this note. Give the proposed text in your reply and finish the turn. Use Inline agent for a separate edit.');
     const next=merged(snapshot.original,current,proposed);
     if(!await this.io.commit(snapshot.notePath,current,next))throw Error('The note changed before saving. The proposal was not applied.');
     snapshot.status='saved';snapshot.proposedHash=proposedHash;await this.io.save(snapshot);

@@ -47,7 +47,7 @@ TOOLS = [
     tool('connected_clients', 'List matching live Obsidian device identities on this T3 machine. No note scan or tokens are returned.', readonly=True),
     tool('note_context', 'Find the exact source note and response destinations for a send. Supply a note or exact T3 send identity.',
          dict(notePath=NOTE, threadId=string('Exact T3 thread ID.'), messageId=string('Exact T3 message ID.'), environmentId=string('Exact T3 environment ID.')), readonly=True),
-    tool('prepare_note_edit', 'Read the current note and prepare a checked edit. Finish any editor stream in the note before requesting an edit.',
+    tool('prepare_note_edit', 'Read the current note and prepare a checked edit. During your own editor stream, give proposed text in your reply and finish the turn. Use Inline agent for a separate edit.',
          dict(notePath=NOTE, bindingId=BINDING), ['notePath'], True),
     tool('submit_note_edit', 'Submit the complete proposed note using editId and originalHash. Active editor streams reserve the destination until their final save.',
          dict(editId=string('Prepared edit UUID.'), originalHash=HASH, proposed=string('Complete proposed Markdown, at most 1 MB. Preserve active response frames byte-for-byte.')), ['editId', 'originalHash', 'proposed']),

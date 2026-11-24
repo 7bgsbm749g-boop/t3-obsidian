@@ -73,7 +73,7 @@ only for the intended registration when that change is authorized.
 
 When the composer requests an Inline agent edit, put the requested Markdown inside the edit delimiters specified in the message. Obsidian applies the text at the captured caret or selection as it arrives. Keep commentary outside the delimiters.
 
-For ordinary checked edits, call `prepare_note_edit` with the exact note path, edit the returned original, and submit the complete proposal and original checksum with `submit_note_edit`. Active editor streams reserve their destination note. Wait until the stream finishes before preparing a separate edit. Already submitted proposals from older clients can finish their checked save or be withdrawn.
+For ordinary checked edits, call `prepare_note_edit` with the exact note path, edit the returned original, and submit the complete proposal and original checksum with `submit_note_edit`. Active editor streams reserve their destination note. If you are writing that reply, give the proposed text in your answer and finish the turn. The user can switch to Inline agent for a separate edit. Already submitted proposals from older clients can finish their checked save or be withdrawn.
 
 Unconfirmed commands return their request UUID. Reuse the exact `requestId` and
 input; do not issue the same mutation under a new UUID. Set `retry` only after a

@@ -1,9 +1,11 @@
+import {pendingApprovals} from '../interaction/approvals';
+import {pendingQuestions} from '../interaction/questions';
 import type {Editor} from 'obsidian';
 import {responseIds} from '../responses/response-container';
-import {applyThreadItem,turnForMessage,turnPhase,type InlineThreadState} from './inline-thread';
+import {applyThreadItem,inlineTurnMessages,turnForMessage,turnPhase,type InlineThreadState} from './inline-thread';
 import type {ThreadStreamItem,ThreadWatch} from './thread-stream';
 
-export interface ComposerActivity {status:string;lines:string[];running:boolean}
+export interface ComposerActivity {status:string;lines:string[];running:boolean;requestKey?:string}
 
 export class InlineAgentEdit {
   private expected:string;
@@ -11,6 +13,7 @@ export class InlineAgentEdit {
   private to:number;
   private written='';
   private source?:string;
+  private earlierSources=new Set<string>();
   private closedBlock=false;
   private state:InlineThreadState={messages:[],activities:[]};
   private watch?:ThreadWatch;
@@ -29,46 +32,57 @@ export class InlineAgentEdit {
   }
   prompt(instruction:string){
     const context={before:this.expected.slice(Math.max(0,this.from-2048),this.from),selection:this.expected.slice(this.from,this.to),after:this.expected.slice(this.to,this.to+2048)};
-    return [instruction,'Obsidian inline editing. The caret is between before and after. Replace selection, or insert at the caret when selection is empty. Output the exact Markdown to type inside one <edit-'+this.token+'>...</edit-'+this.token+'> block. Keep all other messages outside the block. Do not also apply this edit with tools.',JSON.stringify(context)].join('\n\n');
+    return [instruction,'Obsidian inline editing. The caret is between before and after. Replace selection, or insert at the caret when selection is empty. Output the exact Markdown to type inside one <edit-'+this.token+'>...</edit-'+this.token+'> block. Use no padding or extra newlines inside the delimiters. If the user steers you, a new block must contain the complete revised replacement for the same range. Keep all other messages outside the block. Do not also apply this edit with tools.',JSON.stringify(context)].join('\n\n');
   }
+  requestState(){return {...this.state,activities:this.state.activities.filter(a=>a.turnId===this.turnId)};}
   subscribe(watch:ThreadWatch){if(this.activity.running)this.watch=watch;else watch.stop();}
   dispose(){this.watch?.stop();this.watch=undefined;}
-  finish(status:string){this.state={messages:[],activities:[]};this.activity={...this.activity,running:false,status};this.dispose();this.changed();}
+  finish(status:string){this.state={messages:[],activities:[]};this.activity={...this.activity,requestKey:undefined,running:false,status};this.dispose();this.changed();}
   reconnect(){if(this.activity.running){this.activity={...this.activity,status:'Reconnecting'};this.changed();}}
   receive(item:ThreadStreamItem,messageId:string){
     if(!this.activity.running)return;
     try{
       this.state=applyThreadItem(this.state,item).state;
       const turn=turnForMessage(this.state,messageId);
-      if(!turn)return;
+      if(!turn){if(this.state.starts?.[messageId]?.failed)this.finish('The agent could not start this run.');return;}
       this.turnId=turn;
       const messages=this.state.messages.filter(m=>m.turnId===turn&&m.role==='assistant');
       const open='<edit-'+this.token+'>',close='</edit-'+this.token+'>';
-      const lines:string[]=[];
+      const lines=this.state.messages.filter(m=>m.turnId===turn&&m.role==='reasoning').slice(-6).map(m=>m.text.slice(-1000));
       for(const msg of messages){
         const start=msg.text.indexOf(open);
         if(start<0){if(msg.text.trim())lines.push(msg.text.slice(-1000));continue;}
-        if(this.source&&this.source!==msg.id)continue;
+        if(this.earlierSources.has(msg.id))continue;
+        const revision=Boolean(this.source&&this.source!==msg.id);
+        if(revision){this.earlierSources.add(this.source!);this.closedBlock=false;}
         this.source=msg.id;
         let body=msg.text.slice(start+open.length);
         const end=body.indexOf(close);
         if(end>=0){body=body.slice(0,end);this.closedBlock=true;}
         else for(let n=Math.min(body.length,close.length-1);n>0;n--)if(body.endsWith(close.slice(0,n))){body=body.slice(0,-n);break;}
-        if(this.written.startsWith(body)&&body!==this.written)continue; // Earlier snapshot.
-        if(!body.startsWith(this.written))throw Error('The provider revised its edit. Inline typing stopped.');
-        if(body.length>this.written.length||end>=0&&this.to>this.from){
+        // Wait for a revised replacement to be complete before removing earlier text.
+        const revising=!body.startsWith(this.written);
+        if((!revising||end>=0)&&(body!==this.written||end>=0&&this.to>this.from)){
           this.checkEditor();
-          const addition=body.slice(this.written.length);
-          this.editor.replaceRange(addition,this.editor.offsetToPos(this.from),this.editor.offsetToPos(this.to));
-          this.expected=this.expected.slice(0,this.from)+addition+this.expected.slice(this.to);
-          this.from+=addition.length;this.to=this.from;this.written=body;
+          const left=revising?this.from-this.written.length:this.from;
+          const addition=revising?body:body.slice(this.written.length);
+          this.editor.replaceRange(addition,this.editor.offsetToPos(left),this.editor.offsetToPos(this.to));
+          this.expected=this.expected.slice(0,left)+addition+this.expected.slice(this.to);
+          this.from=left+addition.length;this.to=this.from;this.written=body;
         }
         if(start)lines.push(msg.text.slice(0,start).slice(-1000));
         if(end>=0){const tail=msg.text.slice(start+open.length+end+close.length);if(tail.trim())lines.push(tail.slice(-1000));}
       }
       lines.push(...this.state.activities.filter(a=>a.turnId===turn&&a.summary).slice(-8).map(a=>a.summary.slice(0,300)));
-      this.activity={running:true,status:'Working',lines:lines.slice(-12)};
+      const activities=this.requestState().activities;
+      const questions=pendingQuestions(activities),approvals=pendingApprovals(activities);
+      const requestKey=questions.length||approvals.length?JSON.stringify([questions,approvals]):'';
+      this.activity={running:true,status:requestKey?'Waiting for input':'Working',lines:lines.slice(-12),requestKey};
       const phase=turnPhase(this.state,turn);
+      const final=inlineTurnMessages(this.state,turn).at(-1);
+      const terminal=this.state.latestTurn?.turnId===turn?this.state.latestTurn:this.state.turns?.[turn];
+      const finalReady=final&&!final.streaming&&(!terminal?.assistantMessageId||messages.some(msg=>msg.id===terminal.assistantMessageId&&!msg.streaming));
+      if(phase==='complete'&&!finalReady){this.activity.status='Finishing';this.changed();return;}
       if(phase!=='running')this.finish(phase==='complete'?(this.closedBlock?'Edit complete':this.source?'The edit ended before its closing marker':'Finished without an inline edit'):phase==='error'?'Run failed':'Stopped');
       else this.changed();
     }catch(error){this.finish(error instanceof Error?error.message:String(error));}

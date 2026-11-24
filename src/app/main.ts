@@ -593,13 +593,7 @@ export default class SendToT3 extends Plugin {
       threads:async choice=>{const project=this.projects().find(project=>projectKey(project)===choice.key);if(!project)throw Error('This project is no longer available.');return projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id);},
       created:target=>{if(this.settings.hideObsidianThreads===true){this.threadVisibility?.queue({id:randomId(),threadId:target.threadId,projectId:target.projectId,environmentId:target.environmentId});void this.syncThreadVisibility(true);}},
       source:()=>this.sidebarNoteSource(),
-      renderRequests:(element,target,state)=>{
-        const disposers:Array<()=>void>=[];
-        this.questions?.observe(target.environmentId,target.threadId,state.activities,state.sequence);
-        for(const request of pendingQuestions(state.activities))if(this.questions){const identity={environmentId:target.environmentId,threadId:target.threadId,requestId:request.requestId},row=element.createDiv({cls:'t3-chat-request'});row.createDiv({text:request.questions.map(question=>question.question).join(' ')});const control=questionButton(this.questions,identity,value=>this.openQuestion(value),element.ownerDocument);row.appendChild(control.button);disposers.push(control.unsubscribe);}
-        for(const request of pendingApprovals(state.activities))if(this.approvals){const identity={environmentId:target.environmentId,threadId:target.threadId,requestId:request.requestId},row=element.createDiv({cls:'t3-chat-request'});row.createDiv({text:request.summary});for(const option of approvalOptions(request.options)){const control=approvalButton(this.approvals,identity,option.decision,element.ownerDocument);row.appendChild(control.button);disposers.push(control.unsubscribe);}}
-        return ()=>{for(const dispose of disposers)dispose();};
-      },
+      renderRequests:(element,target,state)=>this.renderRunRequests(element,target,state),
     } satisfies SidebarHost);
     this.sidebarThreads.install();
     }
@@ -1491,6 +1485,13 @@ export default class SendToT3 extends Plugin {
     try{await work;}finally{notice?.hide?.();if(this.smartRecovering.get(path)?.work===work)this.smartRecovering.delete(path);}
   }
 
+  private renderRunRequests(element:HTMLElement,target:SidebarTarget,state:InlineThreadState){
+        const disposers:Array<()=>void>=[];
+        this.questions?.observe(target.environmentId,target.threadId,state.activities,state.sequence);
+        for(const request of pendingQuestions(state.activities))if(this.questions){const identity={environmentId:target.environmentId,threadId:target.threadId,requestId:request.requestId},row=element.createDiv({cls:'t3-chat-request'});row.createDiv({text:request.questions.map(question=>question.question).join(' ')});const control=questionButton(this.questions,identity,value=>this.openQuestion(value),element.ownerDocument);row.appendChild(control.button);disposers.push(control.unsubscribe);}
+        for(const request of pendingApprovals(state.activities))if(this.approvals){const identity={environmentId:target.environmentId,threadId:target.threadId,requestId:request.requestId},row=element.createDiv({cls:'t3-chat-request'});row.createDiv({text:request.summary});for(const option of approvalOptions(request.options)){const control=approvalButton(this.approvals,identity,option.decision,element.ownerDocument);row.appendChild(control.button);disposers.push(control.unsubscribe);}}
+        return ()=>{for(const dispose of disposers)dispose();};
+  }
   private composerPanel?:SendComposer;
   private activeAgentEdits=new Set<InlineAgentEdit>();
   private agentEdits=new WeakMap<TFile,{edit:InlineAgentEdit;target?:SidebarTarget}>();
@@ -1521,30 +1522,31 @@ export default class SendToT3 extends Plugin {
     const context=captured?this.canonicalChatContext(captured):undefined;
     const base=this.noteComposerHost(file,selection,context);
     const capture=()=>context&&{document:context.editor.getValue(),from:context.editor.posToOffset(context.editor.getCursor('from')),to:context.editor.posToOffset(context.editor.getCursor('to'))};
-    let range=capture();
+
     const send=async(text:string,key:string|undefined,options:ResolvedJobOptions|undefined,destination?:ChatDestination,newThread=false)=>{
       if(!text.trim())throw Error('Enter a message before sending.');
       const running=this.agentEdits.get(file);
       if(running?.edit.activity.running){
         if(!running.target||!running.edit.turnId)throw Error('Wait for T3 to start the run before steering.');
         const transport=new SidebarThreadTransport(environment=>this.inlineThreadAccess(environment),randomId);
-        await transport.send(running.target,text,randomId(),randomId(),{delivery:{intent:'steer',mode:{type:'steer_active',targetRunId:running.edit.turnId}}});return;
+        await transport.send(running.target,text,randomId(),randomId(),{context:options?.context,delivery:{intent:'steer',mode:{type:'steer_active',targetRunId:running.edit.turnId}}});return;
       }
       const route={threadId:destination?.threadId,responseId:destination?.responseId,expectedProjectKey:destination?.projectKey,projectOverrideKey:key,newThread,jobOptions:options};
       if(options?.providerCommand)return newThread?base.sendToNew(text,key,()=>options):base.sendChat(text,key,()=>options,undefined,destination);
       if(options?.inline.enabled!==false){
         const selected=context?.canonicalAnchor?.text??selection;
-        return this.sendResolvedChat(selected?'Selected text:\n'+selected+'\n\n'+text:text,this.noteContext(file),context,true,route);
+        return this.sendResolvedChat(selected?'Selected text:\n'+selected+'\n\n'+text:text,this.noteContext(file),context?{...context,initialQuestion:text}:undefined,true,route);
       }
+      const range=capture();
       if(!context||!range||(context.view as MarkdownView).getMode?.()==='preview')throw Error('Open the note in editing view to use Inline agent.');
       const id=randomId(),messageId=commandId(id,'message');
-      const changed=()=>{if(!edit.activity.running){this.activeAgentEdits.delete(edit);range=capture();}for(const listener of this.busyListeners)listener();};
+      const changed=()=>{if(!edit.activity.running){this.activeAgentEdits.delete(edit);}for(const listener of this.busyListeners)listener();};
       const edit:InlineAgentEdit=new InlineAgentEdit(context.editor,()=>!this.stopped&&context.view.file===file&&(context.view as MarkdownView).getMode?.()!=='preview'&&this.app.workspace.getLeavesOfType('markdown').some(leaf=>leaf.view===context.view),id,changed,range);
       const entry:{edit:InlineAgentEdit;target?:SidebarTarget}={edit};
       const prompt=edit.prompt(text);
       this.agentEdits.set(file,entry);this.activeAgentEdits.add(edit);changed();
       try{
-        await this.sendChat(prompt,this.noteContext(file),{...route,barePrompt:true,requestId:id,onAccepted:(request,threadId)=>{
+        await this.sendChat(prompt,this.noteContext(file),{...route,barePrompt:true,requestId:id,onPrepared:request=>{request.inlineAgentPath=file.path;},onAccepted:(request,threadId)=>{
           const environmentId=request.directPlan?.environmentId??request.connection.environmentId;
           if(!environmentId){edit.finish('T3 accepted the message, but its machine is unavailable for inline typing.');return;}
           entry.target={environmentId,projectId:request.project.id,threadId,title:request.title,kind:'thread'};
@@ -1552,7 +1554,9 @@ export default class SendToT3 extends Plugin {
         }});
       }catch(error){edit.finish(message(error));throw error;}
     };
-    const host=this.withSendAvailability({...base,composerActivity:()=>this.agentEdits.get(file)?.edit.activity,
+    const host=this.withSendAvailability({...base,getInlineDefaults:()=>({...this.settings.inlineStreaming,enabled:!this.agentEdits.get(file)?.edit.activity.running}),
+      renderInlineRequests:element=>{const entry=this.agentEdits.get(file);return entry?.target&&entry.edit.activity.running?this.renderRunRequests(element,entry.target,entry.edit.requestState()):undefined;},
+      composerActivity:()=>this.agentEdits.get(file)?.edit.activity,
       acceptedDestination:()=>{const run=this.agentEdits.get(file)?.target,previous=run&&this.previousNoteThread(file.path,run.threadId);return run&&previous?{threadId:run.threadId,projectKey:projectKey(this.projectForNoteThread(previous)),label:run.title}:undefined;},
 
       sendChat:(text,key,resolve,_back,destination)=>send(text,key,resolve?.(),destination),
@@ -3528,6 +3532,7 @@ export default class SendToT3 extends Plugin {
   private async reserveResponseStreams(request:Request){
     const responses=new Map<string,string>();
     const reserve=(path:string|undefined,bindingId:string)=>{if(!path)throw Error('The reply stream has no destination note.');const prior=responses.get(path);if(prior&&prior!==bindingId)throw Error('Several reply streams target the same note.');responses.set(path,bindingId);};
+    if(request.inlineAgentPath)reserve(request.inlineAgentPath,request.id);
     for(const binding of request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]))reserve(binding.notePath,binding.id);
     if(request.inlineSteering)for(const target of request.inlineSteering.targets??[{...request.inlineSteering,notePath:request.noteThread?.notePath??request.completion?.notePath}])reserve(target.notePath,target.jobId);
     if(request.inlineFollow)reserve(request.inlineFollow.notePath??request.noteThread?.notePath??request.completion?.notePath,request.inlineFollow.jobId);
@@ -3905,7 +3910,7 @@ export class T3Settings extends PluginSettingTab {
   private replyDefinitions():Array<SettingsRow>{
     return [
 
-      {name:'Stream replies into the editor',desc:'Insert Send and Ask replies into the note. Selection replies appear below the selection; other replies use the captured cursor position or follow its paragraph.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));}},
+      {name:'Stream replies into the editor',desc:'Insert replies from note sends into the note. The composer has its own mode. Selection replies appear below the selection; other replies use the captured cursor position or follow its paragraph.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));}},
       {name:'Final answer format',desc:'Applies to new responses. Both formats support images and files.',render:setting=>{setting.addDropdown(dropdown=>dropdown.addOptions({formatted:'Quoted Markdown','raw-markdown':'Raw Markdown'}).setValue(finalAnswerFormat(this.plugin.settings.inlineStreaming.finalAnswerFormat)).onChange(async value=>{this.plugin.settings.inlineStreaming.finalAnswerFormat=finalAnswerFormat(value);await this.plugin.save();}));}},
       {name:'Thread title generation',desc:'Use note titles by default, or let T3 name every new thread. Existing titles stay the same.',render:setting=>{setting.addDropdown(d=>d.addOption('untitled-only','Only for untitled notes').addOption('always','Always use T3').setValue(this.plugin.settings.threadTitleGeneration).onChange(async value=>{this.plugin.settings.threadTitleGeneration=threadTitleGeneration(value);await this.plugin.save();}));}},
       {name:'Hide Obsidian threads in T3',desc:'Off by default. Tag new threads t3-obsidian and hide them across all connected T3 environments and clients. Enables T3’s hidden-tag filter. Turning off removes only this tag from that filter.',render:setting=>{
