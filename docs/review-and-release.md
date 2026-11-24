@@ -24,9 +24,8 @@ bounded test batches retain their own logs; failed batches have no success
 receipt. GitHub runs release-tool regression checks on PRs and main pushes.
 Development PRs keep aligned numeric metadata without an early bump. GitHub
 assigns a distinct version automatically after each user or agent merge.
-The nightly schedule tags the selected `main` snapshot at midnight UTC; the
-tag build runs lint and build before attesting and publishing. Branch pushes
-do not immediately publish releases.
+GitHub immediately starts the tag build for each assignment. It runs lint
+and build before attesting and publishing the release.
 
 ## Necessary capabilities and overrides
 
@@ -93,27 +92,15 @@ refs or use `--tags`, `--follow-tags`, or `--mirror`.
 
 ## GitHub owns releases
 
-The local release queue and workers remain removed. Merged PRs carry version metadata;
-merging a PR does not immediately publish or install the plugin. Historical
-tags, archives, receipts and private comparison records remain intact.
+Each merged PR starts a release through the post-merge assignment workflow.
+For each completed metadata commit, GitHub creates an immutable tag and
+explicitly dispatches the build. A tag created with `GITHUB_TOKEN` does not
+trigger a push workflow. The assignment job has contents and Actions write
+access. PR checks have read access.
 
-The [release workflow](../.github/workflows/release-provenance.yml) schedules
-publication every night at midnight UTC (`0 0 * * *`). GitHub can delay scheduled
-starts. The preparation job validates the version files on the exact scheduled
-`main` snapshot after reconciling version assignments, creates its matching immutable numeric tag, then explicitly
-dispatches the tag build. This dispatch is necessary because a tag created with
-`GITHUB_TOKEN` does not trigger another push workflow. Preparation can write
-contents and dispatch Actions; PR jobs have only read access. No private token,
-local worker or vault access is needed.
-
-If that exact commit is already published, preparation does nothing. If the
-tag exists with an unfinished release, it dispatches the same tag again. If
-the number belongs to another commit or is older than the latest release, it
-fails without moving tags or publishing old code. GitHub assigns and checks a
-distinct version after each merge. Unmerged PRs are never released.
-
-An explicitly requested early release can still use the aligned numeric
-version committed on its source: tag that exact commit and push only that tag.
+Preparation skips published snapshots. A rerun can dispatch an unfinished tag
+build. If the version belongs to another commit, preparation fails. An explicit
+numeric tag push can also start a build at its assigned commit.
 The
 [release workflow](../.github/workflows/release-provenance.yml) installs
 dependencies, lints, builds, attests `main.js`, `manifest.json` and `styles.css`,
@@ -123,8 +110,7 @@ match the source version. Existing tags and assets cannot be overwritten.
 To retry a tagged release, dispatch the workflow at that same numeric tag, for
 example `gh workflow run release-provenance.yml --ref 0.0.BUILD` with the actual
 version substituted. Dispatching at a branch fails the numeric-tag check.
-The post-merge assignment workflow chooses versions. Nightly preparation first
-reconciles pending assignments and selects a completed version snapshot. Keep the
+The post-merge assignment workflow chooses versions. See the
 [alpha version policy](versioning.md).
 
 ## Automatic post-merge version assignment
@@ -145,11 +131,15 @@ agent merges, retries, delayed runs and missed push events without asking the
 user to pick a number. Historical PRs before the cutover retain their versions.
 Preserve the ledger and do not change its cutover timestamp on subsequent edits.
 
-Assignment and nightly preparation use the same queued concurrency group.
-Nightly preparation reconciles first, checks out the returned immutable version
-commit, and verifies it contains only completed metadata changes. It cannot tag
-an unnumbered merge snapshot. Assignment itself neither tags nor publishes.
-Automation's `GITHUB_TOKEN` writes do not recursively start another push workflow.
+The assignment workflow reconciles the previous receipt before allocating
+the next version. It verifies the exact metadata commit is on main, then
+dispatches the release at its tag. Multiple merges get distinct release builds.
+Tag publication is serialized so a slower build cannot displace a newer Latest
+release.
+
+The merged-PR event also supplies its receipt information if GitHub has not
+indexed the closed PR yet. Both triggers run trusted code from `main`.
+When the tag already has an active build at its exact commit, recovery reuses it.
 
 If an assignment fails, inspect the failed run. A recovery run of
 `pr-versions.yml` on `main` resumes from committed receipts without a duplicate

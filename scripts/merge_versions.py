@@ -61,9 +61,12 @@ def activate(repo: str, source: str, ledger: dict) -> None:
         raise ValueError('Invalid versioning cutover source.')
 
 
-def pending_prs(repo: str, source: str, ledger: dict) -> list[dict]:
+def pending_prs(repo: str, source: str, ledger: dict, merged_event=None) -> list[dict]:
     since = datetime.fromisoformat(ledger['since'].replace('Z', '+00:00'))
     rows = release.pages(f'repos/{repo}/pulls?state=closed&base=main&sort=updated&direction=desc')
+    if merged_event:
+        rows = [row for row in rows if row['number'] != merged_event['number']]
+        rows.append(merged_event)
     candidates = []
     for row in rows:
         if (row.get('merged_at') is None or row['base']['ref'] != 'main'
@@ -122,28 +125,34 @@ def commit_assignment(repo: str, source: str, values: dict, number: int, selecte
     return created['sha']
 
 
-def assign(repo: str) -> dict:
+def assign(repo: str, prepare_snapshot=None, merged_event=None) -> dict:
     if not re.fullmatch(r'[\w.-]+/[\w.-]+', repo):
         raise ValueError('Invalid repository identity.')
     conflicts = 0
     assigned = []
+    prepared = None
     for _ in range(100):
         source = release.api(f'repos/{repo}/git/ref/heads/main')['object']['sha']
         values = {name: release.remote_json(repo, source, name) for name in FILES}
         ledger = ledger_state(values[LEDGER])
         activate(repo, source, ledger)
         release.metadata_version(values)
-        pending = pending_prs(repo, source, ledger)
-        if not pending:
+        pending = pending_prs(repo, source, ledger, merged_event)
+        if not pending or (prepare_snapshot and ledger.get('latest') and ledger['latest']['version'] != prepared):
             if not ledger.get('latest'):
                 raise ValueError('No completed PR assignment exists yet. Nothing can be released.')
+            # Recover an interrupted dispatch BEFORE allocating the next version.
+            # A later merge can be the main tip while its assignment is pending.
             commits = release.api(f'repos/{repo}/commits?sha={source}&path={LEDGER}&per_page=1')
             completed = commits[0]['sha']
             if not re.fullmatch(r'[a-f0-9]{40}', completed):
                 raise ValueError('Invalid completed version source.')
-            # A merge arriving during reconciliation may not be visible in the
-            # PR list yet. Pin the last ledger commit, not that unnumbered tip.
-            return {'source': completed, 'version': ledger['latest']['version'], 'assignments': assigned}
+            selected = ledger['latest']['version']
+            if prepare_snapshot and selected != prepared:
+                prepare_snapshot(repo, selected, completed)
+                prepared = selected
+            if not pending:
+                return {'source': completed, 'version': selected, 'assignments': assigned}
         row = pending[0]
         selected = release.bump(release.ROOT, max(used_versions(repo, values, ledger),
                                                 key=lambda value: int(value.rsplit('.', 1)[1])), 'patch')
@@ -166,13 +175,16 @@ def assign(repo: str) -> dict:
     raise ValueError('Assignment limit reached. Rerun reconciliation; committed assignments are retained.')
 
 
-def versioned_snapshot(root: Path, source: str) -> None:
-    ledger = ledger_state(json.loads((root / LEDGER).read_text()))
+def versioned_snapshot(root: Path, source: str) -> str:
+    def read(name: str):
+        return json.loads(subprocess.check_output(['git', 'show', f'{source}:{name}'], cwd=root, timeout=30))
+
+    ledger = ledger_state(read(LEDGER))
     latest = ledger.get('latest', {})
     number = str(latest.get('pr', ''))
     if number not in ledger['pullRequests'] or ledger['pullRequests'][number]['version'] != latest.get('version'):
         raise ValueError('This snapshot has no completed PR version assignment.')
-    values = {name: json.loads((root / name).read_text()) for name in release.VERSION_FILES}
+    values = {name: read(name) for name in release.VERSION_FILES}
     if release.metadata_version(values) != latest['version']:
         raise ValueError('Snapshot version differs from the PR assignment.')
     parents = subprocess.check_output(['git', 'rev-list', '--parents', '-n', '1', source], cwd=root,
@@ -181,13 +193,31 @@ def versioned_snapshot(root: Path, source: str) -> None:
                                      cwd=root, text=True, timeout=30).splitlines()
     if parents != [source, latest.get('source')] or not changed or not set(changed).issubset(FILES):
         raise ValueError('Release source is not the completed version metadata commit.')
+    return latest['version']
+
+
+def prepare_completed(repo: str, selected: str, source: str) -> None:
+    release.command('git', 'fetch', '--no-tags', 'origin', 'main')
+    release.command('git', 'merge-base', '--is-ancestor', source, 'origin/main')
+    if versioned_snapshot(release.ROOT, source) != selected:
+        raise ValueError('Completed assignment does not match the release version.')
+    release.prepare(repo, selected, source)
 
 
 def main() -> None:
     # This is a write-capable CI action, never a development-time bump command.
-    if os.environ.get('GITHUB_REF') != 'refs/heads/main' or os.environ.get('GITHUB_EVENT_NAME') not in ('push', 'schedule', 'workflow_dispatch'):
+    event = os.environ.get('GITHUB_EVENT_NAME')
+    repo = os.environ['GITHUB_REPOSITORY']
+    if os.environ.get('GITHUB_REF') != 'refs/heads/main' or event not in ('push', 'workflow_dispatch', 'pull_request_target'):
         raise ValueError('Version assignment runs only for main in GitHub Actions.')
-    result = assign(os.environ['GITHUB_REPOSITORY'])
+    merged = None
+    if event == 'pull_request_target':
+        payload = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+        merged = payload['pull_request']
+        if (payload['action'] != 'closed' or not merged.get('merged') or not merged.get('merged_at')
+                or merged['base']['ref'] != 'main' or merged['base']['repo']['full_name'] != repo):
+            raise ValueError('Expected a merged PR for this repository and main branch.')
+    result = assign(repo, prepare_completed, merged)
     if output := os.environ.get('GITHUB_OUTPUT'):
         with open(output, 'a') as stream:
             stream.write(f'source={result["source"]}\nversion={result["version"]}\n')
