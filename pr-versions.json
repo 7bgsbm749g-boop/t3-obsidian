@@ -77,12 +77,16 @@
     "43": {
       "version": "0.0.466",
       "mergeCommit": "963e22bf9fd28c0288b9c05fbc1319f52a39eeef"
+    },
+    "44": {
+      "version": "0.0.467",
+      "mergeCommit": "892e54e2704f7e33fe8409c79eb865914bf1be76"
     }
   },
   "startCommit": "c4dd2722b89929b46e00573a81a421796ede3a41",
   "latest": {
-    "pr": 43,
-    "version": "0.0.466",
-    "source": "9ce99d863194c1604745df1e026c8224f8353908"
+    "pr": 44,
+    "version": "0.0.467",
+    "source": "892e54e2704f7e33fe8409c79eb865914bf1be76"
   }
 }
