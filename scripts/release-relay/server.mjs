@@ -17,6 +17,7 @@ export function releaseRelay(secret, readLatest, cacheMs = 300000) {
   let nextLookup = 0;
   let lookup;
   let deferred;
+  let followUp = false;
   const clients = new Set();
   const frame = () => 'data: ' + latest + '\n\n';
   function send(client, data) {
@@ -30,6 +31,10 @@ export function releaseRelay(secret, readLatest, cacheMs = 300000) {
   // A connection can recover a missed webhook. Share GitHub's snapshot across
   // subscribers, including simultaneous connections after a network outage.
   function reconcile() {
+    if (lookup) {
+      followUp = true;
+      return lookup;
+    }
     const remaining = nextLookup - Date.now();
     if (remaining > 0) {
       // Coalesce connections inside the cache window into one later lookup.
@@ -37,15 +42,20 @@ export function releaseRelay(secret, readLatest, cacheMs = 300000) {
         deferred = undefined;
         if (clients.size) reconcile();
       }, remaining).unref();
-      return lookup;
+      return;
     }
-    if (lookup) return lookup;
     clearTimeout(deferred);
     deferred = undefined;
     nextLookup = Date.now() + cacheMs;
     lookup = readLatest().then(publish).catch(() => {
       nextLookup = Date.now() + 60000;
-    }).finally(() => { lookup = undefined; });
+    }).finally(() => {
+      lookup = undefined;
+      if (followUp) {
+        followUp = false;
+        if (clients.size) reconcile();
+      }
+    });
     return lookup;
   }
   const server = createServer(async (req, res) => {

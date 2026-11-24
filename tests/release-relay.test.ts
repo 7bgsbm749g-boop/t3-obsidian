@@ -79,6 +79,8 @@ test('a subscription during a stale in-flight lookup gets a shared follow-up sna
   const url='http://127.0.0.1:'+(server.address() as AddressInfo).port+'/t3-obsidian/releases';
   const first=fetch(url);await reading;
   const request=once(server,'request');const second=fetch(url);await request;
+  // Both requests remain open even when the original cache window expires.
+  await new Promise(resolve=>setTimeout(resolve,150));
   snapshot('0.0.9');
   for(const response of await Promise.all([first,second])){
     const reader=response.body!.getReader();let data='';
