@@ -7,7 +7,7 @@ function fixture(){
   let document='Hello old world',sequence=0;
   const editor={getValue:()=>document,offsetToPos:(n:number)=>n,replaceRange:(text:string,from:number,to:number)=>{document=document.slice(0,from)+text+document.slice(to);}};
   const edit=new InlineAgentEdit(editor as unknown as Editor,()=>true,'id',()=>{},{document,from:6,to:9});
-  const update=(text:string,state='running',streaming=state==='running',id='assistant')=>edit.receive({kind:'snapshot',snapshot:{snapshotSequence:++sequence,thread:{latestTurn:{turnId:'turn',state,messageId:'user'},messages:[{id:'user',role:'user',text:'edit',streaming:false,turnId:'turn'},{id,role:'assistant',text,streaming,turnId:'turn'}],activities:[{id:'tool',kind:'tool',summary:'Reading',turnId:'turn'}]}}},'user');
+  const update=(text:string,state='running',streaming=state==='running',id='assistant',snapshotSequence=++sequence)=>edit.receive({kind:'snapshot',snapshot:{snapshotSequence,thread:{latestTurn:{turnId:'turn',state,messageId:'user'},messages:[{id:'user',role:'user',text:'edit',streaming:false,turnId:'turn'},{id,role:'assistant',text,streaming,turnId:'turn'}],activities:[{id:'tool',kind:'tool',summary:'Reading',turnId:'turn'}]}}},'user');
   return {edit,update,document:()=>document,change:()=>document+='!'};
 }
 test('an inline edit replaces the captured range and appends each streamed suffix once',()=>{
@@ -41,4 +41,23 @@ test('a finished canonical turn with no assistant output releases the writer',()
 test('steering can revise an edit in the same assistant message',()=>{
   const f=fixture();const first='<edit-id>red</edit-id>';f.update(first);f.update(first+' Revised: <edit-id>blue</edit-id>','completed',false);
   assert.equal(f.document(),'Hello blue world');assert.ok(f.edit.activity.lines.every(line=>!line.includes('edit-id')));
+});
+
+test('a stale completed poll cannot close a newer streaming edit',()=>{
+  const f=fixture();
+  f.update('Working','completed',false,'progress',2);
+  f.update('<edit-id>gr','completed',true,'answer',4);
+  f.update('Working','completed',false,'progress',3);
+  assert.equal(f.edit.activity.running,true);
+  f.update('<edit-id>green</edit-id>','completed',false,'answer',5);
+  assert.equal(f.document(),'Hello green world');
+  assert.equal(f.edit.activity.status,'Edit complete');
+});
+
+test('a trailing open marker preserves the complete edit and reports the incomplete revision',()=>{
+  const f=fixture(),text='<edit-id>red</edit-id> I put it in the <edit-id> block.';
+  f.update(text,'completed');
+  f.update(text,'completed');
+  assert.equal(f.document(),'Hello red world');
+  assert.equal(f.edit.activity.status,'The edit ended before its closing marker');
 });

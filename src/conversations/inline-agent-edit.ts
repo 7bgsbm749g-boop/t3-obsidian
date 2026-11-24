@@ -43,7 +43,9 @@ export class InlineAgentEdit {
   receive(item:ThreadStreamItem,messageId:string){
     if(!this.activity.running)return;
     try{
-      this.state=applyThreadItem(this.state,item).state;
+      const next=applyThreadItem(this.state,item).state;
+      if(next===this.state)return;
+      this.state=next;
       const turn=turnForMessage(this.state,messageId);
       if(!turn){if(this.state.starts?.[messageId]?.failed)this.finish('The agent could not start this run.');return;}
       this.turnId=turn;
@@ -52,15 +54,18 @@ export class InlineAgentEdit {
       const lines=this.state.messages.filter(m=>m.turnId===turn&&m.role==='reasoning').slice(-6).map(m=>m.text.slice(-1000));
       for(const msg of messages){
         const blocks=msg.text.split(open);
-        const start=msg.text.lastIndexOf(open);
-        if(start<0){if(msg.text.trim())lines.push(msg.text.slice(-1000));continue;}
+        if(blocks.length===1){if(msg.text.trim())lines.push(msg.text.slice(-1000));continue;}
         if(this.earlierSources.has(msg.id))continue;
         const revision=Boolean(this.source&&this.source!==msg.id);
-        if(revision){this.earlierSources.add(this.source!);this.closedBlock=false;}
+        if(revision)this.earlierSources.add(this.source!);
         this.source=msg.id;
-        let body=msg.text.slice(start+open.length);
+        const last=blocks[blocks.length-1];
+        this.closedBlock=last.includes(close);
+        // A later replacement is atomic. Retain the last complete edit if
+        // the transcript ends partway through a revision or mentions its tag.
+        let body=this.closedBlock?last:blocks.slice(1,-1).reverse().find(block=>block.includes(close))??last;
         const end=body.indexOf(close);
-        if(end>=0){body=body.slice(0,end);this.closedBlock=true;}
+        if(end>=0){body=body.slice(0,end);}
         else for(let n=Math.min(body.length,close.length-1);n>0;n--)if(body.endsWith(close.slice(0,n))){body=body.slice(0,-n);break;}
         // Wait for a revised replacement to be complete before removing earlier text.
         const revising=!body.startsWith(this.written);
@@ -73,8 +78,11 @@ export class InlineAgentEdit {
           this.from=left+addition.length;this.to=this.from;this.written=body;
         }
         if(blocks[0].trim())lines.push(blocks[0].slice(-1000));
-        for(const previous of blocks.slice(1,-1)){const end=previous.indexOf(close);if(end>=0&&previous.slice(end+close.length).trim())lines.push(previous.slice(end+close.length).slice(-1000));}
-        if(end>=0){const tail=msg.text.slice(start+open.length+end+close.length);if(tail.trim())lines.push(tail.slice(-1000));}
+        for(const block of blocks.slice(1)){
+          const marker=block.indexOf(close);
+          const tail=marker<0?'':block.slice(marker+close.length);
+          if(tail.trim())lines.push(tail.slice(-1000));
+        }
       }
       lines.push(...this.state.activities.filter(a=>a.turnId===turn&&a.summary).slice(-8).map(a=>a.summary.slice(0,300)));
       const activities=this.requestState().activities;
