@@ -88,8 +88,8 @@ test('empty asks still check new content in existing destinations; typed asks ca
 test('automatic confirmed sends preserve the previous route and preview before checking',async()=>{
  const h=await fixture({automatic:true,remembered:true});assert.equal(h.modals.length,0);assert.deepEqual(h.previews,['show']);h.checks[0].resolve(continuation);await h.opening;assert.equal(h.sent[0].destination.threadId,'checked');assert.deepEqual(h.previews,['show','clear']);
 });
-test('a first note or selection opens the composer without dispatch or preview',async()=>{
- const h=await fixture({automatic:true});await h.opening;assert.equal(h.modals.length,1);assert.equal(h.sent.length,0);assert.deepEqual(h.previews,[]);h.modal.close();await h.exports.openChatFlow(h.app,h.host,'Captured selection');assert.equal(h.modals.at(-1).field.value,'Captured selection');assert.equal(h.sent.length,0);
+test('a first explicit note or selection send dispatches without opening the composer',async()=>{
+ const h=await fixture({automatic:true});await h.opening;assert.equal(h.modals.length,0);assert.equal(h.sent.length,1);await h.exports.openChatFlow(h.app,h.host,'Captured selection');assert.equal(h.modals.length,0);assert.equal(h.sent.at(-1).text,'Captured selection');
 });
 test('automatic unavailable targets clear preparing feedback without resending',async()=>{
  const h=await fixture({automatic:true,remembered:true});h.checks[0].resolve({unavailable:true,detail:'Missing'});await h.opening;assert.equal(h.sent.length,0);assert.deepEqual(h.preparing,['show','clear']);assert.deepEqual(h.previews,['show','clear']);

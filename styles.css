@@ -917,3 +917,12 @@ a.send-to-t3-subagent:focus-visible { outline:2px solid var(--interactive-accent
 .nav-files-container.t3-note-inbox-dragging { position:relative; }
 .t3-note-inbox-drop-target { position:absolute; top:var(--t3-inbox-drop-top); inset-inline:12px; height:32px; z-index:2; display:flex; align-items:center; padding:0 8px; border:1px solid var(--background-modifier-border); border-radius:var(--radius-m); background:var(--background-primary); color:var(--text-muted); font-size:var(--font-ui-smaller); }
 .t3-note-inbox-drop-target.is-over { color:var(--interactive-accent); border-color:var(--interactive-accent); background:var(--background-modifier-hover); }
+
+.t3-composer-launcher { position: absolute; z-index: 5; right: var(--size-4-4); bottom: calc(var(--size-4-4) + env(safe-area-inset-bottom, 0px)); border-radius: 50%; background: var(--background-primary); box-shadow: var(--shadow-s); }
+.send-to-t3-panel-host .t3-composer-launcher { z-index: 12; }
+.modal.send-to-t3-tab-panel.t3-send-panel { --t3-send-bottom: 3.5rem; }
+.t3-composer-activity { max-height: min(28vh, 12rem); overflow: auto; margin: 0 var(--size-4-2); border-inline-start: 2px solid var(--interactive-accent); padding-inline-start: var(--size-4-2); }
+.t3-composer-status { font-size: var(--font-ui-small); font-weight: var(--font-semibold); }
+.t3-composer-events { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-muted); font-size: var(--font-ui-small); }
+
+.t3-send-streaming.t3-composer-mode > span { position: static; padding: 0; border: 0; background: transparent; box-shadow: none; opacity: 1; transform: none; }

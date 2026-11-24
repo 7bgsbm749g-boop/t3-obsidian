@@ -84,7 +84,7 @@ class AgentMcpTests(unittest.TestCase):
             self.assertEqual(result.stderr, '')
             replies = [json.loads(line) for line in result.stdout.splitlines()]
             self.assertEqual([reply['id'] for reply in replies], [1, 2, 3, 4])
-            self.assertIn('safe', replies[0]['result']['instructions'])
+            self.assertIn('prepare_note_edit', replies[0]['result']['instructions'])
             self.assertIn('submit_note_edit', [item['name'] for item in replies[1]['result']['tools']])
             self.assertIn('stream_thread', [item['name'] for item in replies[1]['result']['tools']])
             self.assertIn('thread_streams', [item['name'] for item in replies[1]['result']['tools']])

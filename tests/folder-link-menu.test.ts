@@ -204,9 +204,9 @@ for(const mobile of [false,true])test(`note menu in a linked folder offers new a
     const item=menu.items.find(item=>item.title==='Send to agent');assert.ok(item);
     await item.callback({ctrlKey:true});
     const choices=h.modals.at(-1);assert.ok(choices);
-    assert.equal(choices.constructor.name,'SendComposer');
-    assert.equal(choices.titleEl.text,'Send composer');
-    assert.equal(choices.target,'new');assert.equal(choices.field.value,'');assert.equal(sent.length,0);
+    assert.equal(choices.constructor.name,'NoteSendDestination');
+    assert.equal(choices.titleEl.text,'Send to T3');
+    assert.equal(choices.destination,undefined);assert.equal(sent.length,0);
     await choices.choose();
     assert.equal(sent.length,1);assert.equal(sent[0].file,file);assert.equal(sent[0].project.id,'nested');assert.equal(sent[0].options.threadId,undefined);
     h.plugin.settings.noteThreads.push({notePath:'Notes/Inner/note.md',threadId:'previous-parent-thread',projectId:h.project.id,workspaceRoot:h.project.workspaceRoot,connectionId:'c',selectedAt:'2026-09-28T00:00:00Z'});
@@ -724,7 +724,7 @@ test('newly paired machines keep their selection when their discovery ID becomes
   }finally{h.plugin.onunload();}
 });
 
-test('first-send selection waits for confirmation and follows the note identity after rename',async()=>{
+test('note sends are independent by default and opt-in Smart Send follows a renamed note',async()=>{
  const h=await folderMenuHarness();
  try{
   const {file}=h.fileMenu('Notes/Fresh.md',false);Object.assign(file,{basename:'Fresh',stat:{ctime:123}});
@@ -735,31 +735,19 @@ test('first-send selection waits for confirmation and follows the note identity 
   h.plugin.requestTitle=async()=> 'Fresh';
   h.plugin.readChatThread=async()=>({id:'confirmed-thread',projectId:h.project.id,title:'Fresh',session:{status:'ready',activeTurnId:null},latestTurn:{state:'completed'}});
   h.plugin.dispatch=async(request:any)=>{sent.push(request);h.plugin.rememberStarted(request,'confirmed-thread');await h.plugin.save();return 'confirmed-thread';};
-  await h.plugin.openNoteSend(file);assert.equal(h.modals.length,1);assert.equal(sent.length,0);assert.equal(h.plugin.hasConfirmedNoteSend(file.path),false);
-  h.modals[0].close();await h.plugin.openNoteSend(file);assert.equal(h.modals.length,2);assert.equal(sent.length,0);
-  await h.modals[1].choose();assert.equal(sent.length,1);assert.equal(h.plugin.hasConfirmedNoteSend(file.path),true);
+  await h.plugin.openNoteSend(file);assert.equal(h.modals.length,0);assert.equal(sent.length,1);
+  assert.equal(sent[0].smartSend,undefined);
+  await h.plugin.openNoteSend(file);assert.equal(sent.length,2);assert.match(sent[1].prompt,/First instruction/);
+  h.plugin.settings.smartSendEnabled=true;
+  await h.plugin.openNoteSend(file);assert.ok(sent[2].smartSend);
   moveSmartNotes(h.plugin.smartData(),file.path,'Notes/Renamed.md');file.path='Notes/Renamed.md';document+='\nFollow-up.';
-  assert.equal(h.plugin.hasConfirmedNoteSend('Notes/Fresh.md'),false);assert.equal(h.plugin.hasConfirmedNoteSend('Notes/Copy.md'),false);
-  await h.plugin.openNoteSend(file);assert.equal(h.modals.length,2);assert.equal(sent.length,2);assert.equal(sent[1].threadId,'confirmed-thread');
-  assert.match(sent[1].prompt,/Follow-up/);assert.doesNotMatch(sent[1].prompt,/First instruction/);
-
-  h.plugin.settings.alwaysShowComposer=true;document+='\nReview this too.';
-  await h.plugin.openNoteSend(file);
-  const composer=h.modals.at(-1);
-  assert.equal(h.modals.length,3);assert.equal(sent.length,2);
-  assert.equal((await composer.ready).threadId,'confirmed-thread');
-  composer.overrides.modelSelection={instanceId:'provider',model:'chosen'};
-  await composer.choose();
-  assert.equal(sent.length,3);assert.equal(sent[2].threadId,'confirmed-thread');
-  assert.equal(sent[2].jobOptions.modelSelection.model,'chosen');
-  assert.match(sent[2].prompt,/Review this too/);assert.doesNotMatch(sent[2].prompt,/Follow-up/);
-
-  moveSmartNotes(h.plugin.smartData(),file.path);assert.equal(h.plugin.hasConfirmedNoteSend(file.path),false);
+  await h.plugin.openNoteSend(file);assert.equal(sent.length,4);assert.equal(sent[3].threadId,'confirmed-thread');assert.match(sent[3].prompt,/Follow-up/);assert.doesNotMatch(sent[3].prompt,/First instruction/);
+  await h.plugin.openNoteSend(file);assert.equal(sent.length,4);assert.equal(h.modals.length,0);
  }finally{h.plugin.onunload();}
 });
 
 test('whole-note sends, command-bar asks and confirmed receipts use one Smart Send history',async()=>{
- const h=await folderMenuHarness();
+ const h=await folderMenuHarness();h.plugin.settings.smartSendEnabled=true;
  try{
   const {file}=h.fileMenu('Notes/Smart.md',false);Object.assign(file,{basename:'Smart',stat:{ctime:123}});
   let document='First instruction.';const sent:any[]=[];
@@ -779,14 +767,7 @@ test('whole-note sends, command-bar asks and confirmed receipts use one Smart Se
   await h.plugin.openManualAction(file,'Why?', '',{editor,view},false);
   assert.equal(sent.length,3);assert.match(sent[2].prompt,/\*\*USER ASKS:\*\*\nWhy\?/);assert.doesNotMatch(sent[2].prompt,/First instruction|Second instruction|Agent final/);
   const selected='First instruction.',firstAnchor={text:selected,start:0,end:selected.length,before:'',after:document.slice(selected.length,selected.length+80)};
-  h.plugin.settings.alwaysShowComposer=true;
   await h.plugin.openManualAction(file,'Which passage?',selected,{editor,view,anchor:firstAnchor,canonicalAnchor:firstAnchor,snapshot:document},false);
-  assert.equal(sent.length,3);
-  const composer=h.modals.at(-1);
-  assert.equal(composer.field.value,'Which passage?');
-  assert.equal((await composer.ready).threadId,'smart-thread');
-  await composer.choose();
-  h.plugin.settings.alwaysShowComposer=false;
   assert.equal(sent.length,4);assert.match(sent[3].prompt,/First instruction\./);assert.doesNotMatch(sent[3].prompt,/Selection reference:|Second instruction|Agent final/);
   const start=document.indexOf(response),replyAnchor={text:response,start,end:start+response.length,before:document.slice(Math.max(0,start-80),start),after:document.slice(start+response.length,start+response.length+80)};
   await h.plugin.openManualAction(file,'Explain this reply.',response,{editor,view,anchor:replyAnchor,canonicalAnchor:replyAnchor,snapshot:document},false);
@@ -795,7 +776,7 @@ test('whole-note sends, command-bar asks and confirmed receipts use one Smart Se
 });
 
 for(const confirmed of [false,true])test(`import selects its source but only confirmed sends permit automatic Smart Send (existing coverage=${confirmed})`,async()=>{
- const h=await folderMenuHarness();
+ const h=await folderMenuHarness();h.plugin.settings.smartSendEnabled=true;
  try{
   const {file}=h.fileMenu('Notes/Import.md',false);Object.assign(file,{basename:'Import',stat:{ctime:123}});
   let document=confirmed?'Earlier instruction.':'';const sent:any[]=[],registered:any[]=[];
@@ -824,11 +805,7 @@ for(const confirmed of [false,true])test(`import selects its source but only con
   assert.equal(h.shared.at(-1).noteThreads.find((entry:any)=>entry.threadId===threadId).environmentId,'env');
   document+='\nFresh follow-up.';const modalCount=h.modals.length;
   await h.plugin.openNoteSend(file);
-  if(confirmed)assert.equal(h.modals.length,modalCount,'confirmed continuation must not open the selector');
-  else{
-   assert.equal(h.modals.length,modalCount+1,'import alone must leave the first-send selector enabled');assert.equal(sent.length,before);
-   const chooser=h.modals.at(-1);chooser.select('default');await chooser.ready;await chooser.choose();
-  }
+  assert.equal(h.modals.length,modalCount);
   assert.equal(sent.length,before+1);
   assert.equal(sent.at(-1).threadId,threadId);assert.equal(sent.at(-1).project.id,h.project.id);
   assert.match(sent.at(-1).prompt,/Fresh follow-up/);assert.doesNotMatch(sent.at(-1).prompt,/Earlier instruction|Imported prompt|Imported answer|t3-run-import/);
@@ -841,7 +818,7 @@ for(const confirmed of [false,true])test(`import selects its source but only con
 });
 
 test('delete/create without an observed rename starts fresh coverage without scanning the vault',async()=>{
- const h=await folderMenuHarness();
+ const h=await folderMenuHarness();h.plugin.settings.smartSendEnabled=true;
  try{
   const original='Notes/Untitled.md',renamed='Notes/Named.md',requestId=randomUUID(),binding=commandId(requestId,`binding:${original}`);
   const {file}=h.fileMenu(original,false);Object.assign(file,{basename:'Untitled',stat:{ctime:123}});
@@ -871,7 +848,7 @@ test('delete/create without an observed rename starts fresh coverage without sca
 });
 
 test('explicit selections always send in full while automatic note context keeps its coverage',async()=>{
- const h=await folderMenuHarness();
+ const h=await folderMenuHarness();h.plugin.settings.smartSendEnabled=true;
  try{
   const {file}=h.fileMenu('Notes/Selections.md',false);Object.assign(file,{basename:'Selections',stat:{ctime:123}});
   const selected='**Repeat this complete selected passage.** '.repeat(9)+'Final selected sentence.';
@@ -887,7 +864,7 @@ test('explicit selections always send in full while automatic note context keeps
    const start=document.indexOf(text),end=start+text.length,anchor={text,start,end,before:document.slice(Math.max(0,start-80),start),after:document.slice(end,end+80)};
    await h.plugin.openManualAction(file,question,text,{editor,view,anchor,canonicalAnchor:anchor,snapshot:document},false);
   };
-  await select(selected);assert.equal(sent.length,0);await h.modals.at(-1).choose();assert.equal(sent.length,1);
+  await select(selected);assert.equal(sent.length,1);
   const modals=h.modals.length;
   await select(selected);assert.equal(sent.length,2);assert.equal(h.modals.length,modals,'Repeated selection must not be treated as an empty send');
   await select(selected,'Explain the final selected sentence.');assert.equal(sent.length,3);assert.equal(h.modals.length,modals);
@@ -903,7 +880,7 @@ test('explicit selections always send in full while automatic note context keeps
 });
 
 async function runningSmartSendHarness(){
- const h=await folderMenuHarness();
+ const h=await folderMenuHarness();h.plugin.settings.smartSendEnabled=true;
  const {file}=h.fileMenu('Notes/Steering.md',false);Object.assign(file,{basename:'Steering',stat:{ctime:123}});
  let document='First instruction.';const sent:any[]=[];let newBlocks=0;
  const editor={getValue:()=>document,getSelection:()=>'',getCursor:()=>({line:0,ch:0}),posToOffset:(pos:any)=>pos.offset??0,offsetToPos:(offset:number)=>({line:0,ch:0,offset}),replaceRange:(text:string,from:any,to:any)=>{document=document.slice(0,from.offset)+text+document.slice(to.offset);}};

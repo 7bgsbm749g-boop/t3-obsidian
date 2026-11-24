@@ -1,3 +1,4 @@
+import type {ComposerActivity} from './inline-agent-edit';
 import type {ThreadSummary} from './thread-target';
 import {resolveJobOptions,type JobOverrides,type ResolvedJobOptions,type InlineDefaults} from './job-options';
 import {logEvent,logFailure} from '../app/diagnostics';
@@ -27,7 +28,9 @@ export interface ChatDestination {
   status?:string;
 }
 export interface ChatHost {
-  alwaysShowComposer?:boolean;
+  acceptedDestination?():ChatDestination|undefined;
+  renderInlineRequests?(element:HTMLElement):(()=>void)|undefined;
+  composerActivity?():ComposerActivity|undefined;
   draftChanged?(text:string):void;
   contextLabel?:string;
   chooseProject?(key:string):Promise<string>;
@@ -50,8 +53,6 @@ export interface ChatHost {
   onProjectChange?(listener:()=>void):()=>void;
   getProjectChoices():{key:string;label:string}[];
   getDefaultThread(projectKey?:string):string|undefined;
-  /** Imports and folder links do not establish a confirmed send from a note. */
-  hasConfirmedNoteSend?():boolean;
   getDefaultDestination?(projectKey?:string,signal?:AbortSignal):Promise<ChatDestination>;
   hasNewContent?(destination:ChatDestination,prompt:string):Promise<boolean>;
   /** Captured routing metadata, not an active-turn authorization. */
@@ -70,6 +71,46 @@ class ChatProjectModal extends FuzzySuggestModal<{key:string;label:string}> {
   onChooseItem(item:{key:string;label:string}){void this.choose(item.key);}
 }
 
+/** Explicit routing for a note send. Its captured content cannot become a composer draft. */
+export class NoteSendDestination extends NoteTabPanel {
+  private key?:string;
+  private destination?:ChatDestination;
+  private sending=false;
+  private controller=new AbortController();
+  constructor(app:App,private host:ChatHost,private prompt:string){super(app,host.getNotePath());this.key=host.getDefaultProjectKey?.();}
+  onOpen(){
+    this.titleEl.setText('Send to T3');this.contentEl.empty();
+    const button=(label:string,action:()=>void)=>{const el=this.contentEl.createEl('button',{text:label,attr:{type:'button'}});el.addEventListener('click',action);return el;};
+    const restriction=this.host.getThreadChoiceRestriction?.();
+    button(this.host.getProjectName(this.key),()=>new ChatProjectModal(this.app,()=>this.host.getProjectChoices(),async key=>{
+      this.key=await this.host.chooseProject?.(key)??key;this.destination=undefined;this.onOpen();
+    }).open()).disabled=Boolean(restriction);
+    button(this.destination?.label??'New thread',()=>{
+      const menu=new Menu();
+      menu.addItem(item=>item.setTitle('New thread').onClick(()=>{this.destination=undefined;this.onOpen();}));
+      menu.addItem(item=>item.setTitle('Existing thread').onClick(()=>void this.pickExisting().catch(error=>new Notice(String(error)))));
+      menu.showAtPosition({x:this.contentEl.getBoundingClientRect().left,y:this.contentEl.getBoundingClientRect().bottom});
+    }).disabled=Boolean(restriction);
+    button(restriction?'Send to linked thread':'Send',()=>void this.choose().catch(error=>new Notice(String(error))));
+  }
+  async pickExisting(){
+    await this.host.chooseExisting?.(this.key,destination=>{if(!this.controller.signal.aborted){this.destination=destination;this.onOpen();}},()=>{},this.controller.signal);
+  }
+  async choose(){
+    if(this.sending||this.host.busy)return;this.sending=true;
+    try{
+      const destination=this.host.getThreadChoiceRestriction?.()?await this.host.getDefaultDestination?.(this.key,this.controller.signal):this.destination;
+      if(this.controller.signal.aborted)return;
+      if(destination?.unavailable)throw Error(destination.detail??'Thread unavailable.');
+      const options=()=>resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false});
+      if(destination)await this.host.sendChat(this.prompt,this.key,options,undefined,destination);
+      else await this.host.sendToNew(this.prompt,this.key,options);
+      this.close();
+    }catch(error){if(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal||error.deliveryUnconfirmed))this.close();throw error;}finally{this.sending=false;}
+  }
+  onClose(){this.controller.abort();}
+}
+
 type Destination='default'|'new'|'existing';
 
 /** One draft and one submit action for notes, selections, questions and steering. */
@@ -78,6 +119,7 @@ export class SendComposer extends NoteTabPanel {
   private revision=0;
   private opened=false;
   private choosing=false;
+  private disposeRequests?:()=>void;
   private unwatchBusy?:()=>void;
   private refreshAvailability?:()=>void;
   private overrides:JobOverrides={};
@@ -99,7 +141,7 @@ export class SendComposer extends NoteTabPanel {
   constructor(app:App,private host:ChatHost,private prompt=''){
     super(app,host.getNotePath());
     this.projectKey=host.getDefaultProjectKey?.();
-    if(host.steering||host.getThreadChoiceRestriction?.()||(host.alwaysShowComposer&&host.getDefaultThread(this.projectKey)))this.target='default';
+    if(host.steering||host.getThreadChoiceRestriction?.()||(host.composerActivity&&host.getDefaultThread(this.projectKey)))this.target='default';
   }
   private cancelCheck(){this.check?.controller.abort(cancelledRequest('Conversation check cancelled.'));this.check=undefined;}
   private checkDestination(){
@@ -150,11 +192,16 @@ export class SendComposer extends NoteTabPanel {
     this.suggestions=new ComposerSuggestions(this.field,composer,{action:name=>{if(name==='model')void this.chooseModel(model);else{this.overrides.interactionMode=name==='plan'?'plan':'default';this.refreshAvailability?.();new Notice(name==='plan'?'Plan mode enabled':'Normal mode enabled');}},catalog:async()=>{await this.modelReady;return {model:this.selectedModel()};},files:query=>this.host.searchFiles?.(query,this.projectKey,this.target==='new'?undefined:this.destination)??Promise.resolve([]),changed:()=>{this.overrides.context=this.suggestions?.context();this.capture();this.refreshAvailability?.();}},this.overrides.context);
     this.field.addEventListener('input',()=>{this.capture();this.refreshAvailability?.();});
     this.field.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();void this.choose();}});
+    const activity=this.host.composerActivity?composer.createDiv({cls:'t3-composer-activity'}):undefined;
+    const runStatus=activity?.createDiv({cls:'t3-composer-status',attr:{role:'status'}});
+    this.disposeRequests?.();this.disposeRequests=undefined;
+    const requests=activity?.createDiv();let requestKey='';
+    const events=activity?.createDiv({cls:'t3-composer-events'});
     const controls=composer.createDiv({cls:'t3-send-controls'});
     const options=controls.createDiv({cls:'t3-send-options'});
     const resolved=()=>resolveJobOptions(this.host.getInlineDefaults?.()??{enabled:false},this.overrides);
-    const streaming=this.button(options,'Stream replies into the editor','text-cursor-input',()=>{this.overrides.inline={...this.overrides.inline,enabled:!resolved().inline.enabled};this.refreshAvailability?.();},'t3-send-streaming');streaming.setAttribute('role','switch');const streamingLabel=streaming.createSpan();
-    const streamingName=options.createSpan({text:'Stream replies into the editor',attr:{id:`t3-send-streaming-${crypto.randomUUID()}`,hidden:''}});streaming.setAttribute('aria-labelledby',streamingName.id);streaming.removeAttribute('aria-label');streaming.removeAttribute('title');
+    const streaming=this.button(options,'Stream replies into the editor','text-cursor-input',()=>{this.overrides.inline={...this.overrides.inline,enabled:!resolved().inline.enabled};this.refreshAvailability?.();},'t3-send-streaming');streaming.setAttribute('role','switch');if(this.host.composerActivity)streaming.classList.add('t3-composer-mode');const streamingLabel=streaming.createSpan();
+    const streamingName=options.createSpan({text:this.host.composerActivity?'Composer mode':'Stream replies into the editor',attr:{id:`t3-send-streaming-${crypto.randomUUID()}`,hidden:''}});streaming.setAttribute('aria-labelledby',streamingName.id);streaming.removeAttribute('aria-label');streaming.removeAttribute('title');
     const format=this.button(options,'Final answer format','quote',()=>{this.overrides.inline={...this.overrides.inline,finalAnswerFormat:resolved().inline.finalAnswerFormat==='formatted'?'raw-markdown':'formatted'};this.refreshAvailability?.();},'t3-send-format');format.createSpan();
     // Obsidian turns aria-label into a hover tooltip. A referenced name keeps
     // this control accessible without covering its expanding visible label.
@@ -185,21 +232,24 @@ export class SendComposer extends NoteTabPanel {
     }
     this.refreshAvailability=()=>{
       const disabled=Boolean(this.host.busy||this.choosing),inline=resolved().inline,continuing=Boolean(this.target==='default'&&this.destination?.responseId);
+      const run=this.host.composerActivity?.();
+      if(activity&&runStatus&&events){activity.hidden=!run;runStatus.setText(run?.status??'');const log=run?.lines.join('\n')??'';if(events.textContent!==log){events.setText(log);events.scrollTop=events.scrollHeight;}}
+      if(requests&&requestKey!==(run?.requestKey??'')){this.disposeRequests?.();requests.empty();this.disposeRequests=this.host.renderInlineRequests?.(requests);requestKey=run?.requestKey??'';}
       const selection=this.overrides.modelSelection??this.defaultSelection;
       modelLabel.setText(selection?composerModelLabel(selection,this.models):this.modelError?'Model unavailable':'Loading model…');
       setComposerProviderIcon(providerIcon,this.models.find(item=>item.selection.instanceId===selection?.instanceId&&item.selection.model===selection?.model)?.driver);
       model.title=this.modelError??[modelLabel.textContent,this.overrides.interactionMode==='plan'?'Plan mode':undefined].filter(Boolean).join(' · ');model.setAttribute('aria-description',model.title);
       if(disabled)this.modelPicker?.close(false);
-      project.disabled=disabled||Boolean(restriction);thread.disabled=disabled||Boolean(restriction);model.disabled=disabled||!this.host.getModels;
-      streaming.disabled=disabled||continuing;streaming.setAttribute('aria-checked',String(inline.enabled));streamingLabel.setText(`Stream replies into note: ${inline.enabled?'On':'Off'}`);streaming.setAttribute('aria-description',continuing?'This running response keeps its streaming choices':streamingLabel.textContent??'');
+      project.disabled=thread.disabled=disabled||Boolean(run?.running)||Boolean(this.host.getThreadChoiceRestriction?.());model.disabled=disabled||Boolean(run?.running)||!this.host.getModels;
+      streaming.disabled=disabled||continuing||Boolean(run?.running);streaming.setAttribute('aria-checked',String(inline.enabled));streamingLabel.setText(this.host.composerActivity?(run?.running||!inline.enabled?'Inline agent':'Editor stream'):`Stream replies into note: ${inline.enabled?'On':'Off'}`);streaming.setAttribute('aria-description',continuing?'This running response keeps its streaming choices':streamingLabel.textContent??'');
       format.disabled=disabled||continuing||!inline.enabled;const formatLabel=inline.finalAnswerFormat==='formatted'?'Quoted Markdown':'Raw Markdown';
       if(format.dataset.format!==inline.finalAnswerFormat){format.dataset.format=inline.finalAnswerFormat;format.empty();setIcon(format,inline.finalAnswerFormat==='formatted'?'quote':'code');format.createSpan();}
       format.querySelector('span')!.setText(formatLabel);formatName.setText(`Final answer format: ${formatLabel}`);
       threadLabel.setText(this.target==='new'?'New thread':this.destination?.label??'Previous thread');
       const status=this.destination?.status??this.destination?.detail?.match(/ · (Idle|Active|Running|Waiting)\b/)?.[1];thread.dataset.state=this.target==='new'?'new':this.destination?.unavailable?'unavailable':status?.toLowerCase()??'idle';setIcon(threadIcon,status&&['Active','Running'].includes(status)?'loader-circle':'message-circle');
       thread.title=this.target==='new'?'Send to a new thread':this.destination?.unavailable?this.destination.detail??'Thread unavailable':[threadLabel.textContent,status].filter(Boolean).join(' · ');thread.setAttribute('aria-description',status??'');
-      send.disabled=disabled||this.target!=='new'&&Boolean(this.destination?.unavailable);
-      const label=this.prompt.trim()?'Send ask':'Send context';send.setAttribute('aria-label',label);send.title=label;
+      send.disabled=disabled||Boolean(this.host.composerActivity&&!this.prompt.trim())||!run?.running&&this.target!=='new'&&Boolean(this.destination?.unavailable);
+      const label=run?.running?'Steer run':this.host.composerActivity?'Send message':this.prompt.trim()?'Send ask':'Send context';send.setAttribute('aria-label',label);send.title=label;
       this.field!.readOnly=disabled;busyDetail.hidden=!this.host.busy;
       detail.setText(restriction??(this.destination?.unavailable?this.destination.detail??'Thread unavailable':''));detail.hidden=!detail.textContent;
     };
@@ -251,13 +301,17 @@ export class SendComposer extends NoteTabPanel {
     catch(error){new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`);}
     finally{this.choosing=false;this.refreshAvailability?.();}
   }
-  onClose(){this.modelPicker?.close(false);this.picker?.abort();this.capture();this.suggestions?.dispose();this.suggestions=undefined;this.opened=false;this.unwatchBusy?.();this.unwatchBusy=undefined;this.cancelCheck();logEvent('ui.destination.closed',{notePath:this.host.getNotePath(),submitted:this.choosing});}
+  onClose(){this.disposeRequests?.();this.disposeRequests=undefined;this.modelPicker?.close(false);this.picker?.abort();this.capture();this.suggestions?.dispose();this.suggestions=undefined;this.opened=false;this.unwatchBusy?.();this.unwatchBusy=undefined;this.cancelCheck();logEvent('ui.destination.closed',{notePath:this.host.getNotePath(),submitted:this.choosing});}
+  private clearMessage(){this.prompt='';if(this.field)this.field.value='';this.host.draftChanged?.('');}
   private async choose(){
     if(this.choosing||this.host.busy||!this.opened)return;
-    this.capture();const target=this.target,revision=this.revision;this.choosing=true;this.refreshAvailability?.();
+    this.capture();if(this.host.composerActivity&&!this.prompt.trim())return;
+    const steer=this.host.composerActivity?.()?.running;
+    const target=this.target,revision=this.revision;this.choosing=true;this.refreshAvailability?.();
     const resolve=()=>this.resolvedOptions();
     let finishPreview:(()=>void)|undefined;let finishPreparing:(()=>void)|undefined;
     try{
+      if(steer){await this.host.sendChat(this.prompt,this.projectKey,resolve);this.clearMessage();return;}
       finishPreparing=this.host.beginPreparing?.();
       if(target!=='new')finishPreview=this.host.beginSend?.(resolve());
       await this.modelReady;
@@ -269,9 +323,14 @@ export class SendComposer extends NoteTabPanel {
       if(target!=='new'&&(!destination||destination.unavailable))throw Error(destination?.detail??'Choose an available thread.');
       if(!this.prompt.trim()&&target!=='new'&&this.host.hasNewContent&&!await this.host.hasNewContent(destination!,this.prompt)){new Notice('Nothing new to send.');return;}
       if(!this.opened||revision!==this.revision)return;
-      this.close();
+      const keepOpen=Boolean(this.host.composerActivity&&!resolve().inline.enabled);
+      if(!keepOpen)this.close();
       if(target==='new')await this.host.sendToNew(this.prompt,this.projectKey,resolve);
       else await this.host.sendChat(this.prompt,this.projectKey,resolve,undefined,{...destination!,preparation:undefined});
+      if(keepOpen){
+        this.clearMessage();const accepted=this.host.acceptedDestination?.();
+        if(accepted){this.target=this.host.getThreadChoiceRestriction?.()?'default':'existing';this.projectKey=accepted.projectKey;this.destination=accepted;this.ready=Promise.resolve(accepted);}
+      }
     }catch(error){
       if(!(error instanceof ProjectCreationCancelled)){logFailure('ui.destination.failed',error,{notePath:this.host.getNotePath(),target});new Notice(`T3 Code: ${error instanceof Error?error.message:String(error)}`,10000);}
       if(!this.opened&&!(error instanceof RequestDeliveryError&&(error.requestSaved||error.terminal)))this.open();
@@ -283,9 +342,6 @@ export class SendComposer extends NoteTabPanel {
 async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
   const send=async()=>{
     const key=host.getDefaultProjectKey?.();
-    if(!(host.hasConfirmedNoteSend?.()??Boolean(host.getDefaultThread(key)||host.steering))){
-      new SendComposer(app,host,prompt).open();return;
-    }
     const finishPreparing=host.beginPreparing?.();
     let finishPreview:(()=>void)|undefined;
     try{
@@ -293,7 +349,7 @@ async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
       const options=resolveJobOptions(host.getInlineDefaults?.()??{enabled:false});
       const resolve=()=>options;
       if(!host.getDefaultThread(key)&&!host.steering){
-        if(host.hasNewContent&&!await host.hasNewContent({label:'New thread',projectKey:key},prompt)){new SendComposer(app,host,prompt).open();return;}
+        if(host.hasNewContent&&!await host.hasNewContent({label:'New thread',projectKey:key},prompt)){new Notice('Nothing new to send.');return;}
         await host.sendToNew(prompt,key,resolve);return;
       }
       let destination:ChatDestination|undefined;
@@ -301,7 +357,7 @@ async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
         const controller=new AbortController();
         destination=await abortableRead(host.getDefaultDestination(key,controller.signal),controller.signal);
         if(destination.unavailable)throw new RequestDeliveryError(destination.detail??'This conversation is unavailable. Hold Control and send again to choose another thread.',false);
-        if(host.hasNewContent&&!await host.hasNewContent(destination,prompt)){new SendComposer(app,host,prompt).open();return;}
+        if(host.hasNewContent&&!await host.hasNewContent(destination,prompt)){new Notice('Nothing new to send.');return;}
       }
       await host.sendChat(prompt,key,resolve,undefined,destination);
     }finally{finishPreview?.();finishPreparing?.();}
@@ -319,10 +375,11 @@ async function sendDefault(app:App,host:ChatHost,prompt:string):Promise<void>{
 /** Both entry points preserve the note captured when the action was activated. */
 export async function openChatFlow(app:App,host:ChatHost,prompt?:string,showSelector=false):Promise<void>{
   if(prompt!==undefined&&!prompt.trim())return;
-  if(prompt!==undefined&&!showSelector&&!host.alwaysShowComposer)return sendDefault(app,host,prompt);
+  if(prompt!==undefined&&!showSelector)return sendDefault(app,host,prompt);
+  if(showSelector){new NoteSendDestination(app,host,prompt??'').open();return;}
   const modal=new SendComposer(app,host,prompt);modal.open();await modal.ready;
 }
 export async function openNoteSendFlow(app:App,host:ChatHost,showSelector=false):Promise<void>{
-  if(showSelector||host.alwaysShowComposer){new SendComposer(app,host,'').open();return;}
+  if(showSelector){new NoteSendDestination(app,host,'').open();return;}
   await sendDefault(app,host,'');
 }

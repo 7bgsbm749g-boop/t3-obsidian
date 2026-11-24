@@ -6,7 +6,8 @@ import {nativeMarkdownView} from '../shared/native-editor';
 import {pendingQuestions} from '../interaction/questions';
 import {pendingApprovals,approvalOptions} from '../interaction/approvals';
 import {SidebarThreads,type SidebarHost} from '../conversations/sidebar-thread-view';
-import type {SidebarTarget} from '../conversations/sidebar-thread-model';
+import {InlineAgentEdit} from '../conversations/inline-agent-edit';
+import {SidebarThreadTransport,type SidebarTarget} from '../conversations/sidebar-thread-model';
 import {savedResponseProof} from '../responses/saved-response-proof';
 import {RouteStatus} from '../connection/route-status';
 import {readImportThreads,readImportRuns,readImportRun,readImportPreview,importHistoryState} from '../conversations/import-source';
@@ -120,7 +121,7 @@ import {loadFolderLinks,upsertFolderLink,folderLinkForPath,sameWorkspacePath,typ
 import {loadFolderLinkChanges,mergeFolderLinkChanges,applyFolderLinkChanges,changedFolderLinks,mergeLegacyFolderLinks,type FolderLinkChange} from '../projects/folder-link-sync';
 import {installPaletteChat,type PaletteChatController} from '../conversations/palette-chat';
 import {SendGesture} from '../responses/send-gesture';
-import {SendComposer,openChatFlow,openNoteSendFlow,type ChatHost,type ChatDestination,type SendPreparation} from '../conversations/chat-ui';
+import {NoteSendDestination,SendComposer,openChatFlow,openNoteSendFlow,type ChatHost,type ChatDestination,type SendPreparation} from '../conversations/chat-ui';
 import {selectionRange} from '../conversations/inline-steering';
 import {projectThreads,type ThreadChoice} from '../conversations/thread-target';
 import {assertThreadNoteMode,oneToOneNoteThreads,threadNoteMode,type ThreadNoteMode,type ModeThread} from '../conversations/thread-note-mode';
@@ -165,7 +166,7 @@ type SteeringSource={document:string;ranges:Span[]};
 type PaletteActionContext={file:TFile;editor?:EditorChatContext;insertion:CursorInsertion|null};
 interface InlineStreamingSettings {enabled:boolean;keepIntermediate:boolean;intermediateMode?:IntermediateMode;finalAnswerFormat?:FinalAnswerFormat}
 type PreparedNote={content:string;images:Awaited<ReturnType<typeof collectImages>>};
-interface Settings {noteInbox?:NoteInboxData;threadNoteMode:ThreadNoteMode;projectCreationLocations:ProjectCreationLocation[];noteContexts?:NoteContextRecord[];smartSend?:SmartSendData;responseBindings?:ResponseBindingData;codebase?:CodebaseState; replyFolders:ReplyFolders;threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; vaultHost?:VaultHost; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean;alwaysShowComposer:boolean;hideObsidianThreads?:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
+interface Settings {noteInbox?:NoteInboxData;threadNoteMode:ThreadNoteMode;projectCreationLocations:ProjectCreationLocation[];noteContexts?:NoteContextRecord[];smartSend?:SmartSendData;responseBindings?:ResponseBindingData;codebase?:CodebaseState; replyFolders:ReplyFolders;threadTitleGeneration:ThreadTitleGeneration; paired:PairedConnection[];directProjects:Project[];directSelected:string[];directScanId:string; connection: Connection; projects: Project[]; selected: string[]; pending: Request[]; vaultHost?:VaultHost; inlineStreaming:InlineStreamingSettings; completion: CompletionSettings; completionJobs: CompletionJob[]; settlementJobs:ThreadSettlementJob[];autoSettleThreads:boolean;smartSendEnabled:boolean;hideObsidianThreads?:boolean; folderLinks:FolderLink[];folderLinkChanges:FolderLinkChange[];noteThreads:NoteThread[];vaultId:string;vaultLocations:VaultLocation[] }
 type SharedSettings=Omit<Settings,'pending'|'completionJobs'|'settlementJobs'|'connection'|'projects'|'directProjects'|'selected'|'directSelected'|'directScanId'>;
 type StoredSettings=Omit<Partial<Settings>,'inlineStreaming'>&{inlineStreaming?:Partial<InlineStreamingSettings>&{askT3?:boolean;sendToT3?:boolean}};
 interface DeviceSettings {connectionMethod?:ConnectionMethod;routeOrder?:string[];deviceId?:string;mode?:'direct'|'desktop';connection?:Connection;pairedSessions?:Record<string,PairedSession>;cloudAccount?:CloudAccount|null;nativeAccount?:NativeAccount|null;signInEmail?:string;signInExpired?:boolean;signInRetryAt?:number;vaultRegistrations?:Record<string,VaultRegistration>}
@@ -497,7 +498,7 @@ export default class SendToT3 extends Plugin {
     this.scheduleSignInRetry();
     this.register(()=>{if(this.signInRetryTimer)clearTimeout(this.signInRetryTimer);});
     this.vaultRegistrations=local?.vaultRegistrations??{};
-    this.settings = {noteInbox:mergeNoteInbox(data?.noteInbox),threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],vaultHost:loadVaultHost(data?.vaultHost),inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:'keep',archiveFolder:''},completionJobs:[],settlementJobs:data?.autoSettleThreads===true&&Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads===true,alwaysShowComposer:data?.alwaysShowComposer===true,hideObsidianThreads:threadHiding(data?.hideObsidianThreads),folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
+    this.settings = {noteInbox:mergeNoteInbox(data?.noteInbox),threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],directProjects:data?.directProjects??[],directSelected:data?.directSelected??[],directScanId:data?.directScanId??'',connection:local?.connection??data?.connection??defaults,projects:data?.projects??[],selected:data?.selected??[],pending:state?.pending??(!Platform.isMobile?data?.pending:[])??[],vaultHost:loadVaultHost(data?.vaultHost),inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},completion:{action:'keep',archiveFolder:''},completionJobs:[],settlementJobs:data?.autoSettleThreads===true&&Array.isArray(state?.settlementJobs)?state.settlementJobs:[],autoSettleThreads:data?.autoSettleThreads===true,smartSendEnabled:data?.smartSendEnabled===true,hideObsidianThreads:threadHiding(data?.hideObsidianThreads),folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??randomId(),vaultLocations:loadVaultLocations(data)};
     this.settings.noteInbox=mergeNoteInbox(this.settings.noteInbox,await deviceState(`note-inbox:${this.deviceId}:${this.settings.vaultId}`));
     const restoreNoteInbox=JSON.stringify(mergeNoteInbox(data?.noteInbox))!==JSON.stringify(this.settings.noteInbox);
     this.responseBindingReplica=mergeResponseBindingData(data?.responseBindings,await deviceState(`response-bindings:${this.deviceId}:${this.settings.vaultId}`));
@@ -539,6 +540,7 @@ export default class SendToT3 extends Plugin {
       if(!checking)void this.openManualAction(file,'',editor.getSelection(),{editor,view},this.commandSendSelector(view)).catch(error=>new Notice(`T3 Code: ${message(error)}`,10000));
       return true;
     }});
+    if(typeof this.app.workspace.onLayoutReady==='function'&&typeof this.register==='function')this.installComposerButtons();
     this.addCommand({id:'ask-agent',name:'Ask agent…',editorCheckCallback:(checking,editor,view)=>{if(this.stopped||this.busy||!view.file)return false;if(!checking)this.openAsk(view.file,editor.getSelection(),{editor,view});return true;}});
     this.addCommand({id:'send-or-ask-choose',name:'Send or ask: choose destination…',editorCheckCallback:(checking,editor,view)=>{
       const file=view.file;
@@ -591,13 +593,7 @@ export default class SendToT3 extends Plugin {
       threads:async choice=>{const project=this.projects().find(project=>projectKey(project)===choice.key);if(!project)throw Error('This project is no longer available.');return projectThreads(await runBridge(this.connection(project),['threads','--project',project.id]),project.id);},
       created:target=>{if(this.settings.hideObsidianThreads===true){this.threadVisibility?.queue({id:randomId(),threadId:target.threadId,projectId:target.projectId,environmentId:target.environmentId});void this.syncThreadVisibility(true);}},
       source:()=>this.sidebarNoteSource(),
-      renderRequests:(element,target,state)=>{
-        const disposers:Array<()=>void>=[];
-        this.questions?.observe(target.environmentId,target.threadId,state.activities,state.sequence);
-        for(const request of pendingQuestions(state.activities))if(this.questions){const identity={environmentId:target.environmentId,threadId:target.threadId,requestId:request.requestId},row=element.createDiv({cls:'t3-chat-request'});row.createDiv({text:request.questions.map(question=>question.question).join(' ')});const control=questionButton(this.questions,identity,value=>this.openQuestion(value),element.ownerDocument);row.appendChild(control.button);disposers.push(control.unsubscribe);}
-        for(const request of pendingApprovals(state.activities))if(this.approvals){const identity={environmentId:target.environmentId,threadId:target.threadId,requestId:request.requestId},row=element.createDiv({cls:'t3-chat-request'});row.createDiv({text:request.summary});for(const option of approvalOptions(request.options)){const control=approvalButton(this.approvals,identity,option.decision,element.ownerDocument);row.appendChild(control.button);disposers.push(control.unsubscribe);}}
-        return ()=>{for(const dispose of disposers)dispose();};
-      },
+      renderRequests:(element,target,state)=>this.renderRunRequests(element,target,state),
     } satisfies SidebarHost);
     this.sidebarThreads.install();
     }
@@ -1256,7 +1252,7 @@ export default class SendToT3 extends Plugin {
     await deviceState(`response-bindings:${this.deviceId}:${this.settings.vaultId}`,this.responseBindingReplica);
     this.settings.threadNoteMode=threadNoteMode(adopted.threadNoteMode);
     const adopt=<K extends keyof SharedSettings>(key:K)=>{const target:SharedSettings=this.settings;target[key]=adopted[key];};
-    for(const key of ['alwaysShowComposer','inlineStreaming','vaultHost','completion','threadTitleGeneration','replyFolders','codebase','projectCreationLocations'] as const)adopt(key);
+    for(const key of ['smartSendEnabled','inlineStreaming','vaultHost','completion','threadTitleGeneration','replyFolders','codebase','projectCreationLocations'] as const)adopt(key);
     const diskLinks=loadFolderLinks(data),diskChanges=loadFolderLinkChanges(data.folderLinkChanges);
     this.folderLinkReplica=mergeFolderLinkChanges(this.folderLinkReplica,diskChanges);
     this.settings.folderLinkChanges=this.folderLinkReplica;
@@ -1389,15 +1385,12 @@ export default class SendToT3 extends Plugin {
     if(!connection.environmentId)connection.environmentId=connection.connectionId?this.settings.paired.find(c=>c.id===connection.connectionId)?.environmentId:await this.localInlineEnvironment();
     return smartDestination(connection.environmentId??connection.connectionId??'local',project.id,threadId);
   }
-  private hasConfirmedNoteSend(path?:string):boolean {
-    if(!path)return true;
-    const data=this.smartData();
-    return Object.values(data.heads).some(head=>{const note=data.notes[head.noteId];return note?.path===path&&!note.deleted;});
-  }
+
   private smartPreparationGeneration(route:Connection,context?:EditorChatContext){
     return [context,this.smartPreparationSettingsRevision,this.cloudGeneration,this.nativeAccount,this.cloudAccount,this.pairedSessions[route.connectionId??''],route.transport,route.url,route.connectionId,route.environmentId,context?.referenceSelection,context?.smartQuestion,context?.snapshot];
   }
   private async hasSmartContent(file:TFile,destination:ChatDestination,context?:EditorChatContext){
+    if(!this.settings.smartSendEnabled)return true;
     if(context?.smartQuestion?.trim()||context?.referenceSelection||context?.smartScope&&context.smartScope[1]>context.smartScope[0])return true;
     if(!file)return true;
     const selected=isNoProjectKey(destination.projectKey)?this.noProjectProjects.get(noProjectMachine(destination.projectKey!)??this.defaultNoProjectMachine()??''):undefined;
@@ -1419,7 +1412,7 @@ export default class SendToT3 extends Plugin {
   private prepareSmartReplies(file:TFile|null){
     if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);
     for(const [path,entry] of this.smartRecovering)if(entry.background||path===file?.path)entry.controller.abort();
-    if(!file||file.extension.toLowerCase()!=='md'||this.stopped)return;
+    if(!this.settings.smartSendEnabled||!file||file.extension.toLowerCase()!=='md'||this.stopped)return;
     this.smartPrepareTimer=window.setTimeout(()=>{
       this.smartPrepareTimer=undefined;if(this.stopped||this.busy)return;
       const view=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView).find(view=>view.file?.path===file.path);
@@ -1492,6 +1485,34 @@ export default class SendToT3 extends Plugin {
     try{await work;}finally{notice?.hide?.();if(this.smartRecovering.get(path)?.work===work)this.smartRecovering.delete(path);}
   }
 
+  private renderRunRequests(element:HTMLElement,target:SidebarTarget,state:InlineThreadState){
+        const disposers:Array<()=>void>=[];
+        this.questions?.observe(target.environmentId,target.threadId,state.activities,state.sequence);
+        for(const request of pendingQuestions(state.activities))if(this.questions){const identity={environmentId:target.environmentId,threadId:target.threadId,requestId:request.requestId},row=element.createDiv({cls:'t3-chat-request'});row.createDiv({text:request.questions.map(question=>question.question).join(' ')});const control=questionButton(this.questions,identity,value=>this.openQuestion(value),element.ownerDocument);row.appendChild(control.button);disposers.push(control.unsubscribe);}
+        for(const request of pendingApprovals(state.activities))if(this.approvals){const identity={environmentId:target.environmentId,threadId:target.threadId,requestId:request.requestId},row=element.createDiv({cls:'t3-chat-request'});row.createDiv({text:request.summary});for(const option of approvalOptions(request.options)){const control=approvalButton(this.approvals,identity,option.decision,element.ownerDocument);row.appendChild(control.button);disposers.push(control.unsubscribe);}}
+        return ()=>{for(const dispose of disposers)dispose();};
+  }
+  private composerPanel?:SendComposer;
+  private activeAgentEdits=new Set<InlineAgentEdit>();
+  private agentEdits=new WeakMap<TFile,{edit:InlineAgentEdit;target?:SidebarTarget}>();
+  private installComposerButtons(){
+    const buttons=new Map<MarkdownView,HTMLButtonElement>();
+    const refresh=()=>{
+      if(this.stopped)return;
+      const views=this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view as MarkdownView);
+      for(const [view,button] of buttons)if(!views.includes(view)||!button.isConnected){button.remove();buttons.delete(view);}
+      for(const view of views){
+        if(!view.file||!view.containerEl?.isConnected||buttons.has(view))continue;
+        const button=view.containerEl.createEl('button',{cls:'clickable-icon t3-composer-launcher',attr:{type:'button','aria-label':'Toggle T3 composer',title:'Toggle T3 composer'}});
+        setIcon(button,'message-circle');buttons.set(view,button);
+        button.addEventListener('mousedown',event=>event.preventDefault());
+        button.addEventListener('click',()=>{if(this.composerPanel?.modalEl.isConnected&&view.containerEl.contains(this.composerPanel.modalEl))this.composerPanel.close();else if(view.file)this.openAsk(view.file,view.editor.getSelection(),{editor:view.editor,view});});
+      }
+    };
+    this.app.workspace.onLayoutReady(refresh);
+    this.registerEvent(this.app.workspace.on('layout-change',refresh));
+    this.register(()=>{for(const button of buttons.values())button.remove();});
+  }
   private openAsk(file:TFile,selection='',captured?:EditorChatContext,_choose=false){
     const active=this.app.workspace.getActiveViewOfType(MarkdownView);
     const view=captured?.view??(active?.file?.path===file.path?active:undefined);
@@ -1499,7 +1520,50 @@ export default class SendToT3 extends Plugin {
     if(captured&&selection.trim()&&!captured.anchor)captured={...captured,anchor:captureEditorSelection(captured.editor)};
     if(captured&&!captured.anchor)captured={...captured,insertion:captured.insertion??captureCursorInsertion(captured.editor.getValue(),captured.editor.posToOffset(captured.editor.getCursor()))};
     const context=captured?this.canonicalChatContext(captured):undefined;
-    new SendComposer(this.app,this.noteComposerHost(file,selection,context),this.localDraft()).open();
+    const base=this.noteComposerHost(file,selection,context);
+    const capture=()=>context&&{document:context.editor.getValue(),from:context.editor.posToOffset(context.editor.getCursor('from')),to:context.editor.posToOffset(context.editor.getCursor('to'))};
+
+    const send=async(text:string,key:string|undefined,options:ResolvedJobOptions|undefined,destination?:ChatDestination,newThread=false)=>{
+      if(!text.trim())throw Error('Enter a message before sending.');
+      const running=this.agentEdits.get(file);
+      if(running?.edit.activity.running){
+        if(!running.target||!running.edit.turnId)throw Error('Wait for T3 to start the run before steering.');
+        const transport=new SidebarThreadTransport(environment=>this.inlineThreadAccess(environment),randomId);
+        await transport.send(running.target,text,randomId(),randomId(),{context:options?.context,delivery:{intent:'steer',mode:{type:'steer_active',targetRunId:running.edit.turnId}}});return;
+      }
+      const route={threadId:destination?.threadId,responseId:destination?.responseId,expectedProjectKey:destination?.projectKey,projectOverrideKey:key,newThread,jobOptions:options};
+      if(options?.providerCommand)return newThread?base.sendToNew(text,key,()=>options):base.sendChat(text,key,()=>options,undefined,destination);
+      if(options?.inline.enabled!==false){
+        const selected=context?.canonicalAnchor?.text??selection;
+        return this.sendResolvedChat(selected?'Selected text:\n'+selected+'\n\n'+text:text,this.noteContext(file),context?{...context,initialQuestion:text}:undefined,true,route);
+      }
+      const range=capture();
+      if(!context||!range||(context.view as MarkdownView).getMode?.()==='preview')throw Error('Open the note in editing view to use Inline agent.');
+      const id=randomId(),messageId=commandId(id,'message');
+      const changed=()=>{if(!edit.activity.running){this.activeAgentEdits.delete(edit);}for(const listener of this.busyListeners)listener();};
+      const edit:InlineAgentEdit=new InlineAgentEdit(context.editor,()=>!this.stopped&&context.view.file===file&&(context.view as MarkdownView).getMode?.()!=='preview'&&this.app.workspace.getLeavesOfType('markdown').some(leaf=>leaf.view===context.view),id,changed,range);
+      const entry:{edit:InlineAgentEdit;target?:SidebarTarget}={edit};
+      const prompt=edit.prompt(text);
+      this.agentEdits.set(file,entry);this.activeAgentEdits.add(edit);changed();
+      try{
+        await this.sendChat(prompt,this.noteContext(file),{...route,barePrompt:true,inlineAgent:true,requestId:id,onAccepted:(request,threadId)=>{
+          const environmentId=request.directPlan?.environmentId??request.connection.environmentId;
+          if(!environmentId){edit.finish('T3 accepted the message, but its machine is unavailable for inline typing.');return;}
+          entry.target={environmentId,projectId:request.project.id,threadId,title:request.title,kind:'thread'};
+          edit.subscribe(watchThread(threadId,()=>this.inlineThreadAccess(environmentId),{item:item=>edit.receive(item,messageId),reconnecting:()=>edit.reconnect(),failure:error=>edit.finish(error.message)}));
+        }});
+      }catch(error){edit.finish(message(error));throw error;}
+    };
+    const startsInEditorStream=!this.agentEdits.get(file)?.edit.activity.running;
+    const host=this.withSendAvailability({...base,getInlineDefaults:()=>({...this.settings.inlineStreaming,enabled:startsInEditorStream}),
+      renderInlineRequests:element=>{const entry=this.agentEdits.get(file);return entry?.target&&entry.edit.activity.running?this.renderRunRequests(element,entry.target,entry.edit.requestState()):undefined;},
+      composerActivity:()=>this.agentEdits.get(file)?.edit.activity,
+      acceptedDestination:()=>{const run=this.agentEdits.get(file)?.target,previous=run&&this.previousNoteThread(file.path,run.threadId);return run&&previous?{threadId:run.threadId,projectKey:projectKey(this.projectForNoteThread(previous)),label:run.title}:undefined;},
+
+      sendChat:(text,key,resolve,_back,destination)=>send(text,key,resolve?.(),destination),
+      sendToNew:(text,key,resolve)=>send(text,key,resolve?.(),undefined,true),
+    });
+    this.composerPanel=new SendComposer(this.app,host,this.localDraft());this.composerPanel.open();
   }
   private previousNoteThread(path:string,threadId:string){return previousNoteThreads(this.noteThreadRelations(),path).find(entry=>entry.threadId===threadId);}
   private projectForNoteThread(entry:NoteThread):Project{
@@ -1588,7 +1652,7 @@ export default class SendToT3 extends Plugin {
   }
   async openNoteSend(file:TFile,showSelector=false,insertion=this.noteSendInsertion(file)){
     try{
-    showSelector ||= this.settings.alwaysShowComposer||await this.noteNeedsRelink(file.path);
+    showSelector ||= await this.noteNeedsRelink(file.path);
     const host=this.noteComposerHost(file,'',undefined,insertion);
     return await openNoteSendFlow(this.app,host,showSelector);
     }catch(error){new Notice(`T3 Code: ${message(error)}`,10000);}
@@ -1809,7 +1873,7 @@ export default class SendToT3 extends Plugin {
     return this.openManualAction(file,prompt,selection,source?.editor,showSelector);
   }
   private async openManualAction(file:TFile,prompt:string,selection:string,captured?:EditorChatContext,showSelector=false,route?:{key?:string;options?:ResolvedJobOptions;destination?:ChatDestination;newThread:boolean}){
-    if(!route&&(showSelector||(this.settings.alwaysShowComposer&&Boolean(prompt.trim()||selection.trim())))){new SendComposer(this.app,this.noteComposerHost(file,selection,captured),prompt).open();return;}
+    if(!route&&showSelector){new NoteSendDestination(this.app,this.noteComposerHost(file,selection,captured),prompt).open();return;}
     if(!prompt.trim()&&!selection.trim()){
       return this.openNoteSend(file,showSelector,captured?.insertion);
     }
@@ -1829,7 +1893,7 @@ export default class SendToT3 extends Plugin {
     }
     if(context?.anchor)context=this.canonicalChatContext(context);
     const canonicalSelected=context?.canonicalAnchor?.text??selection;
-    if(context){
+    if(context&&this.settings.smartSendEnabled){
       const document=this.notePromptDocument(context.view),anchor=context.canonicalAnchor;
       const range=anchor?selectionRange(document,anchor):undefined;
       if(anchor&&!range)throw Error('The selected text changed. Select it again before sending.');
@@ -1842,7 +1906,7 @@ export default class SendToT3 extends Plugin {
         const ordinary=projection.segments.reduce((sum,segment)=>sum+Math.max(0,Math.min(scope[1],segment.rawTo)-Math.max(scope[0],segment.rawFrom)),0);
         if(ordinary<scope[1]-scope[0])context.referenceSelection=true;
       }
-    }else if(selected)throw Error('Open the source note before sending its selection.');
+    }else if(!context&&selected)throw Error('Open the source note before sending its selection.');
     const question=selected&&prompt.trim()?`Selected text:\n${canonicalSelected}\n\n**USER ASKS:**\n${prompt}`:selected?canonicalSelected:prompt;
     if(route)return this.sendResolvedChat(route.options?.providerCommand?prompt:question,this.noteContext(file),context,true,{threadId:route.destination?.threadId,responseId:route.destination?.responseId,expectedProjectKey:route.destination?.projectKey,projectOverrideKey:route.key,newThread:route.newThread,jobOptions:route.options});
     return await this.openChatWithNote(this.noteContext(file),question,context,true,showSelector);
@@ -1881,7 +1945,7 @@ export default class SendToT3 extends Plugin {
     const project=[...this.projects(),...this.settings.directProjects,...this.settings.projects].find(project=>project.id===projectId&&(job?.connection?.connectionId?project.connectionId===job.connection.connectionId:environment?project.connectionId?this.settings.paired.find(connection=>connection.id===project.connectionId)?.environmentId===environment:this.eventLocalEnvironmentId===environment:!cached&&!!job?.connection&&!job.connection.connectionId&&!project.connectionId));
     return project&&projectKey(project);
   }
-  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'alwaysShowComposer'|'hasConfirmedNoteSend'|'getThreadChoiceRestriction'|'getInlineDefaults'|'steering'|'getNotePath'|'getProjectName'|'getDefaultProjectKey'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'getDefaultDestination'|'getAlternativeProjectKey'|'onProjectChange'|'chooseExisting'|'chooseProject'|'getModels'|'searchFiles'>{
+  private destinationContext(note?:{path:string;absolutePath?:string},inline?:EditorChatContext):Pick<ChatHost,'getThreadChoiceRestriction'|'getInlineDefaults'|'steering'|'getNotePath'|'getProjectName'|'getDefaultProjectKey'|'getTargetDescription'|'getProjectChoices'|'getDefaultThread'|'getDefaultDestination'|'getAlternativeProjectKey'|'onProjectChange'|'chooseExisting'|'chooseProject'|'getModels'|'searchFiles'>{
     // Capture the destination once. A later editor update must not redirect a send.
     const responseId=inline&&inlineSteeringTarget(inline.editor.getValue(),inline.editor.posToOffset(inline.editor.getCursor()),inline.responseId);
     const remembered=this.noteThread(note?.path);
@@ -1947,8 +2011,6 @@ export default class SendToT3 extends Plugin {
           }finally{rpc.close();}
         }finally{await access.close?.();}
       },
-      hasConfirmedNoteSend:()=>this.hasConfirmedNoteSend(note?.path),
-      alwaysShowComposer:this.settings.alwaysShowComposer,
       getThreadChoiceRestriction:()=>threadNoteMode(this.settings.threadNoteMode)==='one-to-one'&&this.noteThread(note?.path)?'1:1 mode keeps this note in its linked thread. Switch to Free mode to choose another.':undefined,
       getInlineDefaults:()=>({...this.settings.inlineStreaming}),
       steering:!!responseId,
@@ -1990,13 +2052,6 @@ export default class SendToT3 extends Plugin {
     };
   }
   private async openChatWithNote(note:{path:string;absolutePath?:string}|undefined,prompt?:string,inline?:EditorChatContext,answerOnly=false,showSelector=false){
-    // A first manual selection/ask must keep its captured context outside the
-    // editable question, just like the explicit Ask and destination commands.
-    if(note&&inline?.smartDocument!==undefined&&(showSelector||!this.hasConfirmedNoteSend(note.path))){
-      const file=this.app.vault.getFileByPath(note.path);if(!file)throw Error('The original note is unavailable.');
-      const selection=inline.canonicalAnchor?.text??(inline.smartScope?inline.smartDocument.slice(...inline.smartScope):'');
-      new SendComposer(this.app,this.noteComposerHost(file,selection,inline),inline.smartQuestion??'').open();return;
-    }
     // Generated text is captured context, never a source to move. Classify it
     // before the chooser/network waits: streaming may replace its surroundings.
     if(inline?.anchor)inline=this.canonicalChatContext(inline);
@@ -2359,17 +2414,6 @@ export default class SendToT3 extends Plugin {
       load:async id=>await deviceState<EditSnapshot>(`checked-edit:${this.settings.vaultId}:${this.deviceId}:${id}`)??undefined,
       save:snapshot=>this.saveCheckedEdit(snapshot),
       read:path=>deviceNoteIO(this.app).readNote(path),binding:id=>responseBindingRequests(this.settings.responseBindings??{}).find(binding=>binding.id===id),
-      files:route=>this.commandFiles(route),
-      attach:async(binding,stage,attached)=>{
-        const release=await nativeResponses(this.app).beginFinalSave(binding.notePath);
-        try{
-          const current=await deviceNoteIO(this.app).readNote(binding.notePath),latest=responseBindingRequests(this.settings.responseBindings??{}).find(value=>value.id===binding.id);
-          if(current===undefined||!responseIds(current).includes(binding.id)||!latest||latest.notePath!==binding.notePath)throw Error('The reply finished or moved before the proposal could be attached.');
-          if(latest.localStage&&latest.localStage.editId!==stage.editId)throw Error('Another edit is already waiting for this reply.');
-          await this.saveResponseBinding({...latest,localStage:stage});await attached();
-        }finally{release();}
-        this.deviceInline?.resume();
-      },
       detach:async(binding,editId,expectedHash,detached)=>{
         const release=await nativeResponses(this.app).beginFinalSave(binding.notePath);
         try{
@@ -2667,7 +2711,7 @@ export default class SendToT3 extends Plugin {
     const thread=this.preparedThread(connection,project,threadId,preparation)??await this.readChatThread(connection,project,threadId);
     return typeof thread?.title==='string'&&thread.title.trim()?thread.title.slice(0,160):'T3 thread';
   }
-  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{preparation?:SendPreparation;threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;jobOptions?:ResolvedJobOptions;barePrompt?:boolean;sourceContext?:EditorChatContext;onTargetResolved?:()=>void;onPrepared?:(request:Request,input:string)=>void|Promise<void>}):Promise<void> {
+  async sendChat(prompt:string,note?:{path:string;absolutePath?:string},options?:{preparation?:SendPreparation;threadId?:string;responseId?:string;newThread?:boolean;expectedProjectKey?:string;projectOverrideKey?:string;requestId?:string;jobOptions?:ResolvedJobOptions;barePrompt?:boolean;inlineAgent?:boolean;onAccepted?:(request:Request,threadId:string)=>void;sourceContext?:EditorChatContext;onTargetResolved?:()=>void;onPrepared?:(request:Request,input:string)=>void|Promise<void>}):Promise<void> {
     if(this.busy)throw Error('Another send is in progress. Wait for it to finish.');
     if(!prompt.trim())throw Error('Enter a message before sending.');
     if(options?.jobOptions?.providerCommand)options={...options,barePrompt:true,sourceContext:undefined};
@@ -2727,14 +2771,15 @@ export default class SendToT3 extends Plugin {
       }
       if(this.stopped)throw Error('The plugin was disabled before sending.');
       const title=await this.requestTitle(connection,project,threadId,note?.path,options?.preparation);
-      request={...(this.settings.hideObsidianThreads===true&&!threadId?{hideObsidianThread:true}:{}),...(smartCapture?{smartSend:smartCapture}:{}),...(options?.jobOptions?{jobOptions:options.jobOptions}:{}),id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
+      request={...(this.settings.hideObsidianThreads===true&&!threadId?{hideObsidianThread:true}:{}),...(options?.inlineAgent&&note?{inlineAgentPath:note.path}:{}),...(smartCapture?{smartSend:smartCapture}:{}),...(options?.jobOptions?{jobOptions:options.jobOptions}:{}),id:options?.requestId??randomId(),project:{...project},title,prompt:text,connection,...(images?.attachments.length?{attachments:images.attachments,context:images.context}:{}),...(threadId?{threadId}:{}),...(note?{noteThread:this.noteThreadIntent(note.path,project,connection)}:{}),...this.folderLinkIntent(link)};
       if(options?.jobOptions?.context?.records?.length)request.context={version:1,records:[...(request.context?.records??[]),...structuredClone(options.jobOptions.context.records)]};
       if(note&&!options?.barePrompt)await this.prepareNoteSteering(request,note.path,preparedInput,options?.sourceContext,options?.responseId,steeringSource);
       await options?.onPrepared?.(request,preparedInput);
       logEvent('request.prepared',{requestId:request.id,threadId:request.threadId,projectId:request.project.id,notePath:note?.path,promptHash:contentHash(request.prompt),promptLength:request.prompt.length});
       this.settings.pending.push(request);
       try{await this.save();logEvent('request.saved',{requestId:request.id});}catch(e){this.settings.pending=this.settings.pending.filter(r=>r!==request);throw e;}
-      await this.dispatch(request,false,false,preparing);
+      const accepted=await this.dispatch(request,false,false,preparing);
+      if(accepted)options?.onAccepted?.(request,accepted);
       try{
         if(options?.sourceContext?.smartQuestion)this.app.saveLocalStorage(this.chatDraftKey,'');
         const draft:unknown=this.app.loadLocalStorage(this.chatDraftKey);
@@ -3197,7 +3242,7 @@ export default class SendToT3 extends Plugin {
   private sharedSnapshot():SharedSettings{const {pending,completionJobs,settlementJobs,connection,projects,directProjects,selected,directSelected,directScanId,smartSend,...shared}=this.settings;return {...jsonClone(shared),...(smartSend?{smartSend:snapshotSmartSend(smartSend)}:{})};}
   private sharedData(input:unknown):SharedSettings{
     const data=storedSettings(input);
-    return {...this.sharedSnapshot(),noteInbox:mergeNoteInbox(data?.noteInbox),threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),responseBindings:loadResponseBindingData(data?.responseBindings),smartSend:loadSmartSend(data?.smartSend),autoSettleThreads:data?.autoSettleThreads===true,alwaysShowComposer:data?.alwaysShowComposer===true,hideObsidianThreads:threadHiding(data?.hideObsidianThreads),
+    return {...this.sharedSnapshot(),noteInbox:mergeNoteInbox(data?.noteInbox),threadNoteMode:threadNoteMode(data?.threadNoteMode),projectCreationLocations:loadProjectCreationLocations(data?.projectCreationLocations),noteContexts:mergeNoteContexts(data?.noteContexts),codebase:data?.codebase,replyFolders:loadReplyFolders(data?.replyFolders),threadTitleGeneration:threadTitleGeneration(data?.threadTitleGeneration),paired:data?.paired??[],folderLinks:loadFolderLinks(data),folderLinkChanges:loadFolderLinkChanges(data?.folderLinkChanges),noteThreads:loadNoteThreads(data?.noteThreads),vaultId:vaultIdentity(data)??this.settings.vaultId,vaultLocations:loadVaultLocations(data),responseBindings:loadResponseBindingData(data?.responseBindings),smartSend:loadSmartSend(data?.smartSend),autoSettleThreads:data?.autoSettleThreads===true,smartSendEnabled:data?.smartSendEnabled===true,hideObsidianThreads:threadHiding(data?.hideObsidianThreads),
       vaultHost:loadVaultHost(data?.vaultHost),
       inlineStreaming:{finalAnswerFormat:finalAnswerFormat(data?.inlineStreaming?.finalAnswerFormat),enabled:data?.inlineStreaming?.enabled??(data?.inlineStreaming?.askT3!==false&&data?.inlineStreaming?.sendToT3!==false),keepIntermediate:data?.inlineStreaming?.keepIntermediate===true,...(data?.inlineStreaming?.intermediateMode?{intermediateMode:intermediateMode(data.inlineStreaming.intermediateMode,data.inlineStreaming.keepIntermediate)}:{})},
       completion:{action:'keep',archiveFolder:''}};
@@ -3254,7 +3299,7 @@ export default class SendToT3 extends Plugin {
       this.lastDiskSnapshot=JSON.stringify(snapshot);
       if(JSON.stringify(this.settings.noteThreads)===intendedThreads)this.settings.noteThreads=snapshot.noteThreads;
       const adopt=<K extends keyof SharedSettings>(key:K)=>{if(JSON.stringify(this.settings[key])===JSON.stringify(intended[key])){const target:SharedSettings=this.settings;target[key]=snapshot[key];}};
-      for(const key of ['alwaysShowComposer','inlineStreaming','vaultHost','completion','threadTitleGeneration','autoSettleThreads','hideObsidianThreads','paired','vaultLocations','codebase','projectCreationLocations'] as const)adopt(key);
+      for(const key of ['smartSendEnabled','inlineStreaming','vaultHost','completion','threadTitleGeneration','autoSettleThreads','hideObsidianThreads','paired','vaultLocations','codebase','projectCreationLocations'] as const)adopt(key);
       if(!this.settings.autoSettleThreads&&this.settings.settlementJobs.length){this.settings.settlementJobs=[];await this.saveDeviceState();}
       this.codebase?.adopt(this.settings.codebase);
       this.sharedBaseline=JSON.stringify(snapshot);
@@ -3284,13 +3329,13 @@ export default class SendToT3 extends Plugin {
       const content = inlineView?this.notePromptDocument(inlineView):await this.app.vault.read(file);
       if (!content.trim()) {if(options?.throwOnError)throw Error('This note is empty. Add Markdown before sending.');new Notice('This note is empty. Add Markdown before sending.'); return;}
       if(options?.prepared&&options.prepared.content!==content)throw Error('The note changed while preparing its project. Try again with the current text.');
-      await this.recoverSmartReplies(file.path,content);
-      const smart=await prepareSmartSend(this.smartData(),file.path,await this.smartKey(project,connection,threadId??''),content,undefined,this.smartPreparationGeneration(connection));
+      if(this.settings.smartSendEnabled)await this.recoverSmartReplies(file.path,content);
+      const smart=this.settings.smartSendEnabled?await prepareSmartSend(this.smartData(),file.path,await this.smartKey(project,connection,threadId??''),content,undefined,this.smartPreparationGeneration(connection)):{text:content,capture:undefined,ranges:[]};
       if(!smart.text.trim()){new Notice('Nothing new to send.');return;}
       const images=await this.prepareImages(smart.text,file.path,true,content);
       if(inlineView&&this.notePromptDocument(inlineView)!==content)throw Error('The note changed while preparing the send. Try again with the current text.');
       const link=options?.folderLink??folderLinkForPath(this.settings.folderLinks,file.path)??{id:'manual',folderPath:'/',connectionId:project.connectionId??'',projectId:project.id,projectTitle:project.title,workspaceRoot:project.workspaceRoot,self:true};
-      request = {...(this.settings.hideObsidianThreads===true&&!threadId?{hideObsidianThread:true}:{}),smartSend:smart.capture,jobOptions,id:options?.id??randomId(),project:{...project},title:await this.requestTitle(connection,project,threadId,file.path,options?.preparation),prompt:images.markdown+this.messageFooter(file.path),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:'keep'},connection,noteThread:this.noteThreadIntent(file.path,project,connection),...this.folderLinkIntent(link)};
+      request = {...(this.settings.hideObsidianThreads===true&&!threadId?{hideObsidianThread:true}:{}),...(smart.capture?{smartSend:smart.capture}:{}),jobOptions,id:options?.id??randomId(),project:{...project},title:await this.requestTitle(connection,project,threadId,file.path,options?.preparation),prompt:images.markdown+this.messageFooter(file.path),attachments:images.attachments,context:images.context,...(threadId?{threadId}:{}),completion:{notePath:file.path,contentHash:contentHash(content),ctime:file.stat.ctime,...completion,action:'keep'},connection,noteThread:this.noteThreadIntent(file.path,project,connection),...this.folderLinkIntent(link)};
       if(request.prompt.length>120_000) throw new Error('The note and image context exceed T3’s 120,000-character limit. Split the note before sending.');
       const steeringSource={document:content,ranges:smart.ranges};
       if(streaming&&inlineView)await this.prepareStreamBindings(request,options?.destinations?.length?options.destinations:[file.path],undefined,options?.destinationSection,file.path,smart.text,options?.insertion,steeringSource);
@@ -3488,6 +3533,7 @@ export default class SendToT3 extends Plugin {
   private async reserveResponseStreams(request:Request){
     const responses=new Map<string,string>();
     const reserve=(path:string|undefined,bindingId:string)=>{if(!path)throw Error('The reply stream has no destination note.');const prior=responses.get(path);if(prior&&prior!==bindingId)throw Error('Several reply streams target the same note.');responses.set(path,bindingId);};
+    if(request.inlineAgentPath)reserve(request.inlineAgentPath,request.id);
     for(const binding of request.inlineBindings??(request.inlineHost?[request.inlineHost]:[]))reserve(binding.notePath,binding.id);
     if(request.inlineSteering)for(const target of request.inlineSteering.targets??[{...request.inlineSteering,notePath:request.noteThread?.notePath??request.completion?.notePath}])reserve(target.notePath,target.jobId);
     if(request.inlineFollow)reserve(request.inlineFollow.notePath??request.noteThread?.notePath??request.completion?.notePath,request.inlineFollow.jobId);
@@ -3567,7 +3613,7 @@ export default class SendToT3 extends Plugin {
       throw new RequestDeliveryError(`${unsavedMessage(error)} ${uncertain?'T3 did not confirm delivery. Check the thread before sending again.':'No message was sent or queued.'}`,false,true,uncertain);
     }finally{if(request.hideObsidianThread)void this.syncThreadVisibility(true);}
   }
-  onunload(){this.connectionSetupOwner.abort();this.disposeUnaryOwners();if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.conversationSources.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.noteInboxView?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void Promise.allSettled([this.saving,this.diagnostics?.close()]).then(()=>closeSharedStateDatabase());void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
+  onunload(){for(const edit of this.activeAgentEdits)edit.dispose();this.activeAgentEdits.clear();this.connectionSetupOwner.abort();this.disposeUnaryOwners();if(this.smartPrepareTimer!==undefined)window.clearTimeout(this.smartPrepareTimer);for(const entry of this.smartRecovering.values())entry.controller.abort();this.smartRecovering.clear();this.smartRecoveryEmpty.clear();this.sendPreviews.dispose();closeNoteTabPanel(this.app);this.dismissedCleanup.clear();this.stopContentHash?.();this.codebase?.dispose();this.completionGlow?.dispose();this.stopped=true;this.settlementEvents?.dispose();this.threadVisibility?.dispose();this.projectDiscovery?.dispose();this.projectListeners.clear();this.projectCreateModal?.close();this.questionModal?.close();this.questions?.dispose();this.approvals?.dispose();for(const entry of this.commandHosts.values()){void entry.host.dispose();entry.rpc.close();}this.commandHosts.clear();this.routeStatus.clear();for(const controller of this.importPreparation)controller.abort();this.importPreparation.clear();this.deviceInline?.dispose();this.conversationSources.dispose();this.inlineChat?.dispose();nativeResponses(this.app).dispose();this.vaultSetupModal?.close();this.paletteChat?.dispose();this.noteInboxView?.dispose();this.folderIndicators?.dispose();this.threadDisplays?.stop();this.cancelCloudLogin();this.cloudChanged=undefined;streamMemory.sample('dispose');streamMemory.reset();configureDiagnostics();void Promise.allSettled([this.saving,this.diagnostics?.close()]).then(()=>closeSharedStateDatabase());void this.diagnosticArchive?.close().catch(()=>{});this.diagnostics=undefined;}
   async setThreadHiding(enabled:boolean){
     this.settings.hideObsidianThreads=enabled;
     this.settingsTab?.refreshThreadVisibilityStatus();
@@ -3859,11 +3905,13 @@ export class T3Settings extends PluginSettingTab {
     new Setting(el).setName('Diagnostic log files').setDesc('Save diagnostic history automatically as agent-readable JSONL files on the connected T3 machine. No retention limit or export step.').addButton(button=>button.setButtonText('Show location').onClick(()=>this.plugin.exportDiagnostics()));
   }
 
-  private replyPageDefinitions():SettingDefinitionItem[]{const fields=this.replyDefinitions();return [...fields.slice(0,-1),{type:'page',name:'Beta',desc:'Optional thread and note behavior.',items:[fields.at(-1)!]}];}
+  private replyPageDefinitions():SettingDefinitionItem[]{const fields=this.replyDefinitions();return [...fields.slice(0,-1),{type:'page',name:'Beta',desc:'Optional thread and note behavior.',items:[fields.at(-1)!,
+      {name:'Smart Send',desc:'Send only new note content to the selected thread. Turn off to send the full note each time.',render:setting=>{setting.addToggle(toggle=>toggle.setValue(this.plugin.settings.smartSendEnabled===true).onChange(async enabled=>{this.plugin.settings.smartSendEnabled=enabled;await this.plugin.save();}));}},
+    ]}];}
   private replyDefinitions():Array<SettingsRow>{
     return [
-      {name:'Always show composer',desc:'Open the composer before every send so you can choose a model and review the destination.',render:setting=>{setting.addToggle(toggle=>toggle.setValue(this.plugin.settings.alwaysShowComposer===true).onChange(async enabled=>{this.plugin.settings.alwaysShowComposer=enabled;await this.plugin.save();}));}},
-      {name:'Stream replies into the editor',desc:'Insert Send and Ask replies into the note. Selection replies appear below the selection; other replies use the captured cursor position or follow its paragraph.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));}},
+
+      {name:'Stream replies into the editor',desc:'Insert replies from note sends into the note. The composer has its own mode. Selection replies appear below the selection; other replies use the captured cursor position or follow its paragraph.',render:setting=>{setting.addToggle(t=>t.setValue(this.plugin.settings.inlineStreaming.enabled).onChange(async enabled=>{this.plugin.settings.inlineStreaming.enabled=enabled;await this.plugin.save();}));}},
       {name:'Final answer format',desc:'Applies to new responses. Both formats support images and files.',render:setting=>{setting.addDropdown(dropdown=>dropdown.addOptions({formatted:'Quoted Markdown','raw-markdown':'Raw Markdown'}).setValue(finalAnswerFormat(this.plugin.settings.inlineStreaming.finalAnswerFormat)).onChange(async value=>{this.plugin.settings.inlineStreaming.finalAnswerFormat=finalAnswerFormat(value);await this.plugin.save();}));}},
       {name:'Thread title generation',desc:'Use note titles by default, or let T3 name every new thread. Existing titles stay the same.',render:setting=>{setting.addDropdown(d=>d.addOption('untitled-only','Only for untitled notes').addOption('always','Always use T3').setValue(this.plugin.settings.threadTitleGeneration).onChange(async value=>{this.plugin.settings.threadTitleGeneration=threadTitleGeneration(value);await this.plugin.save();}));}},
       {name:'Hide Obsidian threads in T3',desc:'Off by default. Tag new threads t3-obsidian and hide them across all connected T3 environments and clients. Enables T3’s hidden-tag filter. Turning off removes only this tag from that filter.',render:setting=>{

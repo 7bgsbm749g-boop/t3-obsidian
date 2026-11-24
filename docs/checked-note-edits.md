@@ -66,22 +66,7 @@ transactional count/byte limits. Pending edits and ambiguous commands survive
 normal expiry and are never evicted to make room for new work.
 
 `prepare-note-edit` captures the current canonical note through Obsidian and
-returns an edit ID, original content and checksum. An active response requires
-its exact binding. `submit-note-edit` supplies that original checksum and the
-complete proposed note, limited to 1 MB. All active response frames must remain
-byte-identical and in the same order. Compatible ordinary user edits merge;
-overlapping changes retain both versions and block the save.
-
-For an active reply, the proposal is stored as immutable original/proposed data
-on the connected T3 machine. Its reference is attached under the same native
-final-save guard as the reply. The existing final writer reads and verifies it,
-merges current user edits, and saves proposal plus final reply in one checked
-write. Stop uses that path with frozen reply text and still sends the remote
-interrupt when a local merge fails. `submitted` is not `saved`: only a verified
-write marks the local edit saved. Submit before the current run finishes; do not
-wait inside that run for its own final save. A different device can finish the
-shared binding through the same authenticated T3 route; the originating device
-may retain `submitted` until it has local proof, rather than claim a false save.
+returns an edit ID, original content and checksum. Active editor streams reserve the destination note. New prepare and submit operations refuse it until the stream finishes. Proposals already attached by older clients retain their checked final-save and cancellation paths.
 
 Ordinary notes use the existing native compare-and-set write immediately.
 `create-note` uses `Vault.create` and refuses an existing path. `rename-note`
