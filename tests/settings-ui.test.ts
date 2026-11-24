@@ -72,16 +72,16 @@ test('the visibility row shows pending status and clears it in place',async()=>{
  assert.equal(row.el.controls[0],toggle);
  assert.equal(h.updates(),0);
 });
-test('always show composer defaults off and saves each toggle',async()=>{
- const h=await harness(),row=h.tab.getSettingDefinitions().find((page:any)=>page.name==='Replies').items.find((row:any)=>row.name==='Always show composer');
+test('Smart Send defaults off and saves each toggle',async()=>{
+ const h=await harness(),row=h.tab.getSettingDefinitions().find((page:any)=>page.name==='Replies').items.find((row:any)=>row.name==='Beta').items.find((row:any)=>row.name==='Smart Send');
  const setting=new h.Setting(new Element());row.render(setting);
  const toggle=setting.el.controls[0];assert.equal(toggle.value,false);
- await toggle.change(true);assert.equal(h.plugin.settings.alwaysShowComposer,true);
- await toggle.change(false);assert.equal(h.plugin.settings.alwaysShowComposer,false);
+ await toggle.change(true);assert.equal(h.plugin.settings.smartSendEnabled,true);
+ await toggle.change(false);assert.equal(h.plugin.settings.smartSendEnabled,false);
  assert.equal(h.saves(),2);
  const plugin=Object.assign(Object.create(h.Plugin.prototype),{settings:h.plugin.settings});
- assert.equal(plugin.sharedData({alwaysShowComposer:true}).alwaysShowComposer,true);
- assert.equal(plugin.sharedData({}).alwaysShowComposer,false);
+ assert.equal(plugin.sharedData({smartSendEnabled:true}).smartSendEnabled,true);
+ assert.equal(plugin.sharedData({}).smartSendEnabled,false);
 });
 
 test('thread and note mode changes preserve links and reply streaming',async()=>{

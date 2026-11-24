@@ -142,6 +142,7 @@ test('a changed selection without a captured anchor cannot silently append a res
 test('a selection used as reference keeps its position instead of falling back to the note end',async()=>{
   const prefix='Earlier material.\n'.repeat(12),h=await fixture(prefix+'First paragraph.\n\nLater paragraph.'),manager=new h.exports.InlineChatManager(h.app,'jobs',async()=>undefined);
   h.select(prefix.length,prefix.length+'First paragraph.'.length);
+  h.plugin.settings.smartSendEnabled=true;
   const context=h.plugin.capturePaletteSource().context.editor;context.referenceSelection=true;
   manager.prepare=async()=>{};manager.start=()=>{};h.plugin.inlineChat=manager;
   const data=loadSmartSend(undefined),sent:any[]=[];h.plugin.settings.pending=[];

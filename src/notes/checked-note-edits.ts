@@ -13,8 +13,6 @@ export type CheckedStage=NonNullable<ResponseRequest['localStage']>;
 interface EditIO {
   load(id:string):Promise<EditSnapshot|undefined>;save(snapshot:EditSnapshot):Promise<void>;
   read(notePath:string):Promise<string|undefined>;binding(id:string):ResponseRequest|undefined;
-  files(route:CommandRoute):Promise<CommandFiles>;
-  attach(binding:ResponseRequest,stage:CheckedStage,attached:()=>Promise<void>):Promise<void>;
   detach?(binding:ResponseRequest,editId:string,expectedHash:string,detached:()=>Promise<void>):Promise<void>;
   commit(notePath:string,before:string,after:string):Promise<boolean>;
   create?(notePath:string,content:string):Promise<void>;rename?(notePath:string,destination:string,expectedHash:string):Promise<void>;
@@ -56,7 +54,7 @@ export async function checkedStageDraft(document:string,request:ResponseRequest,
  * apply them; this service never reads or writes a local file. */
 export class CheckedNoteEdits {
   constructor(private io:EditIO){}
-  async execute(input:unknown,route:CommandRoute):Promise<Record<string,unknown>>{
+  async execute(input:unknown,_route:CommandRoute):Promise<Record<string,unknown>>{
     const command=validateNoteEditCommand(input);
     if(command.kind==='create-note'){if(!this.io.create)throw Error('This client cannot create notes.');await this.io.create(command.notePath!,command.proposed!);return {id:command.id,ok:true,notePath:command.notePath,status:'saved'};}
     if(command.kind==='rename-note'){if(!this.io.rename)throw Error('This client cannot rename notes.');await this.io.rename(command.notePath!,command.destination!,command.originalHash!);return {id:command.id,ok:true,notePath:command.destination,status:'saved'};}
@@ -66,8 +64,7 @@ export class CheckedNoteEdits {
       const notePath=command.notePath!,document=await this.io.read(notePath);if(document===undefined)throw Error('The current note is unavailable.');
       if(new TextEncoder().encode(document).length>1_000_000)throw Error('This note is too large for a checked edit.');
       const active=responseIds(document);
-      if(command.bindingId){const binding=this.io.binding(command.bindingId);if(!binding||binding.notePath!==notePath||!active.includes(command.bindingId))throw Error('The reply finished or its destination changed. Prepare the note again.');if(binding.localStage)throw Error('A proposed edit is already waiting for this reply to save.');}
-      else if(active.length)throw Error('Choose the active reply binding before editing this note.');
+      if(active.length||command.bindingId)throw Error('Finish the editor stream before editing this note.');
       const snapshot:EditSnapshot={editId:command.id,notePath,...(command.bindingId?{bindingId:command.bindingId}:{}),original:document,originalHash:contentHash(document),createdAt:this.io.now?.()??Date.now(),status:'prepared'};
       await this.io.save(snapshot);return {id:command.id,ok:true,...snapshot,protectedReplyIds:active};
     }
@@ -94,20 +91,11 @@ export class CheckedNoteEdits {
     }
     protect(snapshot.original,proposed);
     const current=await this.io.read(snapshot.notePath);if(current===undefined)throw Error('The note was moved, deleted or is unavailable.');
-    if(!snapshot.bindingId&&responseIds(current).length)throw Error('A reply started in this note. Prepare an edit for its active binding.');
+    if(snapshot.bindingId||responseIds(current).length)throw Error('A reply started in this note. Finish the editor stream and prepare the edit again.');
     const next=merged(snapshot.original,current,proposed);
-    if(snapshot.bindingId){
-      const binding=this.io.binding(snapshot.bindingId);if(!binding||binding.notePath!==snapshot.notePath||!responseIds(current).includes(binding.id))throw Error('The reply finished or moved before submission. Prepare a new edit; the proposal was not applied.');
-      const files=await this.io.files(route),stage:CheckedStage={editId:snapshot.editId,originalHash:snapshot.originalHash,stagedHash:proposedHash,transport:route};
-      await files.write(editPath(stage,'original'),snapshot.original);await files.write(editPath(stage,'proposed'),proposed);
-      snapshot.status='submitted';snapshot.proposedHash=proposedHash;
-      await this.io.attach(binding,stage,()=>this.io.save(snapshot));
-    }else{
-      if(responseIds(current).length)throw Error('A reply started in this note. Prepare an edit for its active binding.');
-      if(!await this.io.commit(snapshot.notePath,current,next))throw Error('The note changed before saving. The proposal was not applied.');
-      snapshot.status='saved';snapshot.proposedHash=proposedHash;await this.io.save(snapshot);
-      await this.io.remember?.(snapshot.notePath,snapshot.editId,current,next);
-    }
+    if(!await this.io.commit(snapshot.notePath,current,next))throw Error('The note changed before saving. The proposal was not applied.');
+    snapshot.status='saved';snapshot.proposedHash=proposedHash;await this.io.save(snapshot);
+    await this.io.remember?.(snapshot.notePath,snapshot.editId,current,next);
     return {id:command.id,ok:true,editId:snapshot.editId,notePath:snapshot.notePath,status:snapshot.status};
   }
 }
