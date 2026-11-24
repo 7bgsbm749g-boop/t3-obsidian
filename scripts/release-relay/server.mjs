@@ -12,19 +12,42 @@ function version(release) {
   return match && match.slice(1).join('.');
 }
 
-export function releaseRelay(secret, initial) {
-  let latest = initial;
+export function releaseRelay(secret, readLatest, now = Date.now) {
+  let latest;
+  let nextLookup = 0;
+  let lookup;
   const clients = new Set();
   const frame = () => 'data: ' + latest + '\n\n';
   function send(client, data) {
     if (!client.write(data)) client.destroy();
   }
+  function publish(next) {
+    if (!next || (latest && next.localeCompare(latest, 'en', {numeric:true}) <= 0)) return;
+    latest = next;
+    for (const client of clients) if (client.headersSent) send(client, frame());
+  }
+  // A connection can recover a missed webhook. Share GitHub's snapshot across
+  // subscribers, including simultaneous connections after a network outage.
+  function reconcile() {
+    if (!lookup && now() >= nextLookup) {
+      nextLookup = now() + 300000;
+      lookup = readLatest().then(publish).catch(() => {
+        nextLookup = now() + 60000;
+      }).finally(() => { lookup = undefined; });
+    }
+    return lookup;
+  }
   const server = createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === route) {
       if (clients.size >= 4096) { res.writeHead(503).end(); return; }
-      res.writeHead(200, {'Content-Type':'text/event-stream', 'Cache-Control':'no-store, no-transform', 'Access-Control-Allow-Origin':'*'});
       clients.add(res);
       res.on('close', () => clients.delete(res));
+      // Wait for a shared lookup only when the relay has no version to replay.
+      const pending = reconcile();
+      if (!latest) await pending;
+      if (res.destroyed) return;
+      if (!latest) { res.writeHead(503).end(); return; }
+      res.writeHead(200, {'Content-Type':'text/event-stream', 'Cache-Control':'no-store, no-transform', 'Access-Control-Allow-Origin':'*'});
       send(res, frame());
       return;
     }
@@ -36,7 +59,7 @@ export function releaseRelay(secret, initial) {
       let size = 0;
       for await (const chunk of req) {
         size += chunk.length;
-        if (size > 262144) { res.writeHead(413).end(); return; }
+        if (size > 1048576) { res.writeHead(413).end(); return; }
         chunks.push(chunk);
       }
       const body = Buffer.concat(chunks);
@@ -44,16 +67,12 @@ export function releaseRelay(secret, initial) {
       if (!timingSafeEqual(mac, Buffer.from(signature.slice(7), 'hex'))) { res.writeHead(403).end(); return; }
       const event = JSON.parse(body);
       if (req.headers['x-github-event'] === 'release' && event.action === 'published' && event.repository?.full_name === repository) {
-        const next = version(event.release);
-        if (next && next.localeCompare(latest, 'en', {numeric:true}) > 0) {
-          latest = next;
-          for (const client of clients) send(client, frame());
-        }
+        publish(version(event.release));
       }
       res.writeHead(204).end();
     } catch { res.writeHead(400).end(); }
   });
-  const heartbeat = setInterval(() => { for (const client of clients) send(client, ': keepalive\n\n'); }, 20000);
+  const heartbeat = setInterval(() => { for (const client of clients) if (client.headersSent) send(client, 'event: heartbeat\ndata: ok\n\n'); }, 20000);
   heartbeat.unref();
   server.on('close', () => clearInterval(heartbeat));
   return server;
@@ -62,8 +81,11 @@ export function releaseRelay(secret, initial) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const secret = (await readFile(process.env.WEBHOOK_SECRET_FILE, 'utf8')).trim();
   if (secret.length < 32) throw Error('Webhook secret is too short');
-  const response = await fetch('https://api.github.com/repos/' + repository + '/releases/latest', {signal:AbortSignal.timeout(15000)});
-  const initial = response.ok && version(await response.json());
-  if (!initial) throw Error('Could not load the current GitHub release');
-  releaseRelay(secret, initial).listen(8774, '127.0.0.1');
+  async function readLatest() {
+    const response = await fetch('https://api.github.com/repos/' + repository + '/releases/latest', {signal:AbortSignal.timeout(15000)});
+    const current = response.ok && version(await response.json());
+    if (!current) throw Error('Could not load the current GitHub release');
+    return current;
+  }
+  releaseRelay(secret, readLatest).listen(8774, '127.0.0.1');
 }

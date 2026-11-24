@@ -117,7 +117,10 @@ Streaming RAM capture: [device-local streaming memory diagnostics](docs/stream-m
 
 T3 Code opens a public release notification stream at `https://kiri.wtf/t3-obsidian/releases`.
 It receives the current version when it connects and new versions as GitHub publishes them.
-The stream requires no account or vault information. T3 Code checks GitHub for the
+The relay and its hosting network can see the connecting IP address and connection time.
+The relay application does not log connections or receive an account ID or vault information.
+If the stream is unavailable, a failed connection can trigger a direct GitHub check at
+most once every six hours. T3 Code checks GitHub for the
 release details before showing an update. A banner at the top says **Update available for t3-obsidian (vVERSION)**,
 shows the GitHub release description and change list, and offers **Update** and
 **Dismiss**. Long notes scroll while the buttons stay visible. Releases with no

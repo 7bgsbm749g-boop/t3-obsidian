@@ -71,3 +71,10 @@ test('busy banner rejects duplicate update clicks and dismiss until completion',
  let finish!:()=>void,installs=0,dismissals=0;const updates=new PluginUpdates({installed:async()=> '0.0.450',latest:async()=>release,install:()=>{installs++;return new Promise<void>(r=>finish=r);},dismissed:()=>null,dismiss:()=>{dismissals++;},render:()=>{},report:()=>{}});
  await updates.check();const work=updates.update();await updates.update();updates.dismiss();assert.equal(installs,1);assert.equal(dismissals,0);finish();await work;
 });
+test('announce requests another attempt only when the release could not be verified',async()=>{
+ const f=controller();
+ f.setFail(true);assert.equal(await f.updates.announced(release.version),false);assert.deepEqual(f.notices,[]);
+ f.setFail(false);assert.equal(await f.updates.announced('0.0.452'),false);
+ f.setRelease('0.0.452');assert.equal(await f.updates.announced('0.0.452'),true);
+ assert.equal(f.rendered.at(-1)?.release.version,'0.0.452');
+});

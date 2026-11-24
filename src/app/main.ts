@@ -438,7 +438,7 @@ export default class SendToT3 extends Plugin {
       }
     });
     const updates=this.pluginUpdates;this.register(()=>{updates.dispose();banner.dispose();});
-    this.register(subscribeToReleases(version=>updates.announced(version)));
+    this.register(subscribeToReleases(version=>updates.announced(version),()=>void updates.check()));
   }
   async onload() {
     const document=workspaceDocument(this.app);
